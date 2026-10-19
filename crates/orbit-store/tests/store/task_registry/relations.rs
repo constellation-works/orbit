@@ -15,7 +15,9 @@ use orbit_store::maintenance::task_registry::RegisterWorkspaceParams;
 /// write.
 #[test]
 fn relation_cycle_through_another_workspace_is_rejected() {
-    if !task_registry_ledger_isolated("relations::relation_cycle_through_another_workspace_is_rejected") {
+    if !task_registry_ledger_isolated(
+        "relations::relation_cycle_through_another_workspace_is_rejected",
+    ) {
         return;
     }
     let temp = TempDir::new().expect("tempdir");
@@ -92,6 +94,7 @@ fn blocked_by(target: &str) -> TaskRelation {
     TaskRelation {
         relation_type: TaskRelationType::BlockedBy,
         target: target.to_string(),
+        regression: None,
     }
 }
 

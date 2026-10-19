@@ -137,15 +137,27 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
                 .map(ToOwned::to_owned)
                 .or_else(|| status_by_id.get(target).map(ToString::to_string))
                 .unwrap_or_else(|| "missing".to_string());
+            let regression = relation
+                .get("regression")
+                .map(|regression| {
+                    let part = |key| regression.get(key).and_then(Value::as_str);
+                    format!(
+                        " (nature: {}, escape: {})",
+                        part("nature").unwrap_or_default(),
+                        part("escape").unwrap_or_default()
+                    )
+                })
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "  - {}: {} [{}]",
+                "  - {}: {} [{}]{}",
                 relation
                     .get("type")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
                 target,
-                status
+                status,
+                regression
             );
         }
     }

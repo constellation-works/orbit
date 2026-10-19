@@ -226,12 +226,16 @@ impl TaskCommitBoundary {
                 .envelope
                 .relations;
             for target in &handoff.regression_from {
-                let relation = orbit_types::task::TaskRelation {
-                    relation_type: orbit_types::task::TaskRelationType::RegressionFrom,
-                    target: target.clone(),
-                };
-                if !relations.contains(&relation) {
-                    relations.push(relation);
+                let relation_type = orbit_types::task::TaskRelationType::RegressionFrom;
+                // An existing link, classified or not, already records this culprit.
+                if !relations.iter().any(|relation| {
+                    relation.relation_type == relation_type && relation.target == *target
+                }) {
+                    relations.push(orbit_types::task::TaskRelation {
+                        relation_type,
+                        target: target.clone(),
+                        regression: None,
+                    });
                 }
             }
             self.registry

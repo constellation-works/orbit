@@ -50,6 +50,7 @@ fn regression_from(target: &str) -> Vec<TaskRelation> {
     vec![TaskRelation {
         relation_type: TaskRelationType::RegressionFrom,
         target: target.parse().unwrap(),
+        regression: None,
     }]
 }
 

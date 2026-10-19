@@ -499,6 +499,7 @@ fn add_typed(
                 .map(|target| TaskRelation {
                     relation_type: TaskRelationType::RegressionFrom,
                     target: target.into(),
+                    regression: None,
                 })
                 .into_iter()
                 .collect(),

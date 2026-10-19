@@ -607,6 +607,7 @@ fn file_follow_up(
         relations: vec![TaskRelation {
             relation_type: TaskRelationType::SpawnedFrom,
             target: original.id.clone(),
+            regression: None,
         }],
         tags: vec![tag],
         complexity: TaskComplexity::Unassessed,

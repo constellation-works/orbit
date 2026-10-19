@@ -26,6 +26,7 @@ fn relation(relation_type: TaskRelationType, target: &str) -> TaskRelation {
     TaskRelation {
         relation_type,
         target: target.to_string(),
+        regression: None,
     }
 }
 

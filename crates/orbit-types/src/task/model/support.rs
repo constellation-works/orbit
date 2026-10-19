@@ -267,6 +267,9 @@ pub struct ResolvedTaskRelation {
     pub relation_type: TaskRelationType,
     /// Referenced task or artifact ID.
     pub target: OrbitId,
+    /// Nature and escape of a classified `regression_from` link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionClassification>,
     /// Local verification limitation, present only for a foreign task prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification: Option<String>,

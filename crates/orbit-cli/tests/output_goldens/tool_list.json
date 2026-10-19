@@ -1003,7 +1003,7 @@
       },
       {
         "name": "relations",
-        "description": "Optional typed task relations as an array of {type, target} objects",
+        "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
         "param_type": "array",
         "required": false
       },
@@ -1695,7 +1695,7 @@
       },
       {
         "name": "relations",
-        "description": "Replacement typed task relations as an array of {type, target} objects",
+        "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
         "param_type": "array",
         "required": false
       },

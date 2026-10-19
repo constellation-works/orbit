@@ -101,6 +101,7 @@ fn terminal_replay_finishes_side_effects_after_a_post_lock_read_failure() {
                     relations: Some(vec![TaskRelation {
                         relation_type: TaskRelationType::Resolves,
                         target: friction.clone(),
+                        regression: None,
                     }]),
                     ..Default::default()
                 },

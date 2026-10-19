@@ -5815,12 +5815,147 @@ fn transport_peer_identity() {
     }
 }
 
+/// A `regression_from` link carries its typed nature and escape through
+/// `orbit_task_add`, `orbit_task_update` and `orbit_task_show`; an unclassified
+/// link reads back without the payload, which an explicit `unclassified` keeps.
+fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let culprit = author_task(&workspace, "culprit delivery");
+    let relations = |id: &str, client: &mut McpClient| {
+        client.call_tool_ok(
+            "orbit_task_show",
+            json!({ "id": id, "fields": ["relations"] }),
+        )["items"]
+            .clone()
+    };
+
+    let classified = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Classified regression",
+            "description": "Filed by a review finding",
+            "complexity": "low",
+            "relations": [{
+                "type": "regression_from",
+                "target": culprit,
+                "regression": {"nature": "defect_in_new", "escape": "test_not_selected"},
+            }],
+        }),
+    )["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+    assert_eq!(
+        relations(&classified, &mut client),
+        json!([{
+            "type": "regression_from",
+            "target": culprit,
+            "regression": {"nature": "defect_in_new", "escape": "test_not_selected"},
+        }])
+    );
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "task",
+            "show",
+            &classified,
+        ]),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("(nature: defect_in_new, escape: test_not_selected)"),
+        "the human show names the classification: {stdout}"
+    );
+
+    // An unclassified link — the shape every link stored before the payload
+    // existed has — reads back without one.
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": classified,
+            "relations": [{"type": "regression_from", "target": culprit}],
+        }),
+    );
+    assert_eq!(
+        relations(&classified, &mut client),
+        json!([{"type": "regression_from", "target": culprit}])
+    );
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": classified,
+            "relations": [{
+                "type": "regression_from",
+                "target": culprit,
+                "regression": {"nature": "unclassified", "escape": "unclassified"},
+            }],
+        }),
+    );
+    assert_eq!(
+        relations(&classified, &mut client)[0]["regression"],
+        json!({"nature": "unclassified", "escape": "unclassified"}),
+        "an explicit unclassified stays distinct from an absent payload"
+    );
+
+    let unknown = client.call_tool_err(
+        "orbit_task_update",
+        json!({
+            "id": classified,
+            "relations": [{
+                "type": "regression_from",
+                "target": culprit,
+                "regression": {"nature": "flaky", "escape": "no_test"},
+            }],
+        }),
+    );
+    let message = unknown.to_string();
+    for allowed in [
+        "broke_existing",
+        "merge_reintroduced",
+        "contract_drift",
+        "unclassified",
+    ] {
+        assert!(
+            message.contains(allowed),
+            "the refusal lists `{allowed}`: {message}"
+        );
+    }
+    let misplaced = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Misplaced classification",
+            "description": "Only regression_from is classified",
+            "complexity": "low",
+            "relations": [{
+                "type": "related_to",
+                "target": culprit,
+                "regression": {"nature": "incomplete", "escape": "review_missed"},
+            }],
+        }),
+    );
+    assert!(
+        misplaced
+            .to_string()
+            .contains("only regression_from accepts one"),
+        "{misplaced}"
+    );
+    assert_eq!(
+        relations(&classified, &mut client)[0]["regression"]["nature"],
+        "unclassified",
+        "a refused write leaves the stored classification untouched"
+    );
+}
+
 #[test]
 fn record_mutation_and_error_protocol() {
     for (name, check) in [
         (
             "mcp_serve_round_trips_records_against_a_temp_workspace",
             mcp_serve_round_trips_records_against_a_temp_workspace as fn(),
+        ),
+        (
+            "mcp_regression_from_classification_round_trips_and_refuses_unknown_values",
+            mcp_regression_from_classification_round_trips_and_refuses_unknown_values as fn(),
         ),
         (
             "mcp_serve_error_paths_return_tool_errors_and_keep_serving",

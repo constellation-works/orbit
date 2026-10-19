@@ -396,6 +396,7 @@ fn material_edit_after_the_pilot_write_is_held_for_revalidation() {
             edit.relations = Some(vec![TaskRelation {
                 relation_type: TaskRelationType::SpawnedFrom,
                 target: related.id,
+                regression: None,
             }]);
         }
         let (drain, pilot) = drain_with_pilot(runtime, &task.id);

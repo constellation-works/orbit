@@ -32,7 +32,7 @@ use crate::identity::OrbitId;
 use crate::task::artifacts::{
     TaskRelation, TaskRelationType, is_valid_orb_task_id, task_id_prefix,
 };
-use crate::task::{TaskDecision, TaskError};
+use crate::task::{RegressionClassification, TaskDecision, TaskError};
 
 mod status;
 mod support;

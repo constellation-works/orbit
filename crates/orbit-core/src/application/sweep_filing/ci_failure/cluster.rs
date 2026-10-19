@@ -609,14 +609,39 @@ impl FailureCluster {
              file. Then set the relation with `orbit tool run orbit.task.update --input \
              '{\"id\":\"<this task ID>\",\"relations\":[<existing relations from \
              orbit.task.show>,{\"type\":\"regression_from\",\"target\":\"<culprit task \
-             ID>\"}]}'` — `relations` replaces the whole list, so carry the existing entries \
-             forward. In claimed execution, where `orbit.task.update` is unavailable, return \
+             ID>\",\"regression\":{\"nature\":\"<nature>\",\"escape\":\"<escape>\"}}]}'` — \
+             `relations` replaces the whole list, so carry the existing entries forward. In \
+             claimed execution, where `orbit.task.update` is unavailable, return \
              `\"regression_from\":[\"<culprit task ID>\"]` in your output instead and name \
-             the culprit commit in the execution summary; the owner checks the target and \
-             records the relation when it accepts the handoff. When the culprit commit \
-             carries no task ID, or the failure is infrastructure rather than \
+             the culprit commit, nature and escape in the execution summary; the owner checks \
+             the target and records the relation when it accepts the handoff. When the culprit \
+             commit carries no task ID, or the failure is infrastructure rather than \
              repository-owned, record that conclusion and its evidence in the execution \
-             summary instead of blaming a bystander task.\n",
+             summary instead of blaming a bystander task.\n\
+             \n\
+             Choose `unclassified` rather than guess. `nature` is what kind of regression the \
+             link records:\n\
+             - `broke_existing`: the culprit broke behavior that worked before it landed.\n\
+             - `defect_in_new`: the defect is in code the culprit itself introduced.\n\
+             - `incomplete`: the culprit shipped without part of what its task required.\n\
+             - `merge_reintroduced`: a merge restored code or assets an earlier change had \
+             removed.\n\
+             - `contract_drift`: docs, schemas or a contract drifted from the behavior the \
+             culprit shipped.\n\
+             - `unclassified`: the evidence does not settle the nature.\n\
+             \n\
+             `escape` is why the delivery gates missed it:\n\
+             - `no_test`: no test covered the broken behavior.\n\
+             - `test_not_selected`: a covering test existed but the delivery's gates did not \
+             run it.\n\
+             - `platform_only`: it shows only on a platform or host the gates did not \
+             exercise.\n\
+             - `review_missed`: it was visible in the diff and review did not flag it.\n\
+             - `spec_ambiguous`: the task or spec left the expected behavior open to the \
+             shipped reading.\n\
+             - `nondeterministic`: it depends on timing, ordering or environment and passed \
+             when gated.\n\
+             - `unclassified`: the evidence does not settle the escape.\n",
         );
         out
     }

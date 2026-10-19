@@ -1195,6 +1195,7 @@ fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
                 TaskComplexity::Low,
             )
             .id,
+        regression: None,
     };
     let own_culprit = workspace.finding(
         "own culprit",

@@ -113,6 +113,7 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::Resolves,
                 target: friction.clone(),
+                regression: None,
             }],
             external_refs: vec![ExternalRef::github_pr("17").expect("PR reference")],
             ..Default::default()

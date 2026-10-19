@@ -56,6 +56,7 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
             vec![TaskRelation {
                 relation_type: TaskRelationType::RegressionFrom,
                 target: regressed.parse().unwrap(),
+                regression: None,
             }],
         );
         (regressed, regression)

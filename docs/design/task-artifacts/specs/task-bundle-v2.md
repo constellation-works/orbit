@@ -212,6 +212,48 @@ Writers must validate the relation type set, reject self-edges, reject duplicate
 
 Local indexes should materialize `(source_task_id, relation_type, target_task_id)` and inverse lookup rows so lineage queries do not scan every task bundle.
 
+### Regression classification
+
+A `regression_from` entry may carry an optional `regression` payload that
+records what kind of regression it is and why the delivery gates missed it.
+No other relation type accepts it.
+
+```yaml
+relations:
+  - type: regression_from
+    target: ORB-00042
+    regression:
+      nature: defect_in_new
+      escape: test_not_selected
+```
+
+Both fields are required inside the payload and take one value from a closed
+set:
+
+- `nature`
+  - `broke_existing`: the culprit broke behavior that worked before it landed.
+  - `defect_in_new`: the defect is in code the culprit itself introduced.
+  - `incomplete`: the culprit shipped without part of what its task required.
+  - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+  - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+  - `unclassified`: the filer could not tell which nature applies.
+- `escape`
+  - `no_test`: no test covered the broken behavior.
+  - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+  - `platform_only`: the defect shows only on a platform or host the gates did not exercise.
+  - `review_missed`: the defect was visible in the diff and review did not flag it.
+  - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+  - `nondeterministic`: the failure depends on timing, ordering or environment and passed when gated.
+  - `unclassified`: the filer could not tell how the defect escaped.
+
+The payload is additive. An entry written without it, including every link
+stored before the field existed, reads back with no `regression` key, which is
+distinct from an explicit `unclassified`. `orbit.task.add`, `orbit.task.update`
+and the task API refuse an unknown value and name the allowed ones. Task show,
+the API and MCP return the payload on the relation. The registry relation index
+does not store it; the envelope stays canonical. Layer and detected-by are
+derived by analytics and are not stored on the relation.
+
 ## Generated Views
 
 The local registry must maintain generated status and terminal-month views or rebuild them from bundles/events on demand. These views replace the current `review/` and `done/<yyyy-mm>/` directory browsing affordances without making lifecycle state part of the path.

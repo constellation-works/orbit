@@ -447,6 +447,7 @@ fn covering_relations(covered: &[CoveredAlert]) -> Vec<TaskRelation> {
         .map(|target| TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target,
+            regression: None,
         })
         .collect()
 }
