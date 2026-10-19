@@ -288,7 +288,8 @@ impl Findings {
 ///
 /// The drop runs only when the lane can attach (the owner tool, the claimed
 /// `task_artifacts` handoff, or both). A warning that also names a tool the
-/// lane does not grant is kept, as is every warning that is not about
+/// lane does not grant is kept, as is a warning that says the screenshot
+/// cannot be captured or rendered, and every warning that is not about
 /// artifact attachment. Other warning fields are untouched.
 pub(super) fn drop_false_artifact_warnings(
     assessment: &mut Value,
@@ -329,6 +330,13 @@ fn false_artifact_attachment_warning(
 fn claims_artifact_attachment_unavailable(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
     if !mentions_artifact_attachment(&lowered) {
+        return false;
+    }
+    // A capture or rendering gap is about the view, not the attachment. The
+    // host cannot see whether a browser kit exists, so the warning stays for
+    // the operator rather than being dropped as a false attachment claim.
+    const CAPTURE_GAP: &[&str] = &["captur", "browser", "headless", "render"];
+    if CAPTURE_GAP.iter().any(|term| lowered.contains(term)) {
         return false;
     }
     const UNAVAILABLE: &[&str] = &[
