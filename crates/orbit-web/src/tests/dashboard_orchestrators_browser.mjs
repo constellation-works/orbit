@@ -1,6 +1,7 @@
 // Usage: node dashboard_orchestrators_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/orchestrators-browser
-// Header boxes of the shipped Orchestrators table do not overlap at 1440 or
-// 375, the Jobs badge counts runs, and the UTC/Local control defaults to UTC
+// Header boxes of the shipped Agents › Orchestrators ranking do not overlap at
+// 1440 or 375, the ranking scrolls in its own box at 375, the Jobs badge counts
+// runs, and the UTC/Local control defaults to UTC
 // and survives a reload.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,35 +14,39 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 
-const groups = [
-  ['throughput', 'Throughput', ['owned', 'Owned'], ['landed', 'Landed'], ['weighted_landed', 'Weighted landed']],
-  ['proactivity', 'Proactivity', ['landed_initiative', 'Landed initiative'], ['dropped_initiative', 'Dropped initiative'], ['net_initiative', 'Net initiative'], ['unknown_origin', 'Unknown origin']],
-  ['spec_defects', 'Spec defects', ['spec_defects', 'Spec defects'], ['spec_edits', 'Edited after run start'], ['criteria_blocks', 'Criteria blocks'], ['criteria_escalations', 'Criteria escalations'], ['spec_regressions', 'Spec regressions']],
-  ['rework', 'Rework', ['rework', 'Rework'], ['review_rejects', 'Review rejects'], ['pr_rework', 'Blocked or unmerged PRs'], ['repeat_runs', 'Repeat runs'], ['operator_requeues', 'Operator requeues']],
-];
-const components = groups.flatMap(([group, , ...members]) => members.map(([key, label]) => ({ key, group, label, definition: label })));
-const zeros = Object.fromEntries(components.map(component => [component.key, 0]));
-const rates = Object.fromEntries(components.map(component => [component.key, 1.2]));
+const terms = [
+  ['weighted_landed', 'Weighted landed', 1, 'credit'],
+  ['landed_initiative', 'Landed initiative', 1, 'credit'],
+  ['spec_defects', 'Spec defects', -1, 'problem'],
+  ['spec_rework', 'Spec-caused rework', -1, 'problem'],
+].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label }));
+const counts = { weighted_landed: 52, landed_initiative: 4, spec_defects: 3, spec_rework: 1 };
 const scorecard = {
+  role: 'orchestrators',
   window: '24h',
+  requested_window: '24h',
+  since: '2026-10-17T06:00:00Z',
   min_support: 10,
   computed_at: '2026-10-18T06:00:00Z',
-  definitions: {
-    groups: groups.map(([key, label]) => ({ key, label })),
-    components,
-    causes: [],
-    complexity_weights: { low: 1, medium: 2, hard: 4, xhard: 8, unassessed: 1 },
-    composite: { definition: 'Weighted landed + landed initiative − spec defects − rework.', weights: [] },
-    normalization: { per_100_tasks: 'per 100 owned tasks', per_8_hours: 'per 8 active hours' },
-  },
+  cache_ttl_seconds: 300,
+  tasks_scanned: 40,
+  status: 'ok',
+  unit: 'owned tasks',
+  fleet_average: 130,
+  terms,
   rows: [{
-    orchestrator: 'luna',
+    crew: 'luna',
+    model: 'model unknown',
+    units: 40,
     below_support: false,
-    support: { owned_tasks: 40, active_hours: 12, tasks_with_runs: 30 },
-    counts: { ...zeros, review_rejects: 4 },
-    per_100_tasks: rates,
-    per_8_hours: rates,
-    composite: { value: 3, per_100_tasks: 3.4, per_8_hours: 1.1 },
+    rank: 1,
+    counts,
+    per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, (count * 100) / 40])),
+    raw: 130,
+    score: 130,
+    runs_without_model: 0,
+    provisional: null,
+    stats: [],
   }],
 };
 
@@ -74,8 +79,19 @@ try {
       case '/api/job-runs/all':
         payload = { items: [], total: url.searchParams.get('state') === 'active' ? jobsTotal : 0 };
         break;
-      case '/api/orchestrators/scorecard':
+      case '/api/agents/orchestrators/scorecard':
         payload = scorecard;
+        break;
+      case '/api/agents/implementers/scorecard':
+      case '/api/agents/reviewers/scorecard':
+      case '/api/agents/pilots/scorecard':
+        payload = { ...scorecard, role: url.pathname.split('/')[3], status: 'not_computed', fleet_average: null, rows: [] };
+        break;
+      case '/api/agents/orchestrators/detail':
+        payload = { ...scorecard, row: scorecard.rows[0], terms: terms.map(term => ({ ...term, count: 0, per_100: 0, contribution: 0, tasks: [] })) };
+        break;
+      case '/api/agents/attribution':
+        payload = { window: '24h', requested_window: '24h', total: 0, owners: { orchestrators: 0, implementers: 0, reviewers: 0, pilots: 0, not_scored: { count: 0, reasons: {} } }, charged: {} };
         break;
       case '/api/audit/summary':
         payload = { events: 1, failed_runs: 0, denials: 0, active_long_runs: 0, window: '24h' };
@@ -94,7 +110,7 @@ try {
 
   const origin = `http://127.0.0.1:${server.address().port}`;
   const headerLayout = () => page.evaluate(() => {
-    const wrap = document.querySelector('.orch-table-wrap');
+    const wrap = document.querySelector('.agents-table-wrap');
     const intersects = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5
       && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
     const textBox = th => {
@@ -109,7 +125,7 @@ try {
         bottom: Math.max(...rects.map(rect => rect.bottom)),
       };
     };
-    const headers = [...document.querySelectorAll('.orch-table thead th')].map(th => ({
+    const headers = [...document.querySelectorAll('.agents-table thead th')].map(th => ({
       text: th.textContent.replace(/\s+/g, ' ').trim(),
       textBox: textBox(th),
       cell: th.getBoundingClientRect().toJSON(),
@@ -137,13 +153,13 @@ try {
 
   const settled = () => page.waitForFunction(() => {
     const meta = document.getElementById('meta-text');
-    const table = document.querySelector('.orch-table');
+    const table = document.querySelector('.agents-table');
     return meta && /UTC|PDT|PST/.test(meta.textContent) && table;
   });
 
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
-    await page.goto(`${origin}/?workspace=one&window=24h#analytics/orchestrators`);
+    await page.goto(`${origin}/?workspace=one&window=24h#agents/orchestrators`);
     await settled();
     await page.evaluate(() => document.fonts.ready);
     const jobs = await page.locator('#rail-count-jobs').textContent();
@@ -155,11 +171,11 @@ try {
     ), true, `the visible UTC control is pressed at ${width}px`);
     const layout = await headerLayout();
     assert.equal(layout.scrollLeft, 0);
-    assert.equal(layout.overflows, true, `the scorecard scrolls instead of crushing columns at ${width}px`);
+    if (width === 375) assert.equal(layout.overflows, true, `the ranking scrolls instead of crushing columns at ${width}px`);
     assert.deepEqual(layout.overlaps, [], `headers overlap at ${width}px: ${layout.overlaps.join('; ')} (headers: ${layout.headers.join(' | ')})`);
-    assert.ok(layout.headers.some(text => text.includes('Review rejects')) && layout.headers.some(text => text.startsWith('Composite')), 'the colliding headers are on the table');
-    await page.screenshot({ path: path.join(evidence, `orchestrators-dark-${width}.png`) });
-    await page.locator('.orch-table-wrap').screenshot({ path: path.join(evidence, `orchestrators-table-dark-${width}.png`) });
+    assert.ok(layout.headers.some(text => text.includes('Spec-caused rework')) && layout.headers.some(text => text.startsWith('Score')), 'the last term and the score are on the table');
+    await page.screenshot({ path: path.join(evidence, `agents-orchestrators-chrome-dark-${width}.png`) });
+    await page.locator('.agents-table-wrap').screenshot({ path: path.join(evidence, `agents-orchestrators-table-dark-${width}.png`) });
     await page.locator('.rail').screenshot({ path: path.join(evidence, `jobs-rail-dark-${width}.png`) });
     const clockShot = width >= 1280 ? page.locator('.topbar') : page.locator('.rail-workspace');
     await clockShot.screenshot({ path: path.join(evidence, `clock-dark-${width}.png`) });

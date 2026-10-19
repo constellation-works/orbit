@@ -8,9 +8,8 @@
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/cost` (keyed by the canonical window), and the codebase
-//! analytics scan behind `/api/codebase/analytics`, the orchestrator
-//! scorecard scan behind `/api/orchestrators/*` and the agent scorecard scan
-//! behind `/api/agents/*`, which cache typed facts rather than a response
+//! analytics scan behind `/api/codebase/analytics` and the agent scorecard
+//! scan behind `/api/agents/*`, which cache typed facts rather than a response
 //! body. The agent scan alone is served stale while one background refresh
 //! replaces it. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
@@ -39,11 +38,6 @@ pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 /// bundle's history, and the rankings it feeds move over days, so the 30 s
 /// dashboard poll must not repeat it.
 pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
-
-/// Freshness bound for the orchestrator scorecard scan. A miss reads every
-/// attributed task's history and comments, and the scorecard moves over days,
-/// so neither the 30 s poll nor a drill-down repeats it.
-pub(crate) const ORCHESTRATOR_SCORECARD_TTL: Duration = Duration::from_secs(300);
 
 /// Freshness bound for the agent scorecard scan. A miss reads the history
 /// and comments of every task active in the last 90 days, and the rankings

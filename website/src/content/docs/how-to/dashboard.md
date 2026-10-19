@@ -162,6 +162,7 @@ prove that a particular task or run succeeded.
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
+| **Agents** | How well each agent role does its part, ranked by crew and model: **Orchestrators**, **Implementers**, **Reviewers**, and **Pilots**. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
@@ -391,6 +392,40 @@ Select a tool on **Tools** to open its events for the window the card shows.
 Exact incident-event links select **all** statuses because they list the
 recorded event IDs without a status restriction. **Analytics → Cost** shows
 managed-execution cost and token usage for the selected window.
+
+## Agents
+
+**Agents** ranks the crews and models behind each agent role in the
+selected workspace and time window. Pick a role from the tabs above the panel;
+each tab shows how many rows it ranks. A role whose scorecard is not computed
+yet says so and lists the terms it will be scored on.
+
+- **Who each problem counts against** splits the window's problems by the role
+  they count against. Every problem counts against one role, or is not scored
+  (for example, rework caused by infrastructure). Select a legend entry to open
+  that role.
+- **The ranking** lists one row per crew and model, with a rate per 100 units
+  of work for each term and the score. Rows with fewer than 10 units are greyed,
+  unranked, and listed last.
+- **The detail column** shows the selected row: its score, its raw score and
+  the fleet average it is pulled toward, how each term adds to or takes from
+  the score, the tasks behind its biggest penalty (each opens the task), and
+  context such as active hours that is shown but never scored. Select another
+  row to change it.
+- **How the score works** lists every term with its weight and definition and
+  the smoothing formula. It stays open while the page refreshes.
+
+The **Orchestrators** tab replaces Analytics → Orchestrators, and old
+`#analytics/orchestrators` links open it. An orchestrator's score now counts
+only problems caused by the specification: spec defects and spec-caused
+rework. Rework caused by the crew and review rejects count against
+**Implementers**, and reviewer fixes that failed revalidation count against
+**Reviewers**.
+The **Rework by cause** panel shows where each orchestrator's rework went.
+
+With **all** selected, Agents covers the last 90 days. From a terminal,
+`orbit orchestrator scorecard` still prints the previous orchestrator
+scorecard.
 
 ## Automation
 

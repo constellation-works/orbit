@@ -114,6 +114,7 @@ try {
     let incidentsView = 'incidents';
     let analytics = 'metrics';
     let reliabilityView = 'pipeline';
+    let agentsRole = 'orchestrators';
     let config = 'effective';
     let runId = null;
     let runSubtab = 'steps';
@@ -133,6 +134,7 @@ try {
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
+      getAgentsRole: () => agentsRole, setAgentsRole: (value) => { agentsRole = value; },
       applyAuditHashQuery: () => {}, syncAuditControls: () => {},
       buildAuditHash: () => '#diagnostics/incidents/events?status=non_success',
       applyCodebaseHashQuery: () => {}, buildCodebaseHash: () => '#analytics/codebase',
@@ -1173,6 +1175,7 @@ try {
     let incidentsView = 'incidents';
     let analytics = 'metrics';
     let reliabilityView = 'pipeline';
+    let agentsRole = 'orchestrators';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
       getJobsSubtab: () => jobs, setJobsSubtab: (value) => { jobs = value; },
@@ -1187,6 +1190,7 @@ try {
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
+      getAgentsRole: () => agentsRole, setAgentsRole: (value) => { agentsRole = value; },
       applyAuditHashQuery: () => {}, syncAuditControls: () => {},
       buildAuditHash: () => '#diagnostics/incidents/events?status=non_success',
       applyCodebaseHashQuery: () => {}, buildCodebaseHash: () => '#analytics/codebase',

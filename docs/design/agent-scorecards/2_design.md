@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Target design for the Agents dashboard destination; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-web/src/api/orchestrators.rs", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -18,9 +18,11 @@ related_artifacts: []
 
 This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core track has landed. Sections marked **Current** describe the code: the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators role (§5.1), the API (§6) and the scan and cache (§8). Everything else is the target. Until the dashboard track lands, the live views are still the orchestrator scorecard in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--orchestrators) and the Task pilot ranking in Analytics › Codebase. Both are replaced here.
+The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators role (§5.1), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
 
 ## 1. Destination and Layout
+
+**Current**, except the Implementers, Reviewers and Pilots panels, the Reviewers banner and the move of the Task pilot ranking, which arrive with their roles.
 
 **Agents** is a top-level Observe destination beside Health and Analytics. Its secondary tabs are its roles: **Orchestrators** (`#agents/orchestrators`, the default), **Implementers** (`#agents/implementers`), **Reviewers** (`#agents/reviewers`) and **Pilots** (`#agents/pilots`). Each tab shows its count of ranked rows. Navigation changes:
 
@@ -37,7 +39,7 @@ Every role tab has the same layout:
 
 Reviewers also carry a **provisional** banner while any review in the window is younger than the 30-day miss lookback (§4.4).
 
-The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled that way (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds every node with `el()`. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
+The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled `all (90d)` (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds every node with `el()`. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
 
 ## 2. Ranking Unit
 
@@ -266,7 +268,7 @@ Errors are 400 for:
 - a zero `min_support`;
 - a detail request without `crew`, or naming a row the window does not contain.
 
-The `/api/orchestrators/*` routes still serve today's orchestrator scorecard. Track C removes them in the change that moves the dashboard to `/api/agents/orchestrators/*`.
+The dashboard reads only these routes. The `/api/orchestrators/*` routes were removed with Analytics › Orchestrators.
 
 ## 7. CLI and MCP
 
@@ -316,7 +318,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 |---|---|---|---|
 | A | This design (`docs/design/agent-scorecards/`) | — | `docs/design/agent-scorecards/**`, `docs/design/CONVENTIONS.md` ownership row |
 | B | Core and API: `application/agents/` (`facts.rs`, `attribution.rs`, `score.rs`, the role registry with all four roles, three of them `not_computed`), Orchestrators on the new score, `api/agents.rs`, cache. Landed. | A | `crates/orbit-core/src/application/agents/**`, `agents.rs` in the `orbit-web` API module, routes, `runtime_memo` |
-| C | Dashboard shell: Agents destination, `#agents/<role>` routing and redirect, the generic renderer; removes Analytics › Orchestrators and the `/api/orchestrators/*` routes | B | `assets/dashboard/js/agents.js`, `css/agents.css`, `index.html`, `app.js`, removal of `js/orchestrators.js` and `api/orchestrators.rs` |
+| C | Dashboard shell: Agents destination, `#agents/<role>` routing and redirect, the generic renderer; removes Analytics › Orchestrators and the `/api/orchestrators/*` routes. Landed. | B | `assets/dashboard/js/agents.js`, `js/agents-orchestrators.js`, `css/agents.css`, `index.html`, `app.js`, removal of `js/orchestrators.js` and `api/orchestrators.rs` |
 | D | Implementers role and its panel | C | `application/agents/roles/implementers.rs`, `js/agents-implementers.js` |
 | E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
 | F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
@@ -348,7 +350,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 ## Task References
 
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
-- ORB-16953 — track C: the dashboard shell (planned).
+- ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
 - ORB-16954, ORB-16955, ORB-16956 — tracks D, E and F: the Implementers, Reviewers and Pilots roles (planned).
 - ORB-16957 — track G: CLI and MCP (planned).
 
