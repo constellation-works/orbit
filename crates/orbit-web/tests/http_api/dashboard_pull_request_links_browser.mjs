@@ -58,19 +58,33 @@ export async function assertPullRequestLinks(page, evidence) {
     if (JSON.stringify(rows) !== JSON.stringify(expected)) {
       throw new Error(`Review and in-progress rows must link only an http(s) PR page: ${JSON.stringify(rows)}`);
     }
+    const rowActions = await page.evaluate(() => Object.fromEntries(
+      ['PRL-1', 'PRL-2', 'PRL-3', 'PRL-4'].map(id => {
+        const cell = document.querySelector(`[data-key="task-${id}"] .task-quick-cell`);
+        return [id, { approve: Boolean(cell.querySelector('.task-quick.approve')), controls: cell.children.length }];
+      }),
+    ));
+    if (JSON.stringify(rowActions) !== JSON.stringify({
+      'PRL-1': { approve: false, controls: 1 },
+      'PRL-2': { approve: true, controls: 1 },
+      'PRL-3': { approve: true, controls: 1 },
+      'PRL-4': { approve: false, controls: 1 },
+    })) {
+      throw new Error(`Only review rows with a linked PR omit row Approve: ${JSON.stringify(rowActions)}`);
+    }
 
     const layout = [];
     for (const width of [1440, 375]) {
       await page.setViewportSize({ width, height: 1100 });
       const bounds = await page.locator('[data-key="task-PRL-1"]').evaluate(row => {
         const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
-        return { row: rect(row), link: rect(row.querySelector('.task-quick-link')), button: rect(row.querySelector('.task-quick')), title: rect(row.querySelector('.title')) };
+        return { row: rect(row), cell: rect(row.querySelector('.task-quick-cell')), link: rect(row.querySelector('.task-quick-link')), title: rect(row.querySelector('.title')) };
       });
-      if (Math.abs(bounds.link.y - bounds.button.y) > 1 || Math.abs(bounds.link.height - bounds.button.height) > 1 || bounds.button.x - bounds.link.right < 7 || bounds.button.right > bounds.row.right + 1) {
-        throw new Error(`PR and Approve must share one aligned, separated action row at ${width}: ${JSON.stringify(bounds)}`);
+      if (bounds.link.right > bounds.cell.right + 1 || bounds.cell.right > bounds.row.right + 1) {
+        throw new Error(`A linked review row keeps its PR link within the action column at ${width}: ${JSON.stringify(bounds)}`);
       }
       layout.push({ width, ...bounds });
-      await page.screenshot({ path: path.join(evidence, `pull-request-actions-${width}.png`) });
+      await page.screenshot({ path: path.join(evidence, `review-group-${width === 375 ? 'mobile-375' : 'desktop'}.png`) });
     }
     await page.setViewportSize({ width: 1440, height: 1100 });
 
@@ -92,7 +106,24 @@ export async function assertPullRequestLinks(page, evidence) {
     if (JSON.stringify(unlinked) !== JSON.stringify([{ text: 'PR #13', href: null }])) {
       throw new Error(`A ref without an http(s) page must stay text: ${JSON.stringify(unlinked)}`);
     }
-    fs.writeFileSync(path.join(evidence, 'pull-request-links-result.json'), JSON.stringify({ passed: true, rows, linked, unlinked, layout }, null, 2));
+    await page.locator('#tasks-body [data-key="task-PRL-1"] .title').click();
+    const approve = page.locator('#detail-PRL-1 .actions > .action.approve');
+    if (await approve.count() !== 1) throw new Error('A PR-linked review task keeps Approve in its detail');
+    await page.evaluate(() => {
+      globalThis.pullRequestLinkFixture.approvals = [];
+      globalThis.fetch = async (url, options) => {
+        const { pathname } = new URL(url, window.location.href);
+        if (pathname === '/api/distributed/claims') return new Response(JSON.stringify({ claims: [] }), { status: 200 });
+        if (pathname === '/api/tasks/PRL-1/approve' && options?.method === 'POST') {
+          globalThis.pullRequestLinkFixture.approvals.push({ pathname, method: options.method });
+          return new Response('{}', { status: 200 });
+        }
+        return globalThis.pullRequestLinkFixture.priorFetch(url, options);
+      };
+    });
+    await approve.evaluate(button => button.click());
+    await page.waitForFunction(() => globalThis.pullRequestLinkFixture.approvals.length === 1);
+    fs.writeFileSync(path.join(evidence, 'pull-request-links-result.json'), JSON.stringify({ passed: true, rows, rowActions, linked, unlinked, detailApproval: true, layout }, null, 2));
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.pullRequestLinkFixture.priorFetch; delete globalThis.pullRequestLinkFixture; });
   }

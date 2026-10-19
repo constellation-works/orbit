@@ -3804,7 +3804,7 @@ function buildQuickAction(task, context) {
     link.target = "_blank";
     link.addEventListener("click", (event) => event.stopPropagation());
     cell.appendChild(link);
-    if (task.status !== "review") return cell;
+    return cell;
   }
   let spec = null;
   if (task.status === "proposed") {
