@@ -236,6 +236,7 @@ mod orphaned_fixture_children {
     const DIR_ENV: &str = "ORBIT_ORPHAN_FIXTURE_DIR";
     const CHATTY_SECS_ENV: &str = "ORBIT_CHATTY_CHILD_SECS";
     const CHATTY_MILLIS_ENV: &str = "ORBIT_CHATTY_CHILD_MILLIS";
+    const CHATTY_FIRST_PRINT_DELAY_ENV: &str = "ORBIT_CHATTY_CHILD_FIRST_PRINT_DELAY_MS";
     /// Long enough that a survivor is unmistakable, short enough that a failed
     /// run does not leave processes for long.
     const SURVIVOR_SECS: &str = "120";
@@ -435,25 +436,30 @@ mod orphaned_fixture_children {
     }
 
     /// ORB-16411: the quiet window used to include exec and libtest startup, so
-    /// a 300 ms bound killed a healthy child on a loaded host. Holding the
-    /// first byte past that bound must not report the child as hung.
+    /// a 300 ms bound killed a healthy child on a loaded host. ORB-17001: the
+    /// libtest header is itself the first byte, so the child can still be
+    /// descheduled before its first progress line. Keep this fixture's quiet
+    /// window wider than that scheduling gap and exercise the gap directly.
     #[test]
     fn a_child_whose_first_line_arrives_after_the_quiet_window_is_not_hung() {
         let dir = tempfile::tempdir().unwrap();
         let exe = std::env::current_exe().unwrap();
         let exe = exe.to_str().unwrap();
         let entry = "orphaned_fixture_children::chatty_child_entry";
-        // The shell writes nothing, then replaces itself. The first byte is
-        // the chatty child's, and it arrives after `quiet`.
+        // The shell writes nothing, then replaces itself. Its libtest header
+        // arrives after `quiet`; the test body then waits 500 ms before its
+        // first progress line, reproducing a scheduler pause longer than the
+        // old quiet window without adding synthetic host load.
         let script = format!(
-            "sleep 0.5; exec {} --exact {} --ignored --nocapture",
+            "sleep 1.1; exec {} --exact {} --ignored --nocapture",
             quote_posix_arg(exe),
             quote_posix_arg(entry),
         );
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
         command.env(CHATTY_MILLIS_ENV, "600");
-        let quiet = Duration::from_millis(300);
+        command.env(CHATTY_FIRST_PRINT_DELAY_ENV, "500");
+        let quiet = Duration::from_secs(1);
         let started = Instant::now();
         let output = run_child_test_within(
             &mut command,
@@ -463,7 +469,7 @@ mod orphaned_fixture_children {
             Duration::from_secs(120),
         );
         assert!(
-            started.elapsed() >= Duration::from_millis(1_000),
+            started.elapsed() >= Duration::from_millis(2_200),
             "the pre-output delay and the print budget must both elapse"
         );
         assert_child_test_passed(
@@ -510,6 +516,11 @@ mod orphaned_fixture_children {
             Ok(milliseconds) => Duration::from_millis(milliseconds.parse().expect("chatty millis")),
             Err(_) => Duration::from_secs(std::env::var(CHATTY_SECS_ENV).unwrap().parse().unwrap()),
         };
+        if let Ok(milliseconds) = std::env::var(CHATTY_FIRST_PRINT_DELAY_ENV) {
+            std::thread::sleep(Duration::from_millis(
+                milliseconds.parse().expect("first print delay millis"),
+            ));
+        }
         // A sub-second run prints every 15 ms so a few hundred milliseconds
         // of quiet still sees progress. Longer runs keep the 200 ms gap.
         let pace = if budget < Duration::from_secs(1) {
