@@ -22,13 +22,16 @@ holds PR creation for the reviewer. Before-landing review (`review.timing =
 "before_landing"`) opens the PR first and reviews it while hosted CI runs. After-landing review is
 the `delivery-code-review` auto-task. There is one review layer before
 landing, so `review.timing` selects at most one of them. Both share
-`review.minutes` and `workflow.purpose_crews.review`, and neither runs on a workspace that ships locally:
+`review.minutes` and one reviewer pool, `workflow.purpose_crews.pre_landing_review`
+(else `workflow.purpose_crews.review`, which after-landing review tasks always
+use), and neither runs on a workspace that ships locally:
 readiness holds that backlog as `local_route_before_pr` or
 `local_route_before_landing`, and `orbit doctor` fails its `review` check.
 
 ## 1. What the gate does
 
-One fresh reviewer, from `workflow.purpose_crews.review`, examines the implementation
+One fresh reviewer, from `workflow.purpose_crews.pre_landing_review` (or
+`workflow.purpose_crews.review` while that is unset), examines the implementation
 commit, fixes what it finds, and returns a verdict. There is no findings-driven
 rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
 may admit up to two fresh re-reviews in the same lineage; a conflict after the
@@ -710,7 +713,7 @@ handoff output must show acceptance for the same final candidate. For
 
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
-- [CONFIG.md](../CONFIG.md) — the `[review]` keys and `workflow.purpose_crews.review`.
+- [CONFIG.md](../CONFIG.md) — the `[review]` keys, `workflow.purpose_crews.review` and `workflow.purpose_crews.pre_landing_review`.
 - [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the

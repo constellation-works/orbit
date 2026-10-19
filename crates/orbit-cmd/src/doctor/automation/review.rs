@@ -65,8 +65,8 @@ pub(in crate::doctor) fn doctor_check_review(runtime: &OrbitRuntime) -> Workspac
         remediation.push(
             "`review.before_landing_hosts` lists machines whose claims this owner would refuse. \
              Fix each problem named above (ship through the PR route, set \
-             `workflow.purpose_crews.review`), or remove `review.before_landing_hosts` from \
-             `config.toml`."
+             `workflow.purpose_crews.pre_landing_review` or `workflow.purpose_crews.review`), \
+             or remove `review.before_landing_hosts` from `config.toml`."
                 .to_string(),
         );
     }
@@ -86,8 +86,11 @@ pub(in crate::doctor) fn doctor_check_review(runtime: &OrbitRuntime) -> Workspac
             "Before-PR"
         };
         remediation.push(format!(
-            "{layer} review needs `workflow.purpose_crews.review` set to a crew, or a pool with a \
-             crew, that resolves on this host; set it, or set `review.timing` to `off`."
+            "{layer} review needs `workflow.purpose_crews.pre_landing_review`, or \
+             `workflow.purpose_crews.review` while that is unset, set to a crew, or a pool with \
+             a crew, that resolves on this host (it reads `{}` now); set one, or set \
+             `review.timing` to `off`.",
+            switches.before_pr.crew_key,
         ));
     }
     if let Some(health) = switches

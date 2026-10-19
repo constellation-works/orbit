@@ -176,7 +176,8 @@ never remove or swap it:
 
 Before any run is created, Orbit also refuses the option when:
 
-- `workflow.purpose_crews.review` is unset, because there is no reviewer crew to run it;
+- neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`
+  is set, because there is no reviewer crew to run it;
 - the run uses local-only delivery, which has no pull request to review; or
 - the run is a pull drain (`orbit run auto --pull`), because the owner decides
   review for the claims it hands out.

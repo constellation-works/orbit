@@ -38,6 +38,7 @@ pub(super) const CREW_POOL_KEYS: &[&str] = &[
     "workflow.purpose_crews.final_recovery",
     "workflow.purpose_crews.auto_fix",
     "workflow.purpose_crews.review",
+    "workflow.purpose_crews.pre_landing_review",
     "workflow.purpose_crews.baseline_red_repair",
     "workflow.purpose_crews.sweep_tasks",
 ];

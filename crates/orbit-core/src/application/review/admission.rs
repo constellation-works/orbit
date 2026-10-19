@@ -16,12 +16,14 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
 use orbit_types::workflow::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE,
     ReviewAdmission, ReviewLayer, ReviewTiming,
 };
 use serde_json::Value;
 
+use super::crew::pre_landing_review_crew_unset;
 use super::{LOCAL_ROUTE_JOB, REVIEW_ADMITTED_JOBS};
 use crate::OrbitRuntime;
 
@@ -232,7 +234,9 @@ pub(crate) fn admit_review_request(
 /// run's `--review` request added when policy applies no layer before
 /// landing [ORB-16572]. The request never removes or swaps a layer. A matching
 /// layer keeps policy provenance, and both matching and added layers need
-/// the same `workflow.purpose_crews.review` a configured layer does.
+/// the same reviewer pool a configured layer does:
+/// `workflow.purpose_crews.pre_landing_review`, else
+/// `workflow.purpose_crews.review`.
 pub(crate) fn resolve(
     runtime: &OrbitRuntime,
     request: Option<ReviewLayer>,
@@ -274,16 +278,18 @@ fn require_reviewer_crew(
     if admission.crew.is_some() || !admission.crew_pool.is_empty() {
         return Ok(());
     }
+    let unset = pre_landing_review_crew_unset();
     let message = match applied_source {
         Some(source) => format!(
-            "{} ({source}) requires a reviewer crew, but workflow.purpose_crews.review is unset; \
-             configure workflow.purpose_crews.review (automatic review never inherits the implementer's crew)",
+            "{} ({source}) requires a reviewer crew, but {unset}; configure \
+             {PRE_LANDING_REVIEW_CREW_KEY} or {REVIEW_CREW_KEY} (automatic review never inherits \
+             the implementer's crew)",
             layer.config_setting()
         ),
         None => format!(
-            "--review {} needs a reviewer crew, but workflow.purpose_crews.review is unset; configure \
-             workflow.purpose_crews.review (automatic review never inherits the implementer's crew) or \
-             submit without --review",
+            "--review {} needs a reviewer crew, but {unset}; configure \
+             {PRE_LANDING_REVIEW_CREW_KEY} or {REVIEW_CREW_KEY} (automatic review never inherits \
+             the implementer's crew) or submit without --review",
             layer.as_str()
         ),
     };
@@ -293,11 +299,14 @@ fn require_reviewer_crew(
 /// Build the snapshot from the workspace's resolved review settings, keeping
 /// each field's provenance so diagnostics can explain where it came from.
 ///
-/// A single review crew is captured as `crew`; a pool is captured whole as
-/// `crew_pool`, and the gate chooses one member per review [ORB-15195].
+/// The reviewer pool is `workflow.purpose_crews.pre_landing_review`, else
+/// `workflow.purpose_crews.review`, with `crew_source` the layer that set
+/// the key it came from. A single review crew is captured as `crew`; a pool
+/// is captured whole as `crew_pool`, and the gate chooses one member per
+/// review [ORB-15195].
 pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitError> {
     let policy = runtime.operation_policy();
-    let mut crew_pool = runtime.review_crew_pool_members()?;
+    let mut crew_pool = runtime.pre_landing_review_crew_pool_members()?;
     let crew = match crew_pool.as_slice() {
         [only] => Some(only.name.clone()),
         _ => None,
@@ -322,7 +331,7 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
             policy.review_before_pr.source.label().to_string()
         },
         crew,
-        crew_source: policy.review_crew.source.label().to_string(),
+        crew_source: policy.pre_landing_review_pool().source.label().to_string(),
         crew_pool,
         budget: policy.review_budget(),
         required_validation_commands: Some(

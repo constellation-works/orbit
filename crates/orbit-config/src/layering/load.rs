@@ -248,6 +248,11 @@ fn load_layered_resolved_with_staged(
         .workflow_purpose_crews_review
         .clone()
         .unwrap_or_default();
+    resolved.operation.pre_landing_review_crew.value = resolved
+        .snapshot
+        .workflow_purpose_crews_pre_landing_review
+        .clone()
+        .unwrap_or_default();
     resolved.plugin_enablement = plugin_enablement;
     Ok(LoadedResolvedConfig {
         resolved,

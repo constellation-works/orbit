@@ -37,7 +37,8 @@ impl ShipMode {
                   crew is refused before its provider starts.\n\n\
                   `--review` adds a second-agent review before landing to this run only. It\n\
                   can only add review: the layer workspace policy already applies is accepted\n\
-                  unchanged, and the other layer, an unset `workflow.purpose_crews.review`\n\
+                  unchanged, and the other layer, a workspace that sets neither\n\
+                  `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`\n\
                   and local-only delivery are refused before the run starts.\n\n\
                   Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
@@ -74,8 +75,10 @@ pub struct ShipCommand {
     /// policy applies none: `before-pr` holds PR creation for a reviewer,
     /// `before-landing` reviews the open PR before it lands. The layer
     /// `review.timing` already applies is accepted unchanged; the other one
-    /// is refused, as are an unset `workflow.purpose_crews.review` and
-    /// local-only delivery. Omitted, workspace policy decides.
+    /// is refused, as are a workspace that sets neither
+    /// `workflow.purpose_crews.pre_landing_review` nor
+    /// `workflow.purpose_crews.review` and local-only delivery. Omitted,
+    /// workspace policy decides.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.

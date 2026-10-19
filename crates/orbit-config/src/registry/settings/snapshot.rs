@@ -82,6 +82,9 @@ impl ConfigSnapshot {
         if let Some(pool) = self.workflow_purpose_crews_review.as_mut() {
             admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
         }
+        if let Some(pool) = self.workflow_purpose_crews_pre_landing_review.as_mut() {
+            admit_crew_pool(pool, crews, crate::operation::PRE_LANDING_REVIEW_CREW_KEY)?;
+        }
         self.workflow_purpose_crews_final_recovery = Some(admit_final_recovery_crews(
             self.workflow_purpose_crews_final_recovery.take(),
             crews,

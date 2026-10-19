@@ -223,11 +223,13 @@ fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
 /// still captures before-landing review, with its review crew, for the claims
 /// of a machine `review.before_landing_hosts` lists. The probe answers per
 /// caller machine, so any other label is offered no review, and the owner's
-/// own delivery captures none.
+/// own delivery captures none. The captured crew is the pre-landing pool's,
+/// not the after-landing `workflow.purpose_crews.review` pool's.
 fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
     let leaf = ReviewedLeaf::admit_from(
         &format!(
-            "[review]\nbefore_landing_hosts = [\"{FOLLOWER}\"]\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+            "[review]\nbefore_landing_hosts = [\"{FOLLOWER}\"]\n\n[workflow.purpose_crews]\n\
+             review = \"grok\"\npre_landing_review = \"{REVIEW_CREW}\"\n"
         ),
         "",
     );
@@ -237,7 +239,10 @@ fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
     assert_eq!(listed["admits"], true, "{listed}");
     assert_eq!(listed["ship"]["before_landing"], true, "{listed}");
     assert_eq!(listed["ship"]["before_pr"], false, "{listed}");
-    assert_eq!(listed["ship"]["review"]["crew"], REVIEW_CREW, "{listed}");
+    assert_eq!(
+        listed["ship"]["review"]["crew"], REVIEW_CREW,
+        "the claim's reviewer comes from the pre-landing pool: {listed}"
+    );
     assert_eq!(listed["review"]["before_landing"]["enabled"], false);
     assert_eq!(
         listed["review"]["before_landing"]["hosts"],

@@ -376,6 +376,71 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
     assert!(error.contains("no-such-crew"), "{error}");
 }
 
+/// `workflow.purpose_crews.pre_landing_review` is admitted like the review
+/// pool and names the before-landing reviewer on its own; while it is unset,
+/// or emptied by a later layer, that reviewer resolves from
+/// `workflow.purpose_crews.review`, which keeps its own value either way.
+#[test]
+fn pre_landing_review_pool_resolves_on_its_own_and_falls_back_to_review() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let load = || ResolvedConfig::load(&roots);
+
+    review_layers_write_config(
+        global.path(),
+        "[workflow.purpose_crews]\nreview = [\"sol:2\", \"grok:1\"]\n",
+    );
+    let unset = load().expect("an unset pre-landing pool loads");
+    let pool = unset.operation.pre_landing_review_pool();
+    assert_eq!(pool.entries, ["grok:1", "sol:2"]);
+    assert_eq!(pool.key, REVIEW_CREW_KEY);
+    assert_eq!(pool.source, OperationLayerSource::Global);
+    assert!(pool.is_fallback());
+
+    review_layers_write_config(
+        workspace.path(),
+        "[workflow.purpose_crews]\npre_landing_review = [\" sol \", \"grok\"]\n",
+    );
+    let split = load().expect("a bare pre-landing pool loads");
+    let pool = split.operation.pre_landing_review_pool();
+    assert_eq!(pool.entries, ["grok", "sol"]);
+    assert_eq!(pool.key, PRE_LANDING_REVIEW_CREW_KEY);
+    assert_eq!(pool.source, OperationLayerSource::Workspace);
+    assert_eq!(
+        split.operation.review_crew.value,
+        ["grok:1", "sol:2"],
+        "after-landing review keeps its own pool"
+    );
+
+    review_layers_write_config(
+        global.path(),
+        "[workflow.purpose_crews]\nreview = \"sol\"\npre_landing_review = \"grok\"\n",
+    );
+    review_layers_write_config(
+        workspace.path(),
+        "[workflow.purpose_crews]\npre_landing_review = []\n",
+    );
+    let emptied = load().expect("an empty pre-landing pool loads");
+    let pool = emptied.operation.pre_landing_review_pool();
+    assert_eq!(pool.entries, ["sol"], "an emptied pool falls back to review");
+    assert_eq!(pool.key, REVIEW_CREW_KEY);
+
+    for (value, refusal) in [
+        ("[\"sol:3\", \"grok\"]", "bare and weighted entries do not mix"),
+        ("[\"sol\", \"no-such-crew\"]", "an unknown member fails the load"),
+        ("[\"sol:0\"]", "a pool with no positive weight fails the load"),
+        ("\"  \"", "an empty name fails the load"),
+    ] {
+        review_layers_write_config(
+            workspace.path(),
+            &format!("[workflow.purpose_crews]\npre_landing_review = {value}\n"),
+        );
+        let error = load().expect_err(refusal).to_string();
+        assert!(error.contains(PRE_LANDING_REVIEW_CREW_KEY), "{refusal}: {error}");
+    }
+}
+
 #[test]
 fn machine_auto_concurrency_global_values_are_admitted() {
     let global = tempfile::tempdir().expect("global tempdir");
