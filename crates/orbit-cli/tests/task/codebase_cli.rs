@@ -135,3 +135,104 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         "a path nothing touched is refused by name: {refused}"
     );
 }
+
+/// The public CLI reads landed paths rather than inferring them from context.
+#[test]
+fn codebase_related_cli_reports_landed_markdown_partner() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_related_cli_reports_landed_markdown_partner",
+    ) {
+        return;
+    }
+    use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2};
+    use std::fs;
+    use std::io::Write as _;
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let task = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("codebase-fixture"));
+        runtime
+            .add_task(TaskAddParams {
+                title: "landed fixture".into(),
+                context_files: vec!["file:src/lib.rs".into()],
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+    fs::create_dir_all(fixture.repo.join("src")).unwrap();
+    fs::write(fixture.repo.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
+    fs::write(fixture.repo.join("design.md"), "design\n").unwrap();
+    crate::git_repo::run(&fixture.repo, &["add", "src/lib.rs", "design.md"]);
+    crate::git_repo::run(
+        &fixture.repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "landed fixture",
+        ],
+    );
+    let commit = crate::git_repo::run(&fixture.repo, &["rev-parse", "HEAD"]);
+    fn find(root: &Path, id: &str) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(root).ok()? {
+            let path = entry.ok()?.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.file_name().is_some_and(|name| name == id)
+                && path.join(TASK_EVENTS_FILE_NAME).is_file()
+            {
+                return Some(path);
+            }
+            if let Some(found) = find(&path, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let path = find(&fixture.root, &task)
+        .unwrap()
+        .join(TASK_EVENTS_FILE_NAME);
+    let rows = fs::read_to_string(&path).unwrap().lines().count();
+    let row = TaskEventRowV2 { schema_version: TASK_ARTIFACT_SCHEMA_VERSION, event_id: format!("EV-{:04}", rows+1), at: chrono::Utc::now(), by: "system".into(), event_type: "landing_completed".into(), note: Some(json!({"delivery":"local_candidate","candidate":commit,"verified":"landing_ref_contains_candidate"}).to_string()), from_status: None, to_status: Some(TaskStatus::Done), operation_id: None, decision: None };
+    writeln!(
+        fs::OpenOptions::new().append(true).open(path).unwrap(),
+        "{}",
+        serde_json::to_string(&row).unwrap()
+    )
+    .unwrap();
+    let payload = fixture.json(&[
+        "codebase",
+        "related",
+        "src/lib.rs",
+        "--top",
+        "1",
+        "--min-support",
+        "1",
+        "--json",
+    ]);
+    assert_eq!(payload["window"], "30d");
+    assert_eq!(payload["rows"].as_array().unwrap().len(), 1);
+    let partner = &payload["rows"][0];
+    assert_eq!(partner["path"], "design.md");
+    assert_eq!(partner["jaccard"], 1.0);
+    assert_eq!(partner["conditional_rate"], 1.0);
+    assert_eq!(partner["support"]["both"], 1);
+    assert_eq!(partner["footprint_miss_count"], 1);
+    assert!(partner["reservation_coupling"].is_null());
+    assert_eq!(partner["tasks"][0]["task_id"], task);
+}

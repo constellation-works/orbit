@@ -1,5 +1,5 @@
-//! `GET /api/codebase/analytics`: which parts of the repository are expensive
-//! or risky for agents to change, from records Orbit already keeps.
+//! `GET /api/codebase/analytics` and `/related`: which repository files are expensive
+//! or risky to change and which files change alongside them.
 //!
 //! The scan and rankings are the core codebase analytics service, shared with
 //! `orbit codebase` and the `orbit.codebase.*` tools. One scan per workspace
@@ -30,6 +30,10 @@ pub(super) struct CodebaseAnalyticsQuery {
     /// `file` (default), `dir` or `crate`.
     #[serde(default)]
     rollup: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    top: Option<usize>,
 }
 
 pub(super) async fn codebase_analytics(
@@ -64,4 +68,37 @@ pub(super) async fn codebase_analytics(
         CODEBASE_ANALYTICS_TTL,
     ))
     .into_response()
+}
+
+pub(super) async fn codebase_related(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<CodebaseAnalyticsQuery>,
+) -> Response {
+    let selection = match CodebaseQuery::parse(
+        Some(query.window.as_deref().unwrap_or("30d")),
+        query.min_support,
+        Some("file"),
+    ) {
+        Ok(query) => query,
+        Err(error) => return map_runtime_error(error),
+    };
+    let Some(path) = query.path else {
+        return bad_request("path is required".into());
+    };
+    let scan_runtime = Arc::clone(&runtime);
+    let facts = match state
+        .codebase_memo()
+        .get_or_compute(&runtime, (), CODEBASE_ANALYTICS_TTL, move || {
+            scan_runtime.codebase_scan()
+        })
+        .await
+    {
+        Ok(served) => served.body,
+        Err(error) => return map_runtime_error(error),
+    };
+    match codebase::codebase_related(&facts, &selection, &path, query.top.unwrap_or(10)) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => map_runtime_error(error),
+    }
 }

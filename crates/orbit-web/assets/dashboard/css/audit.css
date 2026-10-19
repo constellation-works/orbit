@@ -639,3 +639,20 @@ tr.audit-detail-row td {
 .audit-more-btn:disabled { cursor: progress; color: var(--fg-dim); }
 .audit-more-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .audit-more-error { color: var(--state-failed); }
+
+/* File co-change search and evidence. */
+.codebase-related { margin: 0 20px 20px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.codebase-related h3, .codebase-related h4 { margin: 0 0 12px; overflow-wrap: anywhere; }
+.codebase-related-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.codebase-related-search input { flex: 1; min-width: 160px; padding: 8px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; }
+.codebase-path-options { display: flex; flex-direction: column; align-items: stretch; max-height: 220px; overflow: auto; }
+.codebase-path-options button { height: auto; white-space: normal; text-align: left; overflow-wrap: anywhere; padding: 8px; }
+.codebase-related-sorts { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.codebase-related-sorts [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.codebase-related-list { list-style: none; padding: 0; }
+.codebase-related-row { border-top: 1px solid var(--border); padding: 12px 0; overflow-wrap: anywhere; }
+.codebase-related-row .codebase-task-link { display: block; padding: 4px 0; }
+.codebase-related-row p { color: var(--fg-dim); line-height: 1.6; }
+@media (max-width: 600px) { .codebase-related { margin: 0 10px 10px; padding: 12px; } .codebase-related-search input { width: 100%; } }
+.codebase-path-options .action::first-letter { text-transform: none; }
+.codebase-related-row .codebase-path-base { display: inline-block; max-width: 100%; }

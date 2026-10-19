@@ -409,6 +409,46 @@
     ]
   },
   {
+    "name": "orbit.codebase.related",
+    "description": "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "path",
+        "description": "A repository-relative file path, including a deleted file with landed history.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "window",
+        "description": "Landed period ending now. Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Minimum shared landed tasks, at least 1. Default: 15.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "top",
+        "description": "Maximum partners, from 1 to 100. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.codebase.show",
     "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
     "enabled": true,

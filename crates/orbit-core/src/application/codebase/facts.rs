@@ -153,6 +153,7 @@ pub(super) const ACTOR_KINDS: &[&str] = &["operator", "agent", "system", "unknow
 
 #[derive(Debug, Clone)]
 pub(super) struct TaskFacts {
+    pub(super) landed: Option<super::landed::Landed>,
     pub(super) id: String,
     pub(super) title: String,
     pub(super) crew: Option<String>,
@@ -232,6 +233,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
 
     let settlements = failed_claim_settlements(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
+    let mut landed_scan = super::landed::Scanner::new(runtime);
     for task in tasks {
         let id = task.id.to_string();
         let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
@@ -288,7 +290,11 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             .map(|entry| entry.at)
             .collect();
         left_backlog.sort();
+        let landed = (task.status == TaskStatus::Done)
+            .then(|| landed_scan.read(runtime, &id, &history))
+            .flatten();
         facts.push(TaskFacts {
+            landed,
             regressed_by: regressed_by.remove(&id).unwrap_or_default(),
             id,
             title: task.title,

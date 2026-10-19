@@ -9,7 +9,7 @@
 // not in the hash, and every node is keyed and hashed for `syncNodes`, so a
 // poll that answers the same payload leaves the page exactly as it was.
 
-import { el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, syncNodes, taskHref, formatDateTime } from './common.js';
+import { captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, syncNodes, taskHref, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -70,7 +70,19 @@ let codebaseQuery = { ...DEFAULT_QUERY };
 // and which path was last copied.
 let view = { tile: "overlap", selected: null, hideExpected: false, lockByWait: false, allTasks: false, copied: null };
 let lastData = null;
+let relatedPath = "";
+let relatedData = null;
+let relatedRequest = 0;
+let relatedSort = "jaccard";
 let requestHashChange = () => {};
+onWorkspaceChange(() => {
+  lastData = null;
+  relatedPath = "";
+  relatedData = null;
+  relatedRequest += 1;
+  for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
+  if ($("codebase-path-search")) $("codebase-path-search").value = "";
+});
 
 // An invalid value falls back to `fallback`: the default for a hash, the
 // current selection for a control edit.
@@ -162,6 +174,13 @@ function wireCodebaseControls(onChange) {
   };
   step("codebase-min-down", -1);
   step("codebase-min-up", 1);
+  const search = $("codebase-path-search");
+  if (search) search.addEventListener("input", renderPathOptions);
+  const form = $("codebase-related-form");
+  if (form) form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    fetchRelated(search.value);
+  });
   syncCodebaseControls();
 }
 
@@ -181,6 +200,10 @@ function setMeta(text) {
 function fetchAndRenderCodebase() {
   if (isAggregateView()) {
     lastData = null;
+    relatedPath = "";
+    relatedData = null;
+    relatedRequest += 1;
+    for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
     setMeta("");
     renderPanelPlaceholder(BODY_ID);
     return Promise.resolve();
@@ -934,6 +957,83 @@ function renderCodebase(data) {
   const minutes = Math.round(Number(data.cache_ttl_seconds) / 60) || 0;
   setMeta(`${plural(data.tasks_scanned, "task")} scanned · computed ${computed} · recomputed every ${minutes} min`);
   paint();
+  renderPathOptions();
+  if (relatedPath) fetchRelated(relatedPath);
+}
+
+function renderPathOptions() {
+  const options = $("codebase-path-options");
+  const search = $("codebase-path-search");
+  if (!options || !search) return;
+  options.textContent = "";
+  if (isAggregateView() || !search.value) return;
+  const paths = (lastData?.known_paths || []).filter(path => path.startsWith(search.value)).slice(0, 12);
+  for (const path of paths) {
+    const button = el("button", { class: "action", type: "button", text: path });
+    button.addEventListener("click", () => {
+      search.value = path;
+      options.textContent = "";
+      fetchRelated(path);
+    });
+    options.appendChild(button);
+  }
+}
+
+async function fetchRelated(path) {
+  const results = $("codebase-related-results");
+  if (!results || isAggregateView()) return;
+  relatedPath = path;
+  const request = ++relatedRequest;
+  const visit = captureWorkspaceVisit();
+  const selection = JSON.stringify(codebaseQuery);
+  const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: "100" });
+  results.textContent = "Loading related files…";
+  try {
+    const data = await fetchJson(`/api/codebase/related?${sp}`);
+    if (request !== relatedRequest || !visit.isCurrent() || selection !== JSON.stringify(codebaseQuery)) return;
+    relatedData = data;
+    renderRelated();
+  } catch (error) {
+    if (request === relatedRequest && visit.isCurrent() && selection === JSON.stringify(codebaseQuery)) results.textContent = `Could not load related files: ${error.message}`;
+  }
+}
+
+function renderRelated() {
+  const results = $("codebase-related-results");
+  if (!results || !relatedData) return;
+  results.textContent = "";
+  results.appendChild(el("h4", { text: relatedData.path }));
+  results.appendChild(el("p", { class: "codebase-note", text: `${count(relatedData.path_support)} landed tasks changed this file · ${count(relatedData.excluded_large)} bulk tasks excluded · ${count(relatedData.unavailable_landed_tasks)} done tasks lack readable landed evidence. File-level measures use the selected window and minimum shared tasks.` }));
+  const rows = [...(relatedData.rows || [])];
+  if (!rows.length) {
+    results.appendChild(el("p", { class: "codebase-empty", text: "No related files reach minimum shared support in this window." }));
+    return;
+  }
+  const sorts = el("div", { class: "codebase-related-sorts", role: "group", "aria-label": "Sort related files" });
+  for (const [key, label] of [["jaccard", "Landed Jaccard"], ["conditional_rate", "Conditional rate"], ["reservation_coupling", "Reservation coupling"], ["footprint_miss_count", "Footprint misses"]]) {
+    const button = el("button", { class: "action", type: "button", text: label, "aria-pressed": String(relatedSort === key) });
+    button.addEventListener("click", () => { relatedSort = key; renderRelated(); });
+    sorts.appendChild(button);
+  }
+  results.appendChild(sorts);
+  const metric = row => relatedSort === "reservation_coupling" ? (row.reservation_coupling?.rate ?? -1) : Number(row[relatedSort]);
+  rows.sort((a, b) => metric(b) - metric(a) || b.support.both - a.support.both || a.path.localeCompare(b.path));
+  const list = el("ul", { class: "codebase-related-list" });
+  for (const row of rows) {
+    const item = el("li", { class: "codebase-related-row" }, [pathNode(row.path), el("p", { text: `Landed ${pct(row.jaccard)} · conditional ${pct(row.conditional_rate)} · shared ${row.support.both} / either ${row.support.either} · file ${row.support.path}, partner ${row.support.partner} · reserved ${row.reservation_coupling ? `${pct(row.reservation_coupling.rate)} (${row.reservation_coupling.numerator}/${row.reservation_coupling.denominator})` : "—"} · ${count(row.footprint_miss_count)} footprint misses` })]);
+    for (const [label, tasks] of [["Changed together", row.tasks], ["Reserved together", row.reservation_coupling?.tasks], ["Undeclared partner", row.footprint_miss_tasks]]) {
+      if (!tasks?.length) continue;
+      const evidence = el("details", {}, [el("summary", { text: `${label}: ${tasks.length} tasks` })]);
+      for (const task of tasks) {
+        const link = el("a", { class: "codebase-task-link", text: task.title, title: task.commit || "" });
+        link.setAttribute("href", taskHref(task.task_id));
+        evidence.appendChild(link);
+      }
+      item.appendChild(evidence);
+    }
+    list.appendChild(item);
+  }
+  results.appendChild(list);
 }
 
 export {

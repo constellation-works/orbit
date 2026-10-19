@@ -1,9 +1,10 @@
 //! The codebase analytics CLI, derived from the codebase operation registry.
 //!
-//! Both verbs call the read-only `orbit.codebase.*` tools, so `--json` is the
+//! All verbs call the read-only `orbit.codebase.*` tools, so `--json` is the
 //! payload the dashboard's Codebase view reads. What is left here is the text
 //! rendering: each ranking's leading rows for `analytics`, and one path's
-//! standings with the tasks behind every count for `show`.
+//! standings with the tasks behind every count for `show`, and co-change
+//! measures for `related`.
 
 use std::fmt::Write as _;
 
@@ -79,6 +80,7 @@ impl Execute for CodebaseCommand {
         let blocks = match spec.verb {
             CodebaseVerb::Analytics => analytics_blocks(&value),
             CodebaseVerb::Show => show_blocks(&value),
+            CodebaseVerb::Related => related_blocks(&value),
         };
         Ok(Payload::blocks(value, blocks).into())
     }
@@ -356,4 +358,40 @@ fn percent(rate: &Value) -> String {
     } else {
         format!("{rate:.0}%")
     }
+}
+
+fn related_blocks(value: &Value) -> Vec<Block> {
+    let mut table = Table::new(vec![
+        Column::new("PATH").path(),
+        Column::new("JACCARD").number(),
+        Column::new("CONDITIONAL").number(),
+        Column::new("SHARED").number(),
+        Column::new("RESERVATION").number(),
+        Column::new("MISSES").number(),
+    ])
+    .empty_message("no partners reach minimum shared support");
+    for row in value["rows"].as_array().into_iter().flatten() {
+        table.add_row(vec![
+            text(&row["path"]),
+            percent(&row["jaccard"]),
+            percent(&row["conditional_rate"]),
+            count(&row["support"]["both"]),
+            if row["reservation_coupling"].is_null() {
+                "—".into()
+            } else {
+                percent(&row["reservation_coupling"]["rate"])
+            },
+            count(&row["footprint_miss_count"]),
+        ]);
+    }
+    vec![
+        Block::text(format!(
+            "{}\n{}\n{} bulk tasks excluded; {} done tasks lack readable landed evidence",
+            text(&value["path"]),
+            selection_line(value),
+            count(&value["excluded_large"]),
+            count(&value["unavailable_landed_tasks"])
+        )),
+        Block::table(table),
+    ]
 }

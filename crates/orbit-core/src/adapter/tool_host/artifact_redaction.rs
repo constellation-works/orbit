@@ -341,7 +341,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             SearchVerb::Query => ActionPolicy { declared: verb.spec().params, ..NO_REDACTION },
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
-            CodebaseVerb::Analytics | CodebaseVerb::Show => ActionPolicy {
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -404,7 +404,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             SearchVerb::Query => false,
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
-            CodebaseVerb::Analytics | CodebaseVerb::Show => false,
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

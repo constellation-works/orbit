@@ -121,6 +121,7 @@ for (const [id, values] of Object.entries(segments)) {
 make('button', 'codebase-min-down', byId['codebase-controls']);
 make('output', 'codebase-min-support', byId['codebase-controls']);
 make('button', 'codebase-min-up', byId['codebase-controls']);
+for (const [tag, id] of [['form', 'codebase-related-form'], ['input', 'codebase-path-search'], ['div', 'codebase-path-options'], ['div', 'codebase-related-results']]) make(tag, id, layout);
 const document = {
   activeElement: null,
   body,
@@ -494,6 +495,47 @@ assert.equal(codebase.getCodebaseQuery().min_support, 5);
 assert.equal(changes, 2, 'each action asks for a new hash');
 assert.deepEqual([pressed('codebase-rollup'), byId['codebase-min-support'].value], [['dir'], '5']);
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=5&rollup=dir');
+
+// Prefix suggestions include landed-only Markdown and submit the same file query.
+codebase.renderCodebase({ ...full, known_paths: ['docs/design.md', 'src/a.rs', 'src/b.rs'] });
+const search = byId['codebase-path-search'];
+search.value = 'src/';
+for (const listener of search.listeners.input) listener();
+assert.deepEqual(byId['codebase-path-options'].children.map(node => node.textContent), ['src/a.rs', 'src/b.rs']);
+click(byId['codebase-path-options'].children[0]);
+assert.equal(byId['codebase-path-options'].children.length, 0);
+let relatedRequest = pending.at(-1);
+assert.equal(relatedRequest.url.pathname, '/api/codebase/related');
+assert.equal(relatedRequest.url.searchParams.get('path'), 'src/a.rs');
+assert.equal(relatedRequest.url.searchParams.get('workspace'), 'ws-a');
+relatedRequest.resolve(response({ path: 'src/a.rs', path_support: 2, rows: [
+  { path: 'docs/design.md', jaccard: 0.5, conditional_rate: 1, support: { both: 2, path: 2, partner: 4, either: 4 }, footprint_miss_count: 1, tasks: [{ task_id: 'ORB-9', title: '<img src=x onerror=bad()>', commit: 'abc' }], footprint_miss_tasks: [] },
+  { path: 'src/b.rs', jaccard: 0.25, conditional_rate: 0.5, support: { both: 1, path: 2, partner: 3, either: 4 }, reservation_coupling: { ...rate(1, 2), tasks: [{ task_id: 'ORB-8', title: 'Reserved together fixture' }] }, footprint_miss_count: 2, tasks: [], footprint_miss_tasks: [] },
+] }));
+await settle();
+const related = byId['codebase-related-results'];
+assert.deepEqual(related.querySelectorAll('span.codebase-path').map(node => node.textContent), ['docs/design.md', 'src/b.rs']);
+assert.equal(related.querySelector('a.codebase-task-link').textContent, '<img src=x onerror=bad()>', 'task titles stay text');
+assert.match(related.querySelector('a.codebase-task-link').getAttribute('href'), /open=ORB-9$/);
+assert.match(related.querySelectorAll('a.codebase-task-link')[1].getAttribute('href'), /open=ORB-8$/, 'reservation evidence links to its task');
+click(button(related, 'Footprint misses'));
+assert.deepEqual(related.querySelectorAll('span.codebase-path').map(node => node.textContent), ['src/b.rs', 'docs/design.md']);
+search.value = 'missing.rs';
+for (const listener of search.listeners.input) listener();
+assert.equal(byId['codebase-path-options'].children.length, 0, 'an unknown prefix has no suggestions');
+for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
+pending.at(-1).resolve(response({ path: 'missing.rs', rows: [] }));
+await settle();
+assert.ok(related.querySelector('p.codebase-empty'), 'empty search explains minimum support');
+// A late result cannot cross workspace visits.
+for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
+relatedRequest = pending.at(-1);
+common.setWorkspace('ws-b');
+relatedRequest.resolve(response({ path: 'missing.rs', rows: [] }));
+await settle();
+assert.equal(related.textContent, '');
+assert.equal(search.value, '');
+common.setWorkspace('ws-a');
 
 // The aggregate view shows the placeholder instead of the codebase view.
 common.setWorkspace('');
