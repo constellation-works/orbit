@@ -60,7 +60,7 @@ mod submit;
 mod wait;
 mod worker;
 
-pub(crate) use admission::input_hash;
+pub(crate) use admission::{input_hash, pipeline_run_queue_position};
 pub use notices::{SubmissionKind, SubmissionNotices};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};

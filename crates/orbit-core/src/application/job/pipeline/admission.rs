@@ -553,7 +553,7 @@ pub(super) fn pipeline_run_is_runnable(
 /// The run's one-based place among those waiting for the job's
 /// `max_active_runs`, or `None` when it may execute now. A ceiling of `0` is
 /// no ceiling: nothing ever waits.
-fn pipeline_run_queue_position(
+pub(crate) fn pipeline_run_queue_position(
     runs: &[JobRun],
     run_id: &str,
     max_active_runs: u32,

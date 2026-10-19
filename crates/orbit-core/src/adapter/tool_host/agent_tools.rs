@@ -98,7 +98,7 @@ fn explore_response(
         "run_id": submission.run_id,
         "job_id": submission.job_id,
         "submitted_at": submission.submitted_at,
-        "state": if submission.queued { "queued" } else { "submitted" },
+        "state": submission.state,
         "queued": submission.queued,
         "queue_position": submission.queue_position,
         "waited": wait_seconds.is_some(),
