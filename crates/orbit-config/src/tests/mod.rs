@@ -1,5 +1,6 @@
 mod crew_pools;
 mod machine;
+mod registry;
 mod seed;
 
 use crate::ConfigRoots;

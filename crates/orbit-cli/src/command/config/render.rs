@@ -10,8 +10,9 @@
 //! Three rules keep the rendering honest:
 //! - a key's section comes from its registry row, so `keys` and `show` group
 //!   identically and a new key cannot be added without a home;
-//! - value state is three-way (`set` with its layer / `default` / `unset`),
-//!   never `[unset] [built-in]`;
+//! - value state is three-way (`set` with its layer / `default` / `unset`)
+//!   for a settable key, never `[unset] [built-in]`; `machine.id` and
+//!   `machine.task_prefix` render as `identity` outside the Machine rows;
 //! - a shadowed lower-layer value is named with the reason it lost.
 
 use std::collections::BTreeMap;
@@ -45,8 +46,9 @@ const MAX_VALUE_WIDTH: usize = 20;
 struct Row {
     label: String,
     value: String,
-    /// `workspace` / `global` / `environment` / `default` / `unset`, or
-    /// `derived` for the non-settable invariant shown inside `Execution`.
+    /// `workspace` / `global` / `environment` / `default` / `unset`,
+    /// `derived` for the non-settable invariant inside Execution, or
+    /// `identity` for `machine.id` and `machine.task_prefix`.
     state: String,
     description: String,
     /// Shadowed-layer annotation, when the effective value hides one.
@@ -97,8 +99,8 @@ impl Layout {
     }
 }
 
-/// The effective (layered) view: layers banner, workspace binding, grouped
-/// sections, and resolved paths.
+/// The effective (layered) view: layers banner, workspace binding and grouped
+/// sections. `--all` also appends resolved paths.
 pub(super) fn effective_text(
     runtime: &OrbitRuntime,
     values: &[EffectiveConfigValue],
@@ -135,9 +137,13 @@ pub(super) fn effective_text(
 
     // The effective view always composes the subprocess environment from the
     // allowlist; the invariant is surfaced here rather than as a settable key.
-    let rows = effective_rows(values, false, all);
-    write_sections(&mut out, &rows, values, all);
-    write_paths(&mut out, runtime, None);
+    let (identity, rows) = effective_rows(values, false, all);
+    write_sections(&mut out, &rows, values, all, &identity);
+    // Paths restates the roots already named in the layers banner. `--all`
+    // keeps the block; the default view does not.
+    if all {
+        write_paths(&mut out, runtime, None);
+    }
     out
 }
 
@@ -169,9 +175,11 @@ pub(super) fn scoped_text(
         let _ = writeln!(out, "{line}");
     }
 
-    let rows = scoped_rows(store, settings, snapshot.execution_env_inherit, all);
-    write_sections(&mut out, &rows, &[], all);
-    write_paths(&mut out, runtime, Some(store.path()));
+    let (identity, rows) = scoped_rows(store, settings, snapshot.execution_env_inherit, all);
+    write_sections(&mut out, &rows, &[], all, &identity);
+    if all {
+        write_paths(&mut out, runtime, Some(store.path()));
+    }
     out
 }
 
@@ -251,14 +259,16 @@ fn write_sections(
     rows: &[SectionRows],
     values: &[EffectiveConfigValue],
     all: bool,
+    identity: &[Row],
 ) {
-    let layout = Layout::measure(
-        &rows
-            .iter()
+    let mut measured = identity.iter().map(clone_row).collect::<Vec<_>>();
+    measured.extend(
+        rows.iter()
             .flat_map(|section| section.rows.iter())
-            .map(clone_row)
-            .collect::<Vec<_>>(),
+            .map(clone_row),
     );
+    let layout = Layout::measure(&measured);
+    write_identity(out, &layout, identity);
     for section in rows {
         let hidden = if section.hidden_advanced == 0 {
             String::new()
@@ -306,6 +316,14 @@ fn write_sections(
 /// settable key, so it is neither set, defaulted, nor unset.
 const DERIVED_STATE: &str = "derived";
 
+/// Text-view state for `machine.id` and `machine.task_prefix`. They are
+/// identity facts `orbit init` writes once, not settings in the Machine table.
+const IDENTITY_STATE: &str = "identity";
+
+fn is_show_identity_key(key: &str) -> bool {
+    matches!(key, "machine.id" | "machine.task_prefix")
+}
+
 struct SectionRows {
     section: ConfigSection,
     rows: Vec<Row>,
@@ -328,7 +346,8 @@ fn effective_rows(
     values: &[EffectiveConfigValue],
     env_inherit: bool,
     all: bool,
-) -> Vec<SectionRows> {
+) -> (Vec<Row>, Vec<SectionRows>) {
+    let mut identity = Vec::new();
     let mut sections = Vec::new();
     let workspace_present = values
         .iter()
@@ -351,13 +370,22 @@ fn effective_rows(
                     hidden_advanced += 1;
                     continue;
                 }
-                rows.push(Row {
+                let row = Row {
                     label: label_for(*section, &entry.key),
                     value: render_value(&entry.value),
-                    state: effective_state(entry),
+                    state: if is_show_identity_key(&entry.key) {
+                        IDENTITY_STATE.to_string()
+                    } else {
+                        effective_state(entry)
+                    },
                     description: descriptor.description.to_string(),
                     note: shadow_note(entry),
-                });
+                };
+                if is_show_identity_key(&entry.key) {
+                    identity.push(row);
+                } else {
+                    rows.push(row);
+                }
             }
         }
         if *section == ConfigSection::Execution {
@@ -381,7 +409,7 @@ fn effective_rows(
             },
         });
     }
-    sections
+    (identity, sections)
 }
 
 fn scoped_rows(
@@ -389,7 +417,8 @@ fn scoped_rows(
     settings: &[(&'static str, JsonValue)],
     env_inherit: bool,
     all: bool,
-) -> Vec<SectionRows> {
+) -> (Vec<Row>, Vec<SectionRows>) {
+    let mut identity = Vec::new();
     let mut sections = Vec::new();
     for section in ConfigSection::ORDER {
         if *section == ConfigSection::Crews {
@@ -405,13 +434,22 @@ fn scoped_rows(
                 hidden_advanced += 1;
                 continue;
             }
-            rows.push(Row {
+            let row = Row {
                 label: label_for(*section, key),
                 value: render_value(value),
-                state: scoped_state(store, key, value).1.to_string(),
+                state: if is_show_identity_key(key) {
+                    IDENTITY_STATE.to_string()
+                } else {
+                    scoped_state(store, key, value).1.to_string()
+                },
                 description: descriptor.description.to_string(),
                 note: None,
-            });
+            };
+            if is_show_identity_key(key) {
+                identity.push(row);
+            } else {
+                rows.push(row);
+            }
         }
         if *section == ConfigSection::Execution {
             rows.push(env_inherit_row(env_inherit));
@@ -426,7 +464,23 @@ fn scoped_rows(
             heading_suffix: String::new(),
         });
     }
-    sections
+    (identity, sections)
+}
+
+/// Identity facts lead the text view, outside the Machine key rows.
+fn write_identity(out: &mut String, layout: &Layout, rows: &[Row]) {
+    if rows.is_empty() {
+        return;
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{:<HEADING_WIDTH$} written once by orbit init; not settable",
+        "Identity"
+    );
+    for row in rows {
+        layout.write_row(out, row);
+    }
 }
 
 /// `execution.env.inherit` is a derived invariant rather than a settable key

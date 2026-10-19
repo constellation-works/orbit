@@ -24,7 +24,7 @@ impl Execute for ConfigCommand {
 
 #[derive(Subcommand)]
 pub enum ConfigSubcommand {
-    /// Display configuration values, with source provenance and derived paths
+    /// Display configuration values, with source provenance
     Show(ConfigShowArgs),
     /// Get a single configuration value
     Get(ConfigGetArgs),

@@ -109,6 +109,7 @@
       "test_function_paths": [
         "tests/crew_pools.rs::malformed_pools_name_the_setting_they_came_from",
         "tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values",
+        "tests/registry.rs::registry_descriptions_are_one_scannable_sentence",
         "tests/seed.rs::every_family_combination_seeds_valid_defaults_pools_and_enabled_flags",
         "tests/seed.rs::rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled"
       ]

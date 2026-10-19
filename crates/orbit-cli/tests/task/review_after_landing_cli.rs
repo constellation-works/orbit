@@ -1038,12 +1038,22 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
     assert_eq!(before_landing["enabled"], true, "{config}");
     assert_eq!(before_landing["source"], "global", "{config}");
     assert_eq!(config["review"]["before_pr"]["enabled"], false, "{config}");
-    let text = fixture.command(&["config", "show"]).output().unwrap();
+    let text = fixture
+        .command(&["config", "show", "--all"])
+        .output()
+        .unwrap();
     assert!(text.status.success(), "{text:?}");
     let text = String::from_utf8(text.stdout).unwrap();
     assert!(
         text.contains("before-landing: on (review.timing, global)"),
         "{text}"
+    );
+    let default_text = fixture.command(&["config", "show"]).output().unwrap();
+    assert!(default_text.status.success(), "{default_text:?}");
+    let default_text = String::from_utf8(default_text.stdout).unwrap();
+    assert!(
+        !default_text.contains("\nReview:\n"),
+        "default config show drops the Review summary that restates review.timing: {default_text}"
     );
     let (row, _) = doctor_row(&fixture);
     assert!(

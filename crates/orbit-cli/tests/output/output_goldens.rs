@@ -883,6 +883,67 @@ fn config_show_effective_provenance_matches_golden() {
     assert_golden("config_show_effective.json", &fixture.redact(&rendered));
 }
 
+/// Paths, Crew purposes and Review restate rows the sections already print.
+fn repeated_summary_line(line: &str) -> bool {
+    line == "Paths" || line.starts_with("Crew purposes:") || line.starts_with("Review:")
+}
+
+fn assert_default_show_omits_repeated_blocks(text: &str) {
+    assert!(
+        !text.lines().any(repeated_summary_line),
+        "default config show repeats rows in a trailing block:\n{text}"
+    );
+}
+
+fn assert_all_show_keeps_repeated_blocks(text: &str) {
+    assert!(
+        text.lines().any(|line| line == "Paths")
+            && text.contains("\nCrew purposes:\n")
+            && text.contains("\nReview:\n"),
+        "config show --all keeps Paths, Crew purposes and Review:\n{text}"
+    );
+}
+
+fn assert_identity_rows(text: &str) {
+    assert!(
+        text.lines().any(|line| line.starts_with("Identity")),
+        "config show renders machine.id and task_prefix as identity:\n{text}"
+    );
+    for label in ["id", "task_prefix"] {
+        assert!(
+            text.lines().any(|line| {
+                let mut parts = line.split_whitespace();
+                parts.next() == Some(label) && parts.any(|part| part == "identity")
+            }),
+            "{label} renders as identity, not as a config key:\n{text}"
+        );
+    }
+    let machine = lines_under(text, "Machine (");
+    assert!(
+        machine.iter().all(|line| {
+            let label = line.split_whitespace().next();
+            !matches!(label, Some("id") | Some("task_prefix"))
+        }),
+        "identity rows are not Machine config keys: {machine:?}"
+    );
+}
+
+fn lines_under<'a>(text: &'a str, heading_prefix: &str) -> Vec<&'a str> {
+    let mut collecting = false;
+    let mut body = Vec::new();
+    for line in text.lines() {
+        if !collecting {
+            collecting = line.starts_with(heading_prefix);
+            continue;
+        }
+        if !line.is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        body.push(line);
+    }
+    body
+}
+
 /// Exercise the public renderer against its JSON metadata, so every registered
 /// advanced row is hidden only while unconfigured and every section's count
 /// describes the rows actually omitted. Keep policy choices in the registry.
@@ -939,6 +1000,9 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
         }
     }
     assert!(all.len() > plain.len());
+    assert_default_show_omits_repeated_blocks(&plain);
+    assert_all_show_keeps_repeated_blocks(&all);
+    assert_identity_rows(&plain);
 
     // Set-in-any-layer includes false, empty arrays, and a security value the
     // workspace does not inherit. set/get continue admitting advanced keys.
@@ -1007,11 +1071,15 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
         let scoped = String::from_utf8(scoped.stdout).expect("scoped text");
         assert!(!has_row(&scoped, "proc_spawn_max_timeout_minutes"));
         assert_eq!(has_row(&scoped, "codex.approval_policy"), scope == "global");
+        assert_default_show_omits_repeated_blocks(&scoped);
+        assert_identity_rows(&scoped);
         let all = fixture.run(&["config", "show", "--scope", scope, "--advanced"], &[]);
-        assert!(has_row(
-            &String::from_utf8(all.stdout).expect("scoped all text"),
-            "proc_spawn_max_timeout_minutes"
-        ));
+        let all = String::from_utf8(all.stdout).expect("scoped all text");
+        assert!(has_row(&all, "proc_spawn_max_timeout_minutes"));
+        assert!(
+            all.lines().any(|line| line == "Paths"),
+            "scoped --all keeps Paths"
+        );
         let json = parse_json_stdout(
             &fixture.run(&["config", "show", "--scope", scope, "--json"], &[]),
             "scoped JSON",

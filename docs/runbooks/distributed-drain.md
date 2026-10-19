@@ -112,7 +112,7 @@ Confirm:
 ```bash
 orbit config get review.timing
 orbit config get workflow.purpose_crews.review
-orbit config show        # the Review lines report the timing and its source
+orbit config show --all # the Review lines report the timing and its source
 ```
 
 The owner's `review.timing` is captured on each claim with its review crew,
