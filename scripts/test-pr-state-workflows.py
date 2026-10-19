@@ -45,7 +45,8 @@ def evaluate(expression, event, state="", *, cancelled=False, dependency_skipped
     expression = expression.replace("cancelled()", str(cancelled)).replace("always()", "True")
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"!(?!=)", " not ", expression)
-    return bool(eval(expression.strip(), {"__builtins__": {}}, {}))
+    return bool(eval(expression.strip(), {"__builtins__": {}},
+                     {"contains": lambda search, item: item.lower() in search.lower()}))
 
 
 SCOPE = "needs.scope.outputs.mode"
@@ -581,15 +582,36 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
                          "the Check job's elapsed time must cover the test build and every shard")
 
+    def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
+        jobs = self.document["jobs"]
+        for job_id in ("test-1", "test-2", "test-3"):
+            with self.subTest(job=job_id):
+                [nextest] = self.run_step(jobs[job_id], "Run nextest shard")
+                # The full archive's partition guard fails the test build on an
+                # empty shard, so only an affected-crates archive relies on this.
+                self.assertEqual(nextest[nextest.index("--no-tests") + 1], "pass")
+        gate = next(step for step in jobs["test-1"]["steps"]
+                    if step.get("name") == "Linux sandbox/policy enforcement gate")
+        for shard, mode, runs in (("1", "full", True), ("1", "", True), ("2", "full", False),
+                                  ("1", "affected:orbit-cli,orbit-web", False),
+                                  ("1", "affected:orbit-cli,orbit-core,orbit-policy,orbit-tools", False),
+                                  ("1", "affected:orbit-cli,orbit-exec,orbit-tools", True)):
+            with self.subTest(shard=shard, mode=mode):
+                self.assertEqual(evaluate(gate["if"], "pull_request", bindings={SCOPE: mode, "env.SHARD": shard}),
+                                 runs, "the sandbox gate runs on the full archive and whenever orbit-exec changed")
+
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
 class ChangeScopeTests(unittest.TestCase):
     """Run scripts/ci-change-scope.sh against a stub `gh` serving recorded API
-    answers, and check the ci.yml jobs each resulting mode admits."""
+    answers and a stub `cargo` reporting the recorded crate graph
+    (scripts/fixtures/ci-crate-graph.json), and check the ci.yml jobs each
+    resulting mode admits."""
 
     SHA = "a" * 40
     HEAD = "b" * 40
     BEFORE = "c" * 40
+    SUITE = 900
 
     def setUp(self):
         scratch = ROOT / ".orbit/tmp"
@@ -613,28 +635,45 @@ else:
     sys.exit(1)
 """)
         gh.chmod(0o755)
+        # The scope job reads the merge ref's Cargo metadata. The stub builds
+        # it from the recorded graph, rooted at this checkout as Cargo would be.
+        cargo = self.root / "bin/cargo"
+        cargo.write_text(f"""#!{sys.executable}
+import json, os, sys
+assert sys.argv[1] == "metadata", sys.argv
+graph = json.load(open(os.environ["FIXTURE_CRATE_GRAPH"]))["crates"]
+crate = lambda name: os.path.join({str(ROOT)!r}, "crates", name)
+print(json.dumps(dict(workspace_members=sorted(graph), packages=[
+    dict(id=name, name=name, manifest_path=os.path.join(crate(name), "Cargo.toml"), targets=[],
+         dependencies=[dict(name=dependency, path=crate(dependency)) for dependency in dependencies])
+    for name, dependencies in graph.items()])))
+""")
+        cargo.chmod(0o755)
+        self.graph = str(ROOT / "scripts/fixtures/ci-crate-graph.json")
         self.assertIsNotNone(shutil.which("jq"), "the scope script requires jq, as on the hosted runner")
 
-    def classify(self, event, routes, **env):
+    def classify(self, event, routes, *, graph=None, **env):
         self.routes.write_text(json.dumps(routes))
         self.output.write_text("")
         result = self_test_hang.run(
             [str(ROOT / "scripts/ci-change-scope.sh")], step="change-scope", cwd=self.root,
             env=dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", LANG="C", GH_REPO="o/r",
-                     EVENT=event, GITHUB_OUTPUT=str(self.output), **env),
+                     EVENT=event, GITHUB_OUTPUT=str(self.output),
+                     FIXTURE_CRATE_GRAPH=graph or self.graph, **env),
             text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         [line] = self.output.read_text().splitlines()
+        self.last_log = result.stdout
         return line.removeprefix("mode=")
 
-    def pull_request(self, *paths, count=None):
+    def pull_request(self, *paths, count=None, graph=None):
         files = [{"filename": path} for path in paths]
         return self.classify("pull_request", {
             "repos/o/r/pulls/7": {"changed_files": len(paths) if count is None else count},
             "repos/o/r/pulls/7/files?per_page=100": files,
-        }, PR="7")
+        }, PR="7", graph=graph)
 
-    def push(self, *paths, same_tree=False, head_passed=True, before_check="success"):
+    def push(self, *paths, same_tree=False, head_passed=True, before_check="success", head_scope="full"):
         routes = {
             f"repos/o/r/git/commits/{self.SHA}": {"tree": {"sha": "t1"}},
             f"repos/o/r/commits/{self.SHA}/pulls": [
@@ -642,7 +681,15 @@ else:
             f"repos/o/r/git/commits/{self.HEAD}": {"tree": {"sha": "t1" if same_tree else "t2"}},
             f"repos/o/r/commits/{self.HEAD}/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest":
                 {"check_runs": [{"conclusion": "success" if head_passed else "failure",
-                                 "app": {"slug": "github-actions"}}]},
+                                 "app": {"slug": "github-actions"}, "check_suite": {"id": self.SUITE}}]},
+            # The head's Change scope runs: an older full run in another suite,
+            # then the passing run's own, whose notice says what it tested.
+            f"repos/o/r/commits/{self.HEAD}/check-runs?check_name=Change%20scope&filter=all":
+                {"check_runs": [{"id": 41, "app": {"slug": "github-actions"}, "check_suite": {"id": self.SUITE - 1}},
+                                {"id": 42, "app": {"slug": "github-actions"}, "check_suite": {"id": self.SUITE}}]},
+            "repos/o/r/check-runs/41/annotations": [{"title": "Test selection", "message": "full"}],
+            "repos/o/r/check-runs/42/annotations":
+                [] if head_scope is None else [{"title": "Test selection", "message": head_scope}],
             f"repos/o/r/compare/{self.BEFORE}...{self.SHA}":
                 {"status": "ahead", "files": [{"filename": path} for path in paths]},
         }
@@ -659,19 +706,53 @@ else:
 
     def test_pull_request_scope(self):
         self.assertEqual(self.pull_request("README.md", "docs/guide.md"), "docs")
-        # Markdown compiled into a crate or mirrored into the plugin is code.
-        self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"), "full")
+        # Markdown compiled into a crate or mirrored into the plugin is code,
+        # and orbit-cli's tests read the configuration reference page.
+        self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"),
+                         "affected:orbit-cli,orbit-cmd,orbit-core,orbit-web")
         self.assertEqual(self.pull_request("plugin/skills/x.md"), "full")
-        self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/src/lib.rs"), "full")
+        self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"), "affected:orbit-cli")
         # A listing that disagrees with the reported count is not trusted.
         self.assertEqual(self.pull_request("docs/guide.md", count=2), "full")
         self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
+
+    def test_pull_request_test_selection(self):
+        selections = {
+            "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"], "affected:orbit-cli"),
+            "mid-graph crate": (["crates/orbit-mcp/src/lib.rs"], "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+            "core crate": (["crates/orbit-types/src/lib.rs"], "full"),
+            "workspace-level file": (["crates/orbit-cli/src/main.rs", "Cargo.lock"], "full"),
+            "toolchain file": (["crates/orbit-cli/src/main.rs", "rust-toolchain.toml"], "full"),
+            "member manifest": (["crates/orbit-cli/Cargo.toml"], "full"),
+            "non-crate path": (["crates/orbit-cli/src/main.rs", "scripts/ci-guardrails.sh"], "full"),
+            "workflow": (["crates/orbit-cli/src/main.rs", ".github/workflows/ci.yml"], "full"),
+            "path no crate owns": (["crates/orbit-retired/src/lib.rs"], "full"),
+            # Read across crates by tests the dependency graph cannot see.
+            "cross-crate fixture": (["crates/orbit-web/assets/dashboard/vendor/marked.umd.js"],
+                                    "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+            "cross-crate asset": (["crates/orbit-core/assets/activities/task_pilot.yaml"],
+                                  "affected:orbit-cli,orbit-cmd,orbit-core,orbit-engine,orbit-web"),
+        }
+        for case, (paths, mode) in selections.items():
+            with self.subTest(case=case):
+                self.assertEqual(self.pull_request(*paths), mode)
+                full_notice = "::notice title=Test selection::full" in self.last_log
+                self.assertEqual(full_notice, mode == "full",
+                                 "only a run that tests every crate may let a push skip its tree")
+        self.assertEqual(self.pull_request("crates/orbit-cli/src/main.rs", graph=str(self.root / "missing.json")),
+                         "full", "a selection error runs the full suite")
+        self.assertIn("::notice title=Test selection::full", self.last_log)
 
     def test_push_scope(self):
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True), "skip")
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs"), "full",
                          "a merged tree the PR never tested runs the full gate")
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True, head_passed=False), "full")
+        # The head passed on its affected crates only, or its run left no notice.
+        for head_scope in ("affected:orbit-cli", None):
+            with self.subTest(head_scope=head_scope):
+                self.assertEqual(self.push("crates/orbit-cli/src/main.rs", same_tree=True, head_scope=head_scope),
+                                 "full", "a push tests every crate the merged PR did not")
         self.assertEqual(self.push("docs/guide.md"), "docs")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
@@ -694,6 +775,7 @@ else:
         jobs = document["jobs"]
         expected = {
             "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
             "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},

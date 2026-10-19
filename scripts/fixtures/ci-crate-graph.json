@@ -1,0 +1,108 @@
+{
+  "comment": "Workspace crates and their path dependencies, recorded from cargo metadata on 2026-10-18 for the Change scope selection cases in test-pr-state-workflows.py.",
+  "crates": {
+    "orbit-agent": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-automation": [
+      "orbit-common",
+      "orbit-store",
+      "orbit-types"
+    ],
+    "orbit-cli": [
+      "orbit-cmd",
+      "orbit-common",
+      "orbit-config",
+      "orbit-core",
+      "orbit-engine",
+      "orbit-exec",
+      "orbit-mcp",
+      "orbit-registry",
+      "orbit-tools",
+      "orbit-types",
+      "orbit-web"
+    ],
+    "orbit-cmd": [
+      "orbit-common",
+      "orbit-config",
+      "orbit-core",
+      "orbit-mcp",
+      "orbit-registry",
+      "orbit-store",
+      "orbit-tools",
+      "orbit-types"
+    ],
+    "orbit-common": [
+      "orbit-types"
+    ],
+    "orbit-config": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-core": [
+      "orbit-automation",
+      "orbit-common",
+      "orbit-config",
+      "orbit-engine",
+      "orbit-exec",
+      "orbit-policy",
+      "orbit-registry",
+      "orbit-search",
+      "orbit-store",
+      "orbit-tools",
+      "orbit-types"
+    ],
+    "orbit-engine": [
+      "orbit-agent",
+      "orbit-common",
+      "orbit-exec",
+      "orbit-store",
+      "orbit-tools",
+      "orbit-types"
+    ],
+    "orbit-exec": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-mcp": [
+      "orbit-common",
+      "orbit-registry",
+      "orbit-tools",
+      "orbit-types"
+    ],
+    "orbit-policy": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-registry": [
+      "orbit-common",
+      "orbit-config",
+      "orbit-types"
+    ],
+    "orbit-search": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-store": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-tools": [
+      "orbit-common",
+      "orbit-exec",
+      "orbit-policy",
+      "orbit-types"
+    ],
+    "orbit-types": [],
+    "orbit-web": [
+      "orbit-cmd",
+      "orbit-common",
+      "orbit-core",
+      "orbit-engine",
+      "orbit-registry",
+      "orbit-store",
+      "orbit-types"
+    ]
+  }
+}

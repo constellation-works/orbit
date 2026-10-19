@@ -93,8 +93,11 @@ FILE_READERS = (
     (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
     (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
     (Path("crates/orbit-core/assets/auto_tasks"), ("orbit-cli",)),
+    # Compiled into orbit-mcp's task panel; orbit-mcp does not depend on orbit-web.
+    (Path("crates/orbit-web/assets/dashboard/vendor"), ("orbit-mcp",)),
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
+    (Path("website/src/content/docs/reference/config.md"), ("orbit-cli",)),
 )
 
 # ci-macos.yml names test paths and filters that a moved or deleted test leaves
@@ -158,6 +161,142 @@ def affected_packages(metadata, paths):
             selected.add(dependent)
             pending.append(dependent)
     return sorted(selected)
+
+
+def test_target_flags(metadata, names):
+    """Cargo's lib, bin and test target flags for `names`. Cargo rejects --lib
+    for a bin-only selection, even with --bins/--tests."""
+    library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
+    has_library = any(library_kinds.intersection(target["kind"])
+                      for package in metadata["packages"] if package["name"] in names
+                      for target in package["targets"])
+    return (["--lib"] if has_library else []) + ["--bins", "--tests"] if names else []
+
+
+def workspace_packages(metadata):
+    members = set(metadata["workspace_members"])
+    return sorted(package["name"] for package in metadata["packages"] if package["id"] in members)
+
+
+def pull_request_scope(metadata, paths):
+    """The tests a pull request's CI runs: `(None, reason)` for the full suite,
+    or `(packages, reason)` for the changed crates and their reverse dependents.
+
+    Stricter than the local gate. Every path outside crates/ runs everything
+    (workspace manifests, toolchain, .cargo/, .github/, scripts/, plugin/ and
+    any other repository file a test may read), except Markdown outside
+    crates/ and plugin/: the docs scope (ci-change-scope.sh) already runs no
+    test for it, and the one such page a test reads is a FILE_READERS entry
+    that selects its reader. A member manifest can change the features of the
+    whole workspace build, so it runs everything too. Inside crates/,
+    affected_packages adds FILE_READERS' cross-crate readers and runs
+    everything for a path no member owns.
+    """
+    crate_paths = set()
+    for raw_path in sorted(paths):
+        path = Path(raw_path)
+        if path.parts[0] == "crates" and len(path.parts) >= 3:
+            if len(path.parts) == 3 and path.name == "Cargo.toml":
+                return None, f"{raw_path} can change the workspace's dependency features"
+            crate_paths.add(raw_path)
+        elif path.suffix == ".md" and path.parts[0] not in ("crates", "plugin"):
+            if any(path.is_relative_to(prefix) for prefix, _ in FILE_READERS):
+                crate_paths.add(raw_path)
+        else:
+            return None, f"{raw_path} is outside a crate"
+    if not crate_paths:
+        return None, "no crate changed"
+    packages = affected_packages(metadata, crate_paths)
+    if packages == workspace_packages(metadata):
+        return None, "every workspace crate is affected"
+    return packages, f"{len(packages)} affected crate(s)"
+
+
+def feature_units(cargo, packages=None):
+    """Each dependency-graph unit's resolved features, as `cargo tree` prints
+    them for the given packages (the whole workspace by default)."""
+    selection = ["--workspace"] if packages is None else [
+        argument for name in packages for argument in ("-p", name)]
+    listing = subprocess.check_output(
+        [*cargo, "tree", "--locked", "--edges", "normal,build,dev", "--prefix", "none",
+         "--format", "{p}\t{f}", *selection], cwd=ROOT, text=True)
+    units = {}
+    for line in listing.splitlines():
+        package, _, features = line.removesuffix(" (*)").partition("\t")
+        if package:
+            units.setdefault(package, set()).add(features)
+    return units
+
+
+def feature_gap(workspace, selected):
+    """(package, feature) pairs where a selected build's units differ from the
+    workspace build's; `(package, "")` for a difference in units alone."""
+    def tokens(units):
+        return {token for features in units for token in features.split(",") if token}
+
+    gap = set()
+    for package, units in selected.items():
+        expected = workspace.get(package, set())
+        if units != expected:
+            gap |= {(package, token) for token in tokens(units) ^ tokens(expected)} or {(package, "")}
+    return gap
+
+
+def test_build_packages(metadata, packages, cargo):
+    """The packages a selected test build compiles: `(packages, reason)`, or
+    `(None, reason)` to build the whole workspace instead.
+
+    Resolver 2 unifies features over the packages a command selects. A test
+    build of fewer packages can resolve a dependency with fewer features than
+    the workspace build whose objects the CI caches hold, and then recompiles
+    that dependency and everything above it. Add the unselected members that
+    restore the workspace's features (a member's dev-dependency features, for
+    example), one at a time while each closes part of the gap.
+    """
+    known = workspace_packages(metadata)
+    unknown = sorted(set(packages) - set(known))
+    if unknown:
+        return None, f"this checkout has no crate {', '.join(unknown)}"
+    workspace = feature_units(cargo)
+    build = sorted(set(packages))
+    gap = feature_gap(workspace, feature_units(cargo, build))
+    for candidate in known:
+        if not gap:
+            break
+        if candidate in build:
+            continue
+        trial = feature_gap(workspace, feature_units(cargo, [*build, candidate]))
+        if len(trial) < len(gap):
+            build, gap = sorted([*build, candidate]), trial
+    if gap:
+        differing = sorted({package for package, _ in gap})
+        return None, f"no crate subset resolves {', '.join(differing)} as the workspace does"
+    added = sorted(set(build) - set(packages))
+    return build, f"feature anchors: {', '.join(added) or 'none'}"
+
+
+def scope_command(metadata, arguments, cargo):
+    """Print the scope, or the build set and its Cargo package and target
+    arguments, then the reason, one per line. Never runs tests."""
+    if arguments.pull_request_scope is not None:
+        source = sys.stdin if arguments.pull_request_scope == "-" else open(arguments.pull_request_scope)
+        with source:
+            paths = {line.rstrip("\n") for line in source if line.strip()}
+        packages, reason = pull_request_scope(metadata, paths)
+        print("full" if packages is None else "affected:" + ",".join(packages))
+    else:
+        requested = [name for name in arguments.test_build_packages.split(",") if name]
+        if not requested:
+            raise ValueError("--test-build-packages needs at least one crate")
+        packages, reason = test_build_packages(metadata, requested, cargo)
+        if packages is None:
+            print("workspace", "--workspace --lib --bins --tests", sep="\n")
+        else:
+            print(" ".join(packages), " ".join(
+                [*(argument for name in packages for argument in ("-p", name)),
+                 *test_target_flags(metadata, packages)]), sep="\n")
+    print(reason)
+    return 0
 
 
 def given_selection(metadata, text):
@@ -767,15 +906,24 @@ def main():
                         help="exact delivery base revision (default: merge base with origin/agent-main or agent-main)")
     parser.add_argument("--list", action="store_true",
                         help="list selected package names without compiling or running tests")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--pull-request-scope", metavar="FILE",
+                       help="print a pull request's CI test scope (`full` or `affected:<crate>,...`) "
+                            "and the reason for the changed paths in FILE (`-`: stdin), one per line")
+    scope.add_argument("--test-build-packages", metavar="CRATES",
+                       help="print the packages a CI test build of the comma-separated CRATES "
+                            "compiles (or `workspace`) and the reason")
     arguments = parser.parse_args()
     cargo = shlex.split(os.environ.get("CARGO", "cargo"))
+    metadata_command = [*cargo, "metadata", "--format-version", "1", "--no-deps",
+                        "--manifest-path", str(ROOT / "Cargo.toml")]
+    if arguments.pull_request_scope is not None or arguments.test_build_packages is not None:
+        return scope_command(json.loads(subprocess.check_output(metadata_command, cwd=ROOT)),
+                             arguments, cargo)
     given = os.environ.get(SELECTION_ENV)
     summary = None if arguments.list else os.environ.get(SUMMARY_ENV)
     base = None if given else comparison_base(arguments.base)
-    metadata = json.loads(subprocess.check_output(
-        [*cargo, "metadata", "--format-version", "1", "--no-deps", "--manifest-path", str(ROOT / "Cargo.toml")],
-        cwd=ROOT,
-    ))
+    metadata = json.loads(subprocess.check_output(metadata_command, cwd=ROOT))
     failing_tests = None
     changed = None
     if given:
@@ -785,16 +933,7 @@ def main():
         changed = changed_paths(base)
         packages = affected_packages(metadata, changed)
         print(f"ci-test-affected: base={base}", file=sys.stderr, flush=True)
-    # Cargo rejects --lib for a bin-only selection, even with --bins/--tests.
-    library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
-
-    def target_flags_for(names):
-        has_library = any(library_kinds.intersection(target["kind"])
-                          for package in metadata["packages"] if package["name"] in names
-                          for target in package["targets"])
-        return (["--lib"] if has_library else []) + ["--bins", "--tests"] if names else []
-
-    target_flags = target_flags_for(packages)
+    target_flags = test_target_flags(metadata, packages)
     # nextest does not execute doctests; they run through Cargo for the same set.
     # A bin-only selection has no doctest targets and Cargo rejects --doc for it.
     doc_packages = sorted(package["name"] for package in metadata["packages"]
@@ -807,7 +946,7 @@ def main():
         # Reported as handed, so the base run is shown to have replayed them.
         selection[FAILING_TESTS] = failing_tests
         run_packages, filterset, names = failing_test_runs(packages, failing_tests)
-        run_target_flags = target_flags_for(run_packages)
+        run_target_flags = test_target_flags(metadata, run_packages)
         filters, libtest_filters = ["-E", filterset, "--test-threads", "1", "--retries", "0"], ["--", "--exact", *names, "--test-threads", "1"]
         doc_packages = []
     # Checked before the empty-selection return, so a workflow-only change still runs it.

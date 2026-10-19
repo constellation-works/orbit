@@ -294,10 +294,10 @@ fn live_state(workflow: &Value, root: &str) -> Result<(), OrbitError> {
 /// The exact `Change scope` job (scripts/ci-change-scope.sh): one checkout and
 /// one classification step whose only output is `mode`. `continue-on-error`
 /// keeps a failing or timed-out classifier from failing its dependents, which
-/// then see an empty mode and run in full. On a PR the mode is `full` or
-/// `docs`; whatever the script prints, a dependent either runs or skips, so
-/// the script's contents never decide emission. Any other key, step, binding
-/// or condition refuses.
+/// then see an empty mode and run in full. On a PR the mode is `full`, `docs`
+/// or `affected:<crates>` (which runs every job on fewer tests); whatever the
+/// script prints, a dependent either runs or skips, so the script's contents
+/// never decide emission. Any other key, step, binding or condition refuses.
 fn change_scope(workflow: &Value, root: &str, scope: &str) -> Result<(), OrbitError> {
     let job = workflow["jobs"][scope]
         .as_object()

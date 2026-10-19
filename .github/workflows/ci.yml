@@ -82,12 +82,14 @@ jobs:
   # `docs`: every changed path is Markdown outside crates/ and plugin/, so only
   # `Docs guards` runs; a push also requires a successful completed full check
   # on its BEFORE commit, since that commit's pending run may be replaced.
-  # `skip`: a push whose tree is exactly a merged PR head
-  # that already passed `Check / Clippy / Test`, so nothing reruns. The build
-  # and test jobs then report as skipped under their unchanged check names,
-  # which required checks and Orbit's landing treat as passing. The job never
-  # fails and an empty mode admits the full run, so a scope error costs a full
-  # run, never a skipped gate.
+  # `affected:<crate>,...`: a PR whose changed paths sit in crates/ (Markdown
+  # aside); every job runs, but the test build archives only those crates.
+  # `skip`: a push whose tree is exactly a merged PR head that already passed
+  # `Check / Clippy / Test` on every crate, so nothing reruns. The build and
+  # test jobs then report as skipped under their unchanged check names, which
+  # required checks and Orbit's landing treat as passing. The job never fails
+  # and an empty mode admits the full run, so a scope error costs a full run,
+  # never a skipped gate.
   scope:
     needs: pr-state
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
@@ -191,11 +193,12 @@ jobs:
           cargo +${MSRV} check --workspace --locked
 
   # [ORB-16695] The test gate is split across runners. "Test build" compiles
-  # the workspace tests once and archives them; NEXTEST_SHARDS "Test shard"
-  # jobs run nextest from that archive, one count partition each, in
-  # parallel. "Check / Clippy / Test" runs formatting, the repository guards
-  # and self-tests, production Clippy, doctests, documentation and the
-  # supply-chain gate beside them, then waits for the build and every shard.
+  # the workspace tests once and archives them (on an `affected:` PR, only the
+  # affected crates' tests); NEXTEST_SHARDS "Test shard" jobs run nextest from
+  # that archive, one count partition each, in parallel. "Check / Clippy /
+  # Test" runs formatting, the repository guards and self-tests, production
+  # Clippy, doctests, documentation and the supply-chain gate beside them,
+  # then waits for the build and every shard.
   # It is the job the 600-second budget measures.
   ci:
     needs: [pr-state, scope]
@@ -809,8 +812,11 @@ jobs:
           du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
 
       # One folded workspace test build (all-targets Clippy lint included),
-      # archived with the `orbit` binary the CLI fixtures execute.
+      # archived with the `orbit` binary the CLI fixtures execute. An
+      # `affected:` scope narrows both (scripts/ci-guardrails.sh).
       - name: Build and archive workspace tests
+        env:
+          CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
         run: |
           set -euo pipefail
           TIMEFORMAT='test_build_seconds=%R'
@@ -1082,7 +1088,9 @@ jobs:
       # build compiled against, so `env!("CARGO_BIN_EXE_orbit")` and fixture
       # paths resolve as they did there. Profile ci raises test-threads above
       # the 4-vCPU runner default. The sampler prints one cpu-util line and
-      # keeps nextest's exit status.
+      # keeps nextest's exit status. An affected-crates archive can leave a
+      # partition empty, which passes; the full archive cannot (the test
+      # build's partition guard fails on an empty shard).
       - name: Run nextest shard
         run: |
           set -euo pipefail
@@ -1091,7 +1099,7 @@ jobs:
             cargo nextest run --profile ci --no-fail-fast --success-output immediate \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap "$PWD" --extract-to "$PWD" --extract-overwrite \
-            --partition "count:$SHARD/$NEXTEST_SHARDS"
+            --partition "count:$SHARD/$NEXTEST_SHARDS" --no-tests pass
 
       # Per-test durations for the slowest-test table in test_strategy.md.
       - name: Upload nextest timings
@@ -1137,8 +1145,10 @@ jobs:
       # shard itself) skips this gate; if this step is missing, it did not
       # pass. `--profile ci` matches the shards: more test threads than the
       # 4-vCPU default, with the same named group caps.
+      # An affected-crates run without orbit-exec skips it: neither the
+      # sandbox code nor its dependencies changed.
       - name: Linux sandbox/policy enforcement gate
-        if: ${{ env.SHARD == '1' }}
+        if: ${{ env.SHARD == '1' && (!contains(needs.scope.outputs.mode, ':') || contains(needs.scope.outputs.mode, 'orbit-exec')) }}
         run: |
           set -euo pipefail
           reuse=(--binaries-metadata target/nextest/binaries-metadata.json
