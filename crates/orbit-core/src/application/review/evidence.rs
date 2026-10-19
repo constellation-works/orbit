@@ -159,13 +159,14 @@ fn deferred_test(notice: &str) -> Option<&str> {
 }
 
 /// The one package and one integration test target a `cargo test` command
-/// names before any `--`, or `None` when it names either none or several.
+/// names before `--`, or `None` when it names either none or several. Unknown
+/// options fail closed because they may select additional targets.
 fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
     let mut words = command.split_whitespace();
     if words.next()? != "cargo" || words.next()? != "test" {
         return None;
     }
-    let (mut package, mut target) = (Vec::new(), Vec::new());
+    let (mut package, mut target, mut filters) = (Vec::new(), Vec::new(), Vec::new());
     while let Some(word) = words.next() {
         let (slot, inline) = match word {
             "--" => break,
@@ -174,13 +175,17 @@ fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
             _ => match word.split_once('=') {
                 Some(("--package", value)) => (&mut package, Some(value)),
                 Some(("--test", value)) => (&mut target, Some(value)),
-                _ => continue,
+                _ if word.starts_with('-') => return None,
+                _ => {
+                    filters.push(word);
+                    continue;
+                }
             },
         };
         slot.push(inline.or_else(|| words.next())?);
     }
-    match (package.as_slice(), target.as_slice()) {
-        ([package], [target]) => Some((package, target)),
+    match (package.as_slice(), target.as_slice(), filters.as_slice()) {
+        ([package], [target], []) | ([package], [target], [_]) => Some((package, target)),
         _ => None,
     }
 }
