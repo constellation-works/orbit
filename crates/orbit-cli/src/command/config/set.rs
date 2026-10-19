@@ -1,12 +1,10 @@
 use clap::Args;
-use orbit_config::{ConfigScope, ConfigStore, WorkspaceInitMode, admit_config_key};
 use orbit_core::OrbitRuntime;
+use orbit_core::application::config::{ConfigScope, ConfigWriteInit, set_key_literal};
 
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
-
-use super::support::{global_config_path, workspace_config_path};
 
 #[derive(Args)]
 pub struct ConfigSetArgs {
@@ -31,54 +29,21 @@ pub struct ConfigSetArgs {
 
 impl Execute for ConfigSetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        // Reject an unknown key before deciding whether a missing workspace
-        // config needs seeding: a typo should never push an operator into
-        // creating a security-relevant config file just to learn the key
-        // doesn't exist.
-        admit_config_key(&self.key)?;
-
-        // Open, edit, validate and save under the file's write lock, so the
-        // version validated is the one replaced and a concurrent writer's
-        // edit is not erased.
-        let path = if self.global {
-            global_config_path(runtime)
+        let scope = if self.global {
+            ConfigScope::Global
         } else {
-            workspace_config_path(runtime)
+            ConfigScope::Workspace
         };
-        let store = ConfigStore::with_write_lock(&path, || {
-            let mut store = if self.global {
-                ConfigStore::open(ConfigScope::Global, path.clone())?
-            } else {
-                let mode = if self.seed_from_global {
-                    WorkspaceInitMode::SeedFromGlobal
-                } else if self.fresh {
-                    WorkspaceInitMode::Fresh
-                } else {
-                    WorkspaceInitMode::RequireExisting
-                };
-                ConfigStore::open_for_workspace_set(
-                    path.clone(),
-                    &global_config_path(runtime),
-                    mode,
-                )?
-            };
-
-            store.set_value(&self.key, &self.value)?;
-            match store.scope() {
-                ConfigScope::Global => {
-                    store.validate_global_for_set(&self.key, &runtime.shared_root())?;
-                }
-                ConfigScope::Workspace => {
-                    let global_root = runtime.global_root();
-                    store.validate_workspace_for_set(&self.key, &global_root)?;
-                }
-            }
-            store.save()?;
-            Ok(store)
-        })?;
-
-        let scope = store.scope().label();
-        let path = store.path().to_string_lossy().into_owned();
+        let init = if self.seed_from_global {
+            ConfigWriteInit::SeedFromGlobal
+        } else if self.fresh {
+            ConfigWriteInit::Fresh
+        } else {
+            ConfigWriteInit::RequireExisting
+        };
+        let outcome = set_key_literal(runtime, &self.key, &self.value, scope, init)?;
+        let scope = outcome.scope;
+        let path = outcome.path.to_string_lossy().into_owned();
         Ok(Payload::detail(
             json!({ "key": self.key, "scope": scope, "path": path }),
             format!("set {} ({scope} config: {path})", self.key),

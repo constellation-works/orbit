@@ -504,7 +504,24 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                     400,
                     "admission must refuse {key}"
                 );
-                assert!(response.json::<Value>().unwrap()["error"].is_string());
+                let error = response.json::<Value>().unwrap();
+                assert!(error["error"].is_string());
+                if key == "workflow.base_brunch" {
+                    let expected = orbit_core::application::config::set_key(
+                        &fixture.runtime,
+                        key,
+                        &json!("main"),
+                        orbit_core::application::config::ConfigScope::Workspace,
+                        orbit_core::application::config::ConfigWriteInit::RequireExisting,
+                    )
+                    .unwrap_err();
+                    let message = match expected {
+                        orbit_core::OrbitError::InvalidInput(message)
+                        | orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => message,
+                        other => panic!("key admission error: {other}"),
+                    };
+                    assert_eq!(error["error"], message, "CLI and HTTP share key admission");
+                }
                 assert_eq!(
                     std::fs::read(&config).unwrap(),
                     before,
@@ -516,7 +533,15 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 "/api/config/keys/workflow.auto_ship?workspace=ws_http_fixture",
                 json!({"value":true}),
             ));
+            assert_eq!(written["old_value"], false);
             assert_eq!(written["new_value"], true);
+            assert!(
+                written["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["key"] == "workflow.auto_ship" && row["value"] == true)
+            );
             let read = super::support::json_ok(
                 server.get("/api/config/effective?workspace=ws_http_fixture"),
             );
@@ -574,6 +599,86 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             assert_eq!(review["after_landing"]["enabled"], false, "{review}");
             assert!(review["after_landing"]["source"].is_string(), "{review}");
             assert!(review["before_pr"]["line"].is_string(), "{review}");
+        },
+    );
+}
+
+#[test]
+fn config_key_global_admission_and_dashboard_audit_stay_intact() {
+    isolated(
+        "guards::config_key_global_admission_and_dashboard_audit_stay_intact",
+        || {
+            use orbit_core::application::config::{self, ConfigScope, ConfigWriteInit};
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let global = format!(
+                "{}\n[workflow.resource_throttle]\ncpu_resume_percent = 70\n",
+                std::fs::read_to_string(&global_path).unwrap()
+            );
+            std::fs::write(&global_path, &global).unwrap();
+            let workspace = "[workflow.resource_throttle]\ncpu_high_percent = 80\n";
+            std::fs::write(fixture.work.join("config.toml"), workspace).unwrap();
+            let url = "/api/config/keys/workflow.resource_throttle.cpu_resume_percent?workspace=ws_http_fixture";
+            let server = fixture.server(true);
+            let expected = config::set_key(
+                &fixture.runtime,
+                "workflow.resource_throttle.cpu_resume_percent",
+                &json!(85),
+                ConfigScope::Global,
+                ConfigWriteInit::RequireExisting,
+            )
+            .unwrap_err();
+            let orbit_core::OrbitError::InvalidInput(message) = expected else {
+                panic!("layer admission error")
+            };
+            let refused = server.send("PUT", url, json!({"value":85,"scope":"global"}));
+            assert_eq!(refused.status().as_u16(), 400);
+            assert_eq!(refused.json::<Value>().unwrap()["error"], message);
+            assert_eq!(std::fs::read_to_string(&global_path).unwrap(), global);
+            let written = super::support::json_ok(server.send(
+                "PUT",
+                url,
+                json!({"value":60,"scope":"global"}),
+            ));
+            assert_eq!(written["old_value"], 70);
+            assert_eq!(written["new_value"], 60);
+            assert_eq!(written["scope"], "global");
+            assert!(
+                written["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(
+                        |row| row["key"] == "workflow.resource_throttle.cpu_resume_percent"
+                            && row["value"] == 60
+                    )
+            );
+            let events = fixture
+                .runtime
+                .list_audit_events_filtered(&orbit_core::AuditEventFilter::default())
+                .unwrap();
+            assert!(
+                events.iter().any(|event| {
+                    event.target_type.as_deref() == Some("config.set")
+                        && event.arguments_json.as_deref().is_some_and(|raw| {
+                            let args: Value = serde_json::from_str(raw).unwrap();
+                            args["old_value"] == 70 && args["new_value"] == 60
+                        })
+                }),
+                "dashboard audit retains both values"
+            );
+            let before = std::fs::read(&global_path).unwrap();
+            let agent_server = fixture.server(false);
+            let denied = agent_server.send("PUT", url, json!({"value":65,"scope":"global"}));
+            assert_eq!(denied.status().as_u16(), 403);
+            let denied = denied.json::<Value>().unwrap();
+            assert_eq!(denied["code"], "authorization_denied");
+            assert_eq!(denied["operation"], "config.set");
+            assert_eq!(std::fs::read(&global_path).unwrap(), before);
+            assert_eq!(
+                std::fs::read_to_string(fixture.work.join("config.toml")).unwrap(),
+                workspace
+            );
         },
     );
 }
