@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -977,6 +977,7 @@ function wireTaskIdResolver() {
   function adoptWorkspace(workspaceId) {
     if (!workspaceId || workspaceId === getWorkspace()) return false;
     setWorkspace(workspaceId);
+    rememberWorkspace();
     persistScopeToUrl();
     const selector = $("workspace-select");
     if (selector) selector.value = workspaceId;
@@ -1277,8 +1278,8 @@ function fetchAndRenderTasks() {
 // the right workspace, and again for each host selected [ORB-14680]: a
 // workspace id the new host also lists stays selected, "All workspaces" stays
 // the aggregate of that host's workspaces, and anything else becomes that
-// host's default. Failures are non-fatal (single-workspace fallback) and
-// resolve false so the next refresh tries again.
+// host's remembered workspace, live drain or default. Failures are non-fatal
+// (single-workspace fallback) and resolve false so the next refresh tries again.
 async function initWorkspaceSelector() {
   const wasAggregate = isAggregateView() || isAggregateLinked();
   const hostRevision = getHostRevision();
@@ -1309,19 +1310,36 @@ async function initWorkspaceSelector() {
     return true; // single mode: selected implicitly, no selector needed
   }
 
-  // Default to the workspace flagged by the server (the cwd workspace, if the
-  // server was launched inside one) so every tab works out of the box; else the
-  // first active workspace. "All workspaces" (aggregate) is an explicit choice.
-  // A link can also name a workspace that is gone or unavailable; the selector
-  // has no option for it, so keeping it would fail every panel with no way to
-  // recover from the selector. Treat it like no workspace and repair the URL.
-  // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
+  // A shareable URL (including explicit All workspaces) wins. Otherwise
+  // restore this browser's choice for the selected host, then prefer an active
+  // drain on that host before the registry default. Never wait on remote fleet
+  // fan-out to select a local workspace.
   const linked = getWorkspace();
-  const linkedIsServable = (wasAggregate && !linked) || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  const servable = id => dashboardWorkspaces.some(w => w.id === id && w.status === "active");
+  const linkedIsServable = (wasAggregate && !linked) || servable(linked);
   if (!linkedIsServable) {
-    const def = dashboardWorkspaces.find((w) => w.is_default);
-    const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
-    const initial = (def || firstActive || dashboardWorkspaces[0]).id;
+    const remembered = getRememberedWorkspace();
+    let initial = remembered === ALL_WORKSPACES_TOKEN ? null : servable(remembered) ? remembered : undefined;
+    if (initial === undefined) {
+      const revision = getWorkspaceRevision();
+      let fleet;
+      try {
+        fleet = await fetchJson("/api/fleet/drains");
+      } catch (error) {
+        console.error("Unable to read drains for the initial workspace", error);
+      }
+      if (hostRevision !== getHostRevision()) return false;
+      // A choice made while this request was pending wins over the fallback.
+      if (revision !== getWorkspaceRevision()) {
+        buildWorkspaceSelector();
+        return true;
+      }
+      const live = fleet?.items?.find(row => !row.error && servable(row.workspace_id)
+        && ["draining", "pulling", "winding_down"].includes(row.phase));
+      const def = dashboardWorkspaces.find(w => w.is_default && w.status === "active");
+      const firstActive = dashboardWorkspaces.find(w => w.status === "active");
+      initial = live?.workspace_id || (def || firstActive || dashboardWorkspaces[0]).id;
+    }
     setWorkspace(initial);
     if (linked) persistScopeToUrl();
   }
@@ -1351,6 +1369,7 @@ function buildWorkspaceSelector() {
 
   select.addEventListener("change", () => {
     setWorkspace(select.value);
+    rememberWorkspace();
     persistScopeToUrl();
     refreshDashboard();
   });
@@ -1377,6 +1396,7 @@ function buildWorkspaceSelector() {
 // is the single writer; this wrapper stays for the existing call sites.
 function persistWorkspaceToUrl(id) {
   setWorkspace(id);
+  rememberWorkspace();
   persistScopeToUrl();
 }
 
@@ -1945,6 +1965,7 @@ function selectFleetScope(host, workspace) {
   const changed = chooseHost(host);
   if (changed) workspacesWanted = true;
   setWorkspace(workspace);
+  if (workspace) rememberWorkspace();
   persistScopeToUrl();
   if (!changed) buildWorkspaceSelector();
   sAT("drain", { refresh: false });

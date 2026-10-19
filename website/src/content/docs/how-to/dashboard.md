@@ -79,7 +79,8 @@ panel, action, log tail, and the load, memory, and disk chips show that host.
 The chips are labelled with its name. The workspace picker then lists that
 host's workspaces: the workspace you had stays selected if the host also
 lists it, **All workspaces** stays the aggregate of that host's workspaces,
-and anything else falls back to that host's default.
+and anything else falls back to that host's remembered workspace, a workspace
+with a live drain, then its registry default.
 
 The serving dashboard reaches the host over SSH, with the SSH identity of the
 machine that serves the dashboard, not your browser's machine. It opens a
@@ -127,8 +128,18 @@ host switch. **Show** on a row switches the dashboard to that host.
 ## Workspace scope
 
 With more than one workspace registered, the left rail has a workspace picker.
-The dashboard opens on the `--workspace` match, else the workspace containing
-the current directory, else the first active workspace.
+An explicit `?workspace=` link (including the `--workspace` match and
+`workspace=all`) takes precedence. Otherwise, the dashboard restores the last
+workspace you chose in this browser for the selected host. If that workspace
+is unavailable, or browser storage is disabled, it selects an active workspace
+with a live drain, then the registry default (the workspace containing the
+server's current directory when available), then the first active workspace.
+Choosing **All workspaces** in the picker is remembered too.
+
+The header drain chip counts workspace/host pairs across registered hosts,
+for example **2 of 20 workspaces draining**. A workspace registered on two
+hosts counts twice. Click the chip to open the **All workspaces** fleet drains
+table; select a row to inspect that workspace on its host.
 
 - **All workspaces** lists tasks from every served workspace. Automation, the
   auto-drain, settings, and other per-workspace panels are read-only there.

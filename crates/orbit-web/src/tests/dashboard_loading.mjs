@@ -337,7 +337,7 @@ const fleetLabel = () => fleetIndicator.querySelector('.global-drain-label').tex
 check(fleetRequests.length > 0, 'the header reads the fleet API');
 check(getWorkspace() === 'one' && node('auto-drain-panel').dataset.drainState === 'idle', 'the selected workspace drain card stays idle');
 check(!fleetIndicator.hidden && fleetIndicator.dataset.drainState === 'draining'
-  && fleetLabel() === 'Draining · 1 of 2', 'the selected workspace header includes the other workspace drain');
+  && fleetLabel() === '1 of 2 workspaces draining', 'the selected workspace header includes the other workspace drain');
 const selectedFleetLabel = fleetLabel();
 const selectedWorkspaceReadinessReads = readinessReads;
 const selectedWorkspaceCrewReads = crewReads;

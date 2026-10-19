@@ -50,7 +50,7 @@ try {
   assert.equal(peak, 3, 'fan-out stays bounded to three host requests');
   assert.equal(payload.items.length, 4, 'unreachable hosts keep a row');
   assert.equal(payload.items[2].error, 'Host unreachable');
-  assert.equal(fleetDrainLabel(payload), 'Draining · 1 of 3 · partial');
+  assert.equal(fleetDrainLabel(payload), '1 of 3 workspaces draining · partial');
   const table = renderFleetDrains(payload, (...scope) => calls.push(scope));
   const body = table.children.find(child => child.tag === 'tbody');
   const ready = body.children[0];

@@ -71,7 +71,7 @@ export function fleetDrainLabel(payload) {
   const winding = known.filter(row => row.phase === 'winding_down').length;
   const unavailable = rows.some(row => row.error);
   if (unavailable && known.every(row => row.error)) return 'Fleet unavailable';
-  return `${draining ? `Draining · ${draining} of ${known.length}` : winding ? `Winding down · ${winding} of ${known.length}` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}`;
+  return `${draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}`;
 }
 
 export function renderFleetDrains(payload, selectScope) {
