@@ -114,22 +114,26 @@ pub(super) fn apply_trusted_host_provider_sandbox(
     }
 }
 
-/// Run an explorer's provider under its own read-only inner sandbox
-/// [ORB-16814].
+/// Select an explorer's enforced read-only inner sandbox when Orbit's
+/// executor sandbox does not wrap the provider [ORB-16814].
 ///
-/// Applied only when Orbit's executor sandbox does not wrap the provider.
 /// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
-/// mode; the others have no read-only mode to select, so the explorer's
-/// activity profile and instruction are their boundary.
+/// mode. Returns whether that mode was applied. A provider that returns
+/// false has no enforced read-only mode, so dispatch must refuse the
+/// explorer before spawn: its activity profile and instruction are not an
+/// OS boundary.
 pub(super) fn apply_read_only_provider_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,
-) {
+) -> bool {
     if provider == "codex" {
         provider_config.insert(
             "sandbox".to_string(),
             orbit_types::workflow::activity_job::EXPLORE_PROVIDER_SANDBOX_MODE.to_string(),
         );
+        true
+    } else {
+        false
     }
 }
 

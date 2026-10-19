@@ -220,9 +220,11 @@ caller as `parent_run_id` (with `parent_task_id` and `parent_activity`); the
 caller's run detail lists its explorers with state, crew, duration, tokens,
 cost and paths read. Unlike an operator invocation it runs inside the executor
 sandbox with the reviewer filesystem profile, so a sandbox denial of a write is
-the expected outcome, not a defect. A refused call never creates a run: the
-calling agent got the reason as a tool error, and the `agent.explore` audit
-entry records it.
+the expected outcome, not a defect. If the executor sandbox is absent or
+explicitly off, the activity fails before the provider starts unless the
+provider has a read-only mode (Codex, which then runs read-only). A refused
+admission never creates a run: the calling agent got the reason as a tool
+error, and the `agent.explore` audit entry records it.
 
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
 

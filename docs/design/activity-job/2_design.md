@@ -322,7 +322,9 @@ so neither backend grants source writes. `agent_invoke_pipeline` creates no
 checkout and uses explicitly admitted `trustedHostExecution` outside Orbit's
 filesystem sandbox on both platforms. `agent_explore_pipeline` creates no
 checkout either: it reuses its calling implement run's worktree read-only under
-the `reviewer` profile and never carries a trusted-host admission. Managed `proc.spawn` inherits its
+the `reviewer` profile when the executor sandbox wraps it. A provider without
+that wrapper starts only in an enforced read-only mode (Codex); otherwise
+dispatch refuses before spawn. It never carries a trusted-host admission. Managed `proc.spawn` inherits its
 worker's Bubblewrap/Seatbelt boundary without adding Landlock. The retained
 Landlock read API does not handle agent writes; its production caller is the
 explicit plugin boundary. That boundary creates absent concrete write-grant

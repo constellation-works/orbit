@@ -24,6 +24,8 @@
 //! The run it submits is the sandboxed explore activity: no trusted-host
 //! admission, the read-only `reviewer` filesystem profile, a read-only tool
 //! allowlist and, where the provider has one, its read-only inner sandbox.
+//! Dispatch refuses the provider before spawn when neither the executor
+//! sandbox nor a read-only inner mode is enforced.
 //! A refusal is an ordinary tool error; the calling worker continues.
 
 use std::path::PathBuf;

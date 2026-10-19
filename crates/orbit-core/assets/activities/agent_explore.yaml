@@ -3,10 +3,11 @@
 #
 # The explorer answers one question about the delegating run's own worktree
 # and reports what it read. It runs inside Orbit's executor sandbox under the
-# read-only `reviewer` profile, so a write anywhere in the worktree is denied;
-# where Orbit's sandbox does not wrap the provider, the provider's own
-# read-only sandbox applies instead (Codex). It carries no trusted-host
-# admission.
+# read-only `reviewer` profile, so a write anywhere in the worktree is denied
+# when that sandbox wraps the provider. Where the wrapper is absent or
+# explicitly off, only a provider with an enforced read-only mode (Codex)
+# starts, in that mode; every other provider is refused before spawn.
+# It carries no trusted-host admission.
 #
 # It has no task-write, lifecycle, dispatch, commit or PR grant, and cannot
 # invoke another agent: the tool policy below refuses those tools, and the

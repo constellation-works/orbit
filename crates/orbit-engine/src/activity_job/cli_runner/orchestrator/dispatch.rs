@@ -252,10 +252,19 @@ pub(crate) fn run_cli_backend_for_step(
     // [ORB-16814] An explorer is read-only by contract. Wrapped by Orbit's
     // sandbox, its reviewer profile already denies every worktree write and a
     // second inner sandbox cannot nest (Seatbelt refuses it). Unwrapped,
-    // including an explicit executor opt-out, the provider's own read-only
-    // sandbox is the boundary instead of being neutralized.
+    // including an explicit executor opt-out and a bare fallback, the
+    // provider's own read-only sandbox is the boundary instead of being
+    // neutralized. A provider with no such mode must not start: the profile
+    // is not an OS boundary, and its native tools could write the caller's
+    // worktree.
     if activity_name == EXPLORE_ACTIVITY && sandbox.is_none() {
-        apply_read_only_provider_sandbox(&provider, &mut provider_config);
+        if !apply_read_only_provider_sandbox(&provider, &mut provider_config) {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "refusing explorer provider `{provider}`: no enforced read-only sandbox \
+                 (the outer executor sandbox is not enforced, and this provider has no \
+                 read-only mode)"
+            )));
+        }
     } else if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(&provider, &mut provider_config, &mut cli_executor.args);
     }
