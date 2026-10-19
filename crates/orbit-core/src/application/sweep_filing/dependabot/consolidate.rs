@@ -312,6 +312,7 @@ fn replacement_params(consolidation: &Consolidation) -> TaskAddParams {
         .map(|target| TaskRelation {
             relation_type: TaskRelationType::Supersedes,
             target: target.clone(),
+            regression: None,
         })
         .collect();
     params

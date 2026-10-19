@@ -144,7 +144,7 @@ pub(super) fn parse_relations(input: &Value) -> Result<Option<Vec<TaskRelation>>
             .map(|relation| Some(vec![relation]))
             .map_err(|error| OrbitError::InvalidInput(format!("invalid `relations`: {error}"))),
         _ => Err(OrbitError::InvalidInput(
-            "`relations` must be an array of {type, target} objects".to_string(),
+            "`relations` must be an array of {type, target, regression?} objects".to_string(),
         )),
     }
 }

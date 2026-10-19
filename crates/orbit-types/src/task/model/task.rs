@@ -371,6 +371,7 @@ pub fn resolve_task_relations_with_index(
         .map(|relation| ResolvedTaskRelation {
             relation_type: relation.relation_type,
             target: relation.target.clone(),
+            regression: relation.regression,
             verification: reference_index
                 .is_not_verifiable_here(task, &relation.target, status_by_id)
                 .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),

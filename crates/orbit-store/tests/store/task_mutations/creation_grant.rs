@@ -141,6 +141,7 @@ fn a_failed_scope_write_leaves_neither_its_scope_nor_its_grant() {
             relations: Some(vec![TaskRelation {
                 relation_type: TaskRelationType::RelatedTo,
                 target: "ORB-99999".to_string(),
+                regression: None,
             }]),
             ..Default::default()
         },

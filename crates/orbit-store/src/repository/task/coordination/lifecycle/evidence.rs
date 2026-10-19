@@ -46,12 +46,16 @@ impl TaskCommitBoundary {
             intent.envelope.validate()?;
         }
         for target in &effects.regression_from {
-            let relation = TaskRelation {
-                relation_type: TaskRelationType::RegressionFrom,
-                target: target.clone(),
-            };
-            if !intent.envelope.relations.contains(&relation) {
-                intent.envelope.relations.push(relation);
+            // An existing link, classified or not, already records this culprit.
+            if !intent.envelope.relations.iter().any(|relation| {
+                relation.relation_type == TaskRelationType::RegressionFrom
+                    && relation.target == *target
+            }) {
+                intent.envelope.relations.push(TaskRelation {
+                    relation_type: TaskRelationType::RegressionFrom,
+                    target: target.clone(),
+                    regression: None,
+                });
             }
         }
         if !effects.regression_from.is_empty() {

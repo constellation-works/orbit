@@ -200,6 +200,7 @@ pub(super) fn apply_task(
                 .extend(add_dependencies.iter().map(|target| TaskRelation {
                     relation_type: TaskRelationType::BlockedBy,
                     target: target.clone(),
+                    regression: None,
                 }));
             let target_status = if task.promote {
                 TaskStatus::Backlog

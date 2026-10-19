@@ -920,3 +920,54 @@ fn task_origin_round_trips_and_filters_over_http() {
         },
     );
 }
+
+/// The REST task surface records a `regression_from` link's typed nature and
+/// escape, returns it on the task detail, and refuses a value outside the
+/// closed set with the allowed list.
+#[test]
+fn regression_classification_round_trips_over_http() {
+    isolated(
+        "task_contracts::regression_classification_round_trips_over_http",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let create = |title: &str, relations: Value| {
+                server.send(
+                    "POST",
+                    "/api/tasks?workspace=ws_http_fixture",
+                    json!({"title": title, "description": "Regression fixture",
+                           "complexity": "low", "relations": relations}),
+                )
+            };
+            let culprit = super::support::json_ok(create("Culprit", json!([])))["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let link = |nature: &str| {
+                json!([{"type": "regression_from", "target": culprit,
+                        "regression": {"nature": nature, "escape": "platform_only"}}])
+            };
+            let filed = super::support::json_ok(create("Regression", link("broke_existing")));
+            let id = filed["id"].as_str().unwrap();
+            let detail = super::support::json_ok(
+                server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")),
+            );
+            assert_eq!(
+                detail["relations"],
+                json!([{"type": "regression_from", "target": culprit,
+                        "regression": {"nature": "broke_existing", "escape": "platform_only"}}])
+            );
+
+            let refused = create("Bad nature", link("regressed"));
+            assert!(
+                refused.status().is_client_error(),
+                "unknown nature must be refused, got {}",
+                refused.status()
+            );
+            assert!(
+                refused.text().unwrap().contains("merge_reintroduced"),
+                "refusal must name the allowed natures"
+            );
+        },
+    );
+}

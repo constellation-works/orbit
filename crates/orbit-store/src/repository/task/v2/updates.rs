@@ -105,6 +105,7 @@ impl TaskV2Store {
                 let relation = TaskRelation {
                     relation_type: TaskRelationType::BlockedBy,
                     target: target.clone(),
+                    regression: None,
                 };
                 if !bundle.envelope.relations.contains(&relation) {
                     bundle.envelope.relations.push(relation);
@@ -222,18 +223,37 @@ impl TaskV2Store {
                     value.iter().cloned().map(|target| TaskRelation {
                         relation_type: TaskRelationType::BlockedBy,
                         target,
+                        regression: None,
                     }),
                 );
                 envelope_changed = true;
             }
             if let Some(value) = &fields.source_task_id {
+                // Re-setting the same culprit keeps the link's classification.
+                let replacements = value
+                    .iter()
+                    .cloned()
+                    .map(|target| {
+                        let regression = bundle
+                            .envelope
+                            .relations
+                            .iter()
+                            .find(|relation| {
+                                relation.relation_type == TaskRelationType::RegressionFrom
+                                    && relation.target == target
+                            })
+                            .and_then(|relation| relation.regression);
+                        TaskRelation {
+                            relation_type: TaskRelationType::RegressionFrom,
+                            target,
+                            regression,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 replace_relations(
                     &mut bundle.envelope.relations,
                     TaskRelationType::RegressionFrom,
-                    value.iter().cloned().map(|target| TaskRelation {
-                        relation_type: TaskRelationType::RegressionFrom,
-                        target,
-                    }),
+                    replacements,
                 );
                 envelope_changed = true;
             }

@@ -538,6 +538,7 @@ fn archive_owner(
                     vec![TaskRelation {
                         relation_type: TaskRelationType::CoveredBy,
                         target: target.into(),
+                        regression: None,
                     }]
                 }),
                 ..Default::default()

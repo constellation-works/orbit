@@ -20,11 +20,29 @@ template:
     that made the code wrong, then read its task from the frozen input — each
     `deliveries[]` entry lists its `commits` and the `task_ids` that landed them.
     File each confirmed finding with
-    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["delivery-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["delivery-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
     A defect in an unattributed neighbor commit, or one that predates the batch
     and was merely exposed by it, is filed without the `regression_from` relation
     and says so — never blame a bystander delivery. Name the culprit task and
     commit in the finding's description and in the evidence finding text.
+    Classify every `regression_from` relation you file by adding
+    `"regression":{"nature":"<nature>","escape":"<escape>"}` to it.
+    Choose `unclassified` rather than guess. `nature` is what kind of regression
+    the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+    `escape` is why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
     Derive canonical `file:` selectors from every evidenced source path, removing
     the line suffix, and add the matching regression-test location. Use existing
     paths where possible; for a test file that must be created, set
@@ -58,7 +76,7 @@ template:
   - Every frozen delivery has an examination whose examined and skipped paths are exactly its changed paths, with a verdict and a delivery-specific rationale.
   - Concrete checks and findings are attached as valid automation-coverage.json evidence.
   - An execution summary of the examination is persisted.
-  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, or states why no captured delivery can be held responsible.
+  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or states why no captured delivery can be held responsible.
   - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:

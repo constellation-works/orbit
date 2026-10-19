@@ -91,14 +91,17 @@ fn degraded_fixture() -> Fixture {
         TaskRelation {
             relation_type: TaskRelationType::SpawnedFrom,
             target: target.clone(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target: FOREIGN_TARGET.to_string(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::Produces,
             target: "ADR-0001".to_string(),
+            regression: None,
         },
     ];
     let source = store.create_task(source).expect("create source").id;
@@ -413,10 +416,12 @@ fn removing_the_edge_through_a_supported_update_repairs_on_the_next_read() {
                     TaskRelation {
                         relation_type: TaskRelationType::RelatedTo,
                         target: FOREIGN_TARGET.to_string(),
+                        regression: None,
                     },
                     TaskRelation {
                         relation_type: TaskRelationType::Produces,
                         target: "ADR-0001".to_string(),
+                        regression: None,
                     },
                 ]),
                 ..Default::default()

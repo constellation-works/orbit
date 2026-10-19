@@ -86,14 +86,17 @@ fn degraded_fixture() -> Fixture {
         TaskRelation {
             relation_type: TaskRelationType::SpawnedFrom,
             target: target.clone(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target: FOREIGN_TARGET.to_string(),
+            regression: None,
         },
         TaskRelation {
             relation_type: TaskRelationType::Produces,
             target: "ADR-0001".to_string(),
+            regression: None,
         },
     ];
     let source = store.task.create_task(source).expect("create source").id;

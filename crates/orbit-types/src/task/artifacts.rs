@@ -5,7 +5,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
-use crate::task::{ExternalRef, TaskComplexity, TaskError, TaskPriority, TaskStatus, TaskType};
+use crate::task::{
+    ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority, TaskStatus,
+    TaskType,
+};
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 /// Maximum representable allocator value, no longer the five-digit boundary.
@@ -163,6 +166,10 @@ pub struct TaskRelation {
     #[serde(rename = "type")]
     pub relation_type: TaskRelationType,
     pub target: OrbitId,
+    /// Nature and escape classification, accepted only on `regression_from`.
+    /// Absent on legacy links and on links filed without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression: Option<RegressionClassification>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -205,6 +212,14 @@ pub fn validate_task_relations_for_source(
     }
     for relation in relations {
         validate_target_for(relation.relation_type, &relation.target)?;
+        if relation.regression.is_some()
+            && relation.relation_type != TaskRelationType::RegressionFrom
+        {
+            return Err(TaskError::Invalid(format!(
+                "task relation {:?} -> '{}' must not carry a `regression` classification; only regression_from accepts one",
+                relation.relation_type, relation.target
+            )));
+        }
         if relation.target == source_id {
             return Err(TaskError::Invalid(format!(
                 "task relation from '{source_id}' must not target itself"

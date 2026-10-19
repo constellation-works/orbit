@@ -11,6 +11,7 @@ mod os_requirement;
 mod plan;
 mod readiness;
 mod receipt;
+mod regression;
 mod show_fields;
 mod ui_requirement;
 mod work_class;
@@ -73,6 +74,7 @@ pub use readiness::{
     task_readiness_json,
 };
 pub use receipt::CommentReceipt;
+pub use regression::{RegressionClassification, RegressionEscape, RegressionNature};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,
     TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,

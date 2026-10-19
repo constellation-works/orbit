@@ -141,6 +141,7 @@ impl OrbitRuntime {
                 relations.push(TaskRelation {
                     relation_type: TaskRelationType::RelatedTo,
                     target: held.id.clone(),
+                    regression: None,
                 });
                 self.stores().task_records().update(
                     repair_id,
@@ -269,6 +270,7 @@ fn repair_task_params(
         relations: vec![TaskRelation {
             relation_type: TaskRelationType::RelatedTo,
             target: held.id.clone(),
+            regression: None,
         }],
         tags: vec![BASELINE_RED_REPAIR_TAG.to_string()],
         priority: TaskPriority::High,

@@ -36,6 +36,26 @@ The connected tool schema is authoritative for supported fields.
   also accepts GitHub PR external keys as described below. The remaining
   relation types require a task ID. A dangling target (unknown in every
   workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
+- A `regression_from` relation may carry
+  `"regression": {"nature": "<nature>", "escape": "<escape>"}` (both required;
+  no other type accepts it). Choose `unclassified` rather than guess; an
+  omitted payload reads back as absent, not as `unclassified`. Unknown values
+  are refused with the allowed list.
+  - `nature` — what kind of regression the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+  - `escape` — why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
   field, like `plan`, `status` and `dependencies`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired

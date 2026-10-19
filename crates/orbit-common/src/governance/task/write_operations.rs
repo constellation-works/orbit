@@ -263,7 +263,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Optional typed task relations as an array of {type, target} objects",
+                "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
             ),
             both(
                 "crew",
@@ -444,7 +444,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Replacement typed task relations as an array of {type, target} objects",
+                "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified",
             ),
             both(
                 "tags",

@@ -357,10 +357,13 @@ it — see [friction.md](friction.md). Then:
   you would have written to the task); the pipeline's handoff carries it to
   the owner. When the task asks you to record a `regression_from` relation,
   return the culprit task IDs as `regression_from` and name the culprit commit
-  in the summary; the owner checks and records the relation at handoff. An owner-routed tool that answers unreachable is not a task
+  in the summary; the owner checks and records the relation at handoff. That
+  output carries IDs only, so state the nature and escape you would have set
+  in the summary. An owner-routed tool that answers unreachable is not a task
   failure. A task you file must be `spawned_from` the claimed task; a claimed
   `delivery-code-review` or `code-review` task may also give each finding a
-  `regression_from` relation to its culprit. `orbit.search` does not reach the
+  `regression_from` relation to its culprit, classified with its `regression`
+  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` does not reach the
   owner, so skip the duplicate search and say so; the owner's triage dedupes.
   Return a finding the owner still refuses in `unfiled_findings` as
   `{title, description}` objects (plain strings fail the implement step before
