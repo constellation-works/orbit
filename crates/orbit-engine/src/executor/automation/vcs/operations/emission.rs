@@ -28,7 +28,8 @@ fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, Or
 
 /// Only literal PR synchronize triggers, branch selectors and unconditional
 /// jobs with the existing literal-name/single-axis matrix semantics, plus the
-/// adapter's finite live-PR read condition, are known. Other conditions refuse.
+/// adapter's finite live-PR read condition and its exact change-scope gate, are
+/// known. Other conditions refuse.
 fn emitted(source: &str, branch: &str) -> Result<Vec<String>, OrbitError> {
     let workflow: Value = serde_yaml::from_str(source).map_err(|_| unreadable("workflow YAML"))?;
     let event = workflow
@@ -201,11 +202,18 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     if missing.is_empty() {
         return Ok(json!({"evidence":null}));
     }
-    // Existing failures and running checks retain their ordinary paths.
-    if checks
-        .iter()
-        .any(|check| check["status"] != "completed" || check["conclusion"] != "success")
-    {
+    // Existing failures and running checks retain their ordinary paths. A
+    // skipped job that no policy requires (ci.yml's `Docs guards` on a full
+    // run) never blocks a merge; a skipped required check still waits.
+    if checks.iter().any(|check| {
+        check["status"] != "completed"
+            || (check["conclusion"] != "success"
+                && (check["conclusion"] != "skipped"
+                    || current
+                        .required
+                        .iter()
+                        .any(|gate| check["name"] == gate.context)))
+    }) {
         return Ok(json!({"evidence":null}));
     }
     let runs = complete_list(&current.runs, "workflow_runs")?;

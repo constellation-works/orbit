@@ -41,6 +41,14 @@ if [ -f "$forge/base-applied" ]; then
     rollup="$rollup,"'{"__typename":"CheckRun","name":"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}'
     checks="$checks,{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"}"
 fi
+check_count=$([ -f "$forge/base-applied" ] && echo 2 || echo 1)
+# ci.yml's full-mode run: the change-scope job succeeds and the docs-only job
+# reports skipped under its unchanged name.
+if [ -f "$forge/scope-checks" ]; then
+    checks="$checks,{\"id\":3,\"name\":\"Change scope\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"}"
+    checks="$checks,{\"id\":4,\"name\":\"Docs guards\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"skipped\"}"
+    check_count=$((check_count + 2))
+fi
 if [ -f "$forge/gates-pending" ] && [ -f "$forge/base-applied" ]; then
     merge_state=BLOCKED
     rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
@@ -147,7 +155,7 @@ case "$1 ${2:-}" in
                 if [ -f "$forge/unreadable-after" ] && [ -f "$forge/base-applied" ]; then echo '{"total_count":3,"check_runs":[]}'; exit; fi
                 if [ -f "$forge/legacy-shadow-pending" ]; then checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"external-ci"/;s/"status":"completed"/"status":"in_progress"/g'); fi
                 if [ -f "$forge/legacy-substitute" ] && [ -f "$forge/base-applied" ]; then checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/'); fi
-                printf '{"total_count":%s,"check_runs":[%s]}\n' "$([ -f "$forge/base-applied" ] && echo 2 || echo 1)" "$checks" ;;
+                printf '{"total_count":%s,"check_runs":[%s]}\n' "$check_count" "$checks" ;;
             *'/status?'*)
                 status_head=$head; status_repo=$repo; statuses=''; count=0
                 if [ -f "$forge/legacy-state" ]; then
