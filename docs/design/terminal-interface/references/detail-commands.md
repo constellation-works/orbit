@@ -22,14 +22,14 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit auto-task list` | `TITLE` | `orbit auto-task show <name>` |
 | `orbit task list` | `TITLE` | `orbit task show <id>` |
 | `orbit job list` | `TARGET_ID` | `orbit job show <job_id>` |
-| `orbit run history` | `ERROR` (shown when a listed run failed) | `orbit run show <run_id>` (task titles, full errors), `orbit run show <run_id> -s <step>` |
+| `orbit run history` | — (fixed columns) | `orbit run show <run_id>` (task titles, full errors), `orbit run show <run_id> -s <step>` |
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
 | `orbit run show` (step summary) | `TARGET`, `ERROR MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
-| `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
-| `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs |
+| `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
+| `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs and the regression cross-tabs |
 
 ## Gaps
 

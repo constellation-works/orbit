@@ -512,6 +512,122 @@ assert.equal(part('detail').querySelector('p.codebase-eyebrow').textContent, 'Ta
 assert.equal(listed('Worst misses').length, 0);
 assert.match(pilotBlock('Worst misses').textContent, /Every landed file was covered by a pilot selector\./);
 
+// Regressions: one chip row per dimension with its link counts (absent and
+// unclassified apart, zero counts hidden) and the definitions; the nature x
+// escape and escape x layer cross-tabs shaded against their largest count;
+// crew and complexity rates above minimum support; and each regressed task's
+// links with their four dimensions in the detail.
+const link = (task_id, nature, escape, layer, detected_by, layer_source = 'landed') => ({ task_id, nature, escape, layer, layer_source, detected_by });
+const breakdown = counts => Object.entries(counts).map(([value, links]) => ({ value, links }));
+const noFilter = { nature: null, escape: null, layer: null, detected_by: null };
+const sliced = JSON.parse(JSON.stringify(full));
+sliced.regression_filter = noFilter;
+Object.assign(sliced.regressions, {
+  links: 6, matching_links: 6, regressed: 4,
+  breakdowns: {
+    nature: breakdown({ broke_existing: 3, defect_in_new: 0, unclassified: 1, absent: 2 }),
+    escape: breakdown({ no_test: 4, review_missed: 0, absent: 2 }),
+    layer: breakdown({ ci_tests: 0, dashboard: 4, store_migration: 2 }),
+    detected_by: breakdown({ delivery_review: 5, operator: 1 }),
+  },
+  cross_tabs: {
+    nature_escape: { row: 'nature', column: 'escape', rows: ['broke_existing', 'unclassified', 'absent'], columns: ['no_test', 'absent'], counts: [[3, 0], [1, 0], [0, 2]] },
+    escape_layer: { row: 'escape', column: 'layer', rows: ['no_test', 'absent'], columns: ['dashboard', 'store_migration'], counts: [[4, 0], [0, 2]] },
+  },
+  by_crew: { rows: [{ crew: 'opus', ...rate(3, 10), support: 10 }, { crew: 'sol', ...rate(1, 8), support: 8 }], below_support: 2 },
+  by_complexity: { rows: [], below_support: 3 },
+});
+sliced.regressions.rows[0].regressed_tasks[1] = {
+  ...regressed('ORB-1', 'sol', ['ORB-2', 'ORB-3']),
+  regressions: [link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review'), link('ORB-3', 'absent', 'absent', 'store_migration', 'operator', 'footprint')],
+};
+await serve(sliced);
+click(tile('regressions'));
+const facets = dimension => part('list').querySelectorAll('button.codebase-facet').filter(node => node.dataset.dimension === dimension);
+assert.deepEqual(facets('nature').map(node => [node.dataset.value, node.textContent, node.getAttribute('aria-pressed')]),
+  [['broke_existing', 'broke existing 3', 'false'], ['unclassified', 'unclassified 1', 'false'], ['absent', 'absent 2', 'false']],
+  'a value no link takes is hidden; absent and unclassified are separate chips');
+assert.deepEqual(facets('layer').map(node => node.textContent), ['dashboard 4', 'store/migration 2']);
+assert.deepEqual(facets('detected_by').map(node => node.dataset.value), ['delivery_review', 'operator']);
+assert.deepEqual(part('list').querySelector('details.codebase-definitions').querySelectorAll('dt').map(node => node.textContent),
+  ['Nature', 'Escape', 'Layer', 'Detected by', 'Counts'], 'the tile documents every dimension');
+const crossTab = name => part('list').querySelectorAll('table.codebase-crosstab').find(table => table.dataset.tab === name);
+const levels = name => crossTab(name).querySelectorAll('td').map(cell => [cell.dataset.row, cell.dataset.column, cell.textContent, cell.dataset.level]);
+assert.deepEqual(levels('nature_escape'), [
+  ['broke_existing', 'no_test', '3', '4'], ['broke_existing', 'absent', '·', '0'],
+  ['unclassified', 'no_test', '1', '2'], ['unclassified', 'absent', '·', '0'],
+  ['absent', 'no_test', '·', '0'], ['absent', 'absent', '2', '3'],
+]);
+assert.deepEqual(crossTab('escape_layer').querySelectorAll('thead th').map(cell => cell.textContent), ['', 'dashboard', 'store/migration']);
+const slice = title => part('list').querySelectorAll('div.codebase-slice').find(block => block.querySelector('p.codebase-eyebrow').textContent === title);
+assert.deepEqual(slice('Regression rate by crew').querySelectorAll('li.codebase-crew-row').map(item => [item.dataset.crew, item.querySelector('span.codebase-rate').textContent, item.querySelector('span.codebase-frac').textContent]),
+  [['opus', '30%', '3/10'], ['sol', '13%', '1/8']]);
+assert.match(slice('Regression rate by crew').textContent, /2 crews below minimum support 5 are hidden\./);
+assert.equal(slice('Regression rate by complexity').querySelector('p.codebase-note').textContent,
+  'No complexity has 5 or more done tasks in this window; 3 complexities fall below it.', 'an empty slice says why');
+assert.equal(selectedRow(), rows()[0]);
+const linkDims = () => tasks()[1].querySelectorAll('span.codebase-link-dims');
+assert.deepEqual(linkDims().map(line => [line.dataset.task, line.querySelectorAll('span.codebase-tag').map(tag => tag.dataset.value)]),
+  [['ORB-2', ['broke_existing', 'no_test', 'dashboard', 'delivery_review']], ['ORB-3', ['absent', 'absent', 'store_migration', 'operator']]]);
+assert.match(linkDims()[1].querySelectorAll('span.codebase-tag')[2].title, /declared footprint/, 'a layer read from the footprint says so');
+assert.equal(part('detail').querySelector('p.codebase-filter-note'), null, 'no filter, no filter note');
+
+// A chip filters: the request and the hash carry it, the tile names it, the
+// served ranking and its detail are the filtered ones, and the chip reads
+// pressed. Choosing it again clears it.
+click(facets('nature')[0]);
+assert.equal(codebase.getCodebaseQuery().nature, 'broke_existing');
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir&nature=broke_existing');
+const narrowed = JSON.parse(JSON.stringify(sliced));
+narrowed.regression_filter = { ...noFilter, nature: 'broke_existing' };
+narrowed.regressions.rows = [{ path: 'src/a/', ...rate(1, 20), by_crew: [], regressed_tasks: [{ ...regressed('ORB-1', 'sol', ['ORB-2']), regressions: [link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review')] }] }];
+Object.assign(narrowed.regressions, { matching_links: 3, regressed: 2 });
+const filteredRequest = await serve(narrowed);
+assert.equal(filteredRequest.searchParams.get('nature'), 'broke_existing', 'the filter goes to the server');
+assert.equal(filteredRequest.searchParams.get('escape'), null, 'an unset filter is not sent');
+assert.deepEqual(rowPaths(), ['src/a/']);
+assert.equal(facets('nature')[0].getAttribute('aria-pressed'), 'true');
+assert.equal(tile('regressions').querySelector('span.codebase-tile-foot.filter').textContent, 'filtered: broke existing');
+assert.match(part('list').querySelector('div.codebase-facets').textContent, /3 of 6 regression links on 2 regressed tasks/);
+assert.deepEqual(tasks().map(item => item.dataset.task), ['ORB-1']);
+assert.deepEqual(tasks()[0].querySelectorAll('a.codebase-task-link').map(node => node.textContent), ['ORB-1', 'ORB-2'], 'the detail lists only matching regressions');
+assert.match(part('detail').querySelector('p.codebase-filter-note').textContent, /^Filtered to nature broke existing: /);
+click(facets('nature')[0]);
+assert.equal(codebase.getCodebaseQuery().nature, null, 'choosing the chosen chip clears it');
+
+// Filters that leave no path: an empty state with Clear filters, which
+// resets every dimension. A hash with an unknown value keeps no filter.
+click(facets('layer')[1]);
+click(facets('detected_by')[1]);
+const nothing = JSON.parse(JSON.stringify(sliced));
+nothing.regression_filter = { ...noFilter, layer: 'store_migration', detected_by: 'operator' };
+nothing.regressions.rows = [];
+Object.assign(nothing.regressions, { matching_links: 0, regressed: 0, cross_tabs: { nature_escape: { row: 'nature', column: 'escape', rows: [], columns: [], counts: [] }, escape_layer: { row: 'escape', column: 'layer', rows: [], columns: [], counts: [] } } });
+const both = await serve(nothing);
+assert.deepEqual(['layer', 'detected_by'].map(name => both.searchParams.get(name)), ['store_migration', 'operator']);
+assert.equal(rows().length, 0);
+assert.equal(part('list').querySelector('p.codebase-empty-title').textContent, 'No path has a regression matching these filters.');
+assert.deepEqual(part('list').querySelectorAll('div.codebase-crosstab-block').map(block => block.querySelector('p.codebase-note')?.textContent),
+  ['No regression matches these filters.', 'No regression matches these filters.']);
+assert.equal(part('detail').querySelector('p.codebase-note').textContent, 'Nothing is ranked here, so there is no row to show.');
+click(button(part('list').querySelector('div.codebase-empty-state'), 'Clear filters'));
+assert.deepEqual(['nature', 'escape', 'layer', 'detected_by'].map(name => codebase.getCodebaseQuery()[name]), [null, null, null, null]);
+assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir&escape=no_test&layer=bogus'));
+assert.deepEqual([codebase.getCodebaseQuery().escape, codebase.getCodebaseQuery().layer], ['no_test', null], 'a hash restores known filters only');
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir'));
+
+// A window without any regression link says there is nothing to break down.
+const noLinks = JSON.parse(JSON.stringify(full));
+noLinks.regression_filter = noFilter;
+Object.assign(noLinks.regressions, { links: 0, matching_links: 0, regressed: 0, breakdowns: {}, cross_tabs: {}, by_crew: { rows: [], below_support: 0 }, by_complexity: { rows: [], below_support: 0 } });
+await serve(noLinks);
+assert.equal(part('list').querySelectorAll('button.codebase-facet').length, 0);
+assert.match(part('list').querySelector('div.codebase-facets').textContent, /^No regression_from link targets a task done in this window/);
+assert.equal(part('list').querySelector('table.codebase-crosstab'), null, 'no cross-tab without links');
+await serve(full);
+click(tile('task_pilot'));
+
 // The window and group-by segments and the stepper rewrite the selection and
 // ask for a new hash; an unchanged one asks for nothing.
 let changes = 0;

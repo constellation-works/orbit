@@ -376,7 +376,7 @@
   },
   {
     "name": "orbit.codebase.analytics",
-    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `task_pilot` grades each task-pilot crew and model's final selectors against the landed diffs of the tasks it assessed (recall, precision, F1, lift over the filer's selectors). The same payload the dashboard's Codebase view reads.",
+    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `regressions` also breaks its regression_from links down by nature, escape, fix layer and detector, cross-tabs nature x escape and escape x layer, and rates the regressed tasks' crews and complexities; nature, escape, layer and detected_by filter it. `task_pilot` grades each task-pilot crew and model's final selectors against the landed diffs of the tasks it assessed (recall, precision, F1, lift over the filer's selectors). The same payload the dashboard's Codebase view reads.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -397,6 +397,30 @@
       {
         "name": "rollup",
         "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "nature",
+        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "escape",
+        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "layer",
+        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "detected_by",
+        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
         "param_type": "string",
         "required": false
       },
@@ -450,7 +474,7 @@
   },
   {
     "name": "orbit.codebase.show",
-    "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
+    "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Each regressed task lists its regression_from links with nature, escape, layer and detected_by; the same filters as `orbit.codebase.analytics` narrow them. Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -477,6 +501,30 @@
       {
         "name": "rollup",
         "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "nature",
+        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "escape",
+        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "layer",
+        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "detected_by",
+        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
         "param_type": "string",
         "required": false
       },

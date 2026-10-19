@@ -2,9 +2,9 @@
 //!
 //! All verbs call the read-only `orbit.codebase.*` tools, so `--json` is the
 //! payload the dashboard's Codebase view reads. What is left here is the text
-//! rendering: each ranking's leading rows and the task-pilot crews for
-//! `analytics`, and one path's standings with the tasks behind every count
-//! for `show`, and co-change measures for `related`.
+//! rendering: each ranking's leading rows, the regression breakdowns and the
+//! task-pilot crews for `analytics`, one path's standings with the tasks
+//! behind every count for `show`, and co-change measures for `related`.
 
 use std::fmt::Write as _;
 
@@ -31,6 +31,9 @@ struct Ranking {
     /// What the denominator counts.
     denominator: &'static str,
 }
+
+/// The dimensions a regression is broken down and filtered by.
+const REGRESSION_DIMENSIONS: [&str; 4] = ["nature", "escape", "layer", "detected_by"];
 
 /// The path rankings in the dashboard's order.
 const PATH_RANKINGS: &[Ranking] = &[
@@ -132,6 +135,9 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
             table.add_row(rate_row(index, text(&row["path"]), row));
         }
         blocks.push(Block::table(table));
+        if ranking.key == "regressions" {
+            blocks.extend(regression_blocks(section));
+        }
     }
 
     let coupling = &value["change_coupling"];
@@ -155,10 +161,50 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
     blocks.extend(task_pilot_blocks(&value["task_pilot"]));
 
     blocks.push(Block::text(format!(
-        "\nShowing up to {TEXT_ROWS} rows per ranking; --json carries up to {}. \
-         Follow a path to its tasks with `orbit codebase show <path>`.",
+        "\nShowing up to {TEXT_ROWS} rows per ranking; --json carries up to {} and the \
+         regression cross-tabs. Follow a path to its tasks with `orbit codebase show <path>`.",
         count(&value["row_limit"]),
     )));
+    blocks
+}
+
+/// The regression links of the window by nature, escape, fix layer and
+/// detector, and the regressed tasks' crew and complexity rates.
+fn regression_blocks(section: &Value) -> Vec<Block> {
+    let mut out = format!(
+        "\nRegression links: {} of {} match the filter, on {} regressed tasks",
+        count(&section["matching_links"]),
+        count(&section["links"]),
+        count(&section["regressed"]),
+    );
+    for dimension in REGRESSION_DIMENSIONS {
+        let values: Vec<String> = section["breakdowns"][dimension]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["links"].as_u64().unwrap_or(0) > 0)
+            .map(|entry| format!("{} {}", text(&entry["value"]), count(&entry["links"])))
+            .collect();
+        let values = if values.is_empty() {
+            "none".to_string()
+        } else {
+            values.join(", ")
+        };
+        let _ = write!(out, "\n  {dimension}: {values}");
+    }
+    let mut blocks = vec![Block::text(out)];
+    for (slice, heading) in [("crew", "CREW"), ("complexity", "COMPLEXITY")] {
+        let rates = &section[format!("by_{slice}")];
+        blocks.push(Block::text(format!(
+            "\nRegressed done tasks by {slice} ({} below minimum support)",
+            count(&rates["below_support"]),
+        )));
+        let mut table = rate_table(heading);
+        for (index, row) in rows(rates).iter().enumerate() {
+            table.add_row(rate_row(index, text(&row[slice]), row));
+        }
+        blocks.push(Block::table(table));
+    }
     blocks
 }
 
@@ -324,18 +370,41 @@ fn write_tasks(out: &mut String, label: &str, numerator: &str, tasks: &Value) {
             let _ = write!(out, "  (regressed by {})", regressions.join(", "));
         }
         out.push('\n');
+        for link in task["regressions"].as_array().into_iter().flatten() {
+            let _ = writeln!(
+                out,
+                "      {}  nature {} · escape {} · layer {} ({}) · detected by {}",
+                text(&link["task_id"]),
+                text(&link["nature"]),
+                text(&link["escape"]),
+                text(&link["layer"]),
+                text(&link["layer_source"]),
+                text(&link["detected_by"]),
+            );
+        }
     }
 }
 
 fn selection_line(value: &Value) -> String {
-    format!(
+    let mut line = format!(
         "window {} · minimum support {} · grouped by {} · {} tasks scanned · computed {}",
         text(&value["window"]),
         count(&value["min_support"]),
         text(&value["rollup"]),
         count(&value["tasks_scanned"]),
         text(&value["computed_at"]),
-    )
+    );
+    let filters: Vec<String> = REGRESSION_DIMENSIONS
+        .iter()
+        .filter_map(|dimension| {
+            let value = value["regression_filter"][dimension].as_str()?;
+            Some(format!("{dimension} {value}"))
+        })
+        .collect();
+    if !filters.is_empty() {
+        let _ = write!(line, "\nregressions filtered to {}", filters.join(", "));
+    }
+    line
 }
 
 fn rate_table(subject: &str) -> Table {

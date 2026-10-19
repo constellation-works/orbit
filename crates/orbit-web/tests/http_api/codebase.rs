@@ -14,8 +14,9 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
-    TaskDecision, TaskEventRowV2, TaskRelation, TaskRelationType,
+    RegressionClassification, RegressionEscape, RegressionNature, TASK_ARTIFACT_SCHEMA_VERSION,
+    TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskComplexity, TaskDecision,
+    TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
 };
 use serde_json::{Value, json};
 
@@ -1627,6 +1628,301 @@ fn codebase_tools_serve_the_dashboard_payload_and_path_detail() {
                 matches!(unknown, Err(OrbitError::InvalidInput(_))),
                 "{unknown:?}"
             );
+        },
+    );
+}
+
+/// A fixture task with its crew, complexity, tags and regression link.
+fn seed_task(fixture: &Fixture, title: &str, files: &[&str], params: TaskAddParams) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: "codebase analytics fixture".into(),
+            context_files: files.iter().map(|file| format!("file:{file}")).collect(),
+            ..params
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+fn classified_link(
+    target: &str,
+    classification: Option<RegressionClassification>,
+) -> Vec<TaskRelation> {
+    vec![TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: target.parse().unwrap(),
+        regression: classification,
+    }]
+}
+
+/// One breakdown's nonzero counts by value.
+fn breakdown(section: &Value, dimension: &str) -> Vec<(String, u64)> {
+    section["breakdowns"][dimension]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["links"] != 0)
+        .map(|row| {
+            (
+                row["value"].as_str().unwrap().to_string(),
+                row["links"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// A slice's `(key, numerator, denominator)` rows.
+fn slice_rows(section: &Value, slice: &str) -> Vec<(String, u64, u64)> {
+    section[format!("by_{slice}")]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row[slice].as_str().unwrap().to_string(),
+                row["numerator"].as_u64().unwrap(),
+                row["denominator"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn codebase_regressions_break_down_and_filter_by_link_dimensions() {
+    isolated(
+        "codebase::codebase_regressions_break_down_and_filter_by_link_dimensions",
+        || {
+            let fixture = Fixture::new();
+            let repo = init_repo(&fixture);
+            let now = Utc::now();
+            let area = "src/area.rs";
+            let done = |crew: &str, complexity: TaskComplexity| TaskAddParams {
+                crew: Some(crew.into()),
+                complexity,
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            };
+            let hard = seed_task(
+                &fixture,
+                "hard",
+                &[area],
+                done("opus", TaskComplexity::Hard),
+            );
+            let low = seed_task(&fixture, "low", &[area], done("sol", TaskComplexity::Low));
+            seed_task(
+                &fixture,
+                "clean opus",
+                &[area],
+                done("opus", TaskComplexity::Low),
+            );
+            seed_task(
+                &fixture,
+                "clean sol",
+                &[area],
+                done("sol", TaskComplexity::Low),
+            );
+
+            // A classified review finding whose fix landed in the store
+            // with a test and a doc, though it declared the dashboard.
+            let reviewed = seed_task(
+                &fixture,
+                "review finding",
+                &["crates/orbit-web/src/view.rs"],
+                TaskAddParams {
+                    relations: classified_link(
+                        &hard,
+                        Some(RegressionClassification {
+                            nature: RegressionNature::BrokeExisting,
+                            escape: RegressionEscape::NoTest,
+                        }),
+                    ),
+                    tags: vec!["delivery-code-review".into()],
+                    crew: Some("sol".into()),
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                },
+            );
+            land(
+                &fixture,
+                &repo,
+                &reviewed,
+                &[
+                    "crates/orbit-store/src/rows.rs",
+                    "crates/orbit-store/tests/rows.rs",
+                    "docs/rows.md",
+                ],
+                now,
+            );
+            // An explicitly unclassified QA finding, read off its footprint.
+            let swept = seed_task(
+                &fixture,
+                "qa finding",
+                &["crates/orbit-web/assets/view.js"],
+                TaskAddParams {
+                    relations: classified_link(
+                        &hard,
+                        Some(RegressionClassification {
+                            nature: RegressionNature::Unclassified,
+                            escape: RegressionEscape::Unclassified,
+                        }),
+                    ),
+                    tags: vec!["qa-sweep:dashboard".into()],
+                    ..Default::default()
+                },
+            );
+            // An operator's link stored without a classification.
+            let filed = seed_task(
+                &fixture,
+                "operator finding",
+                &["docs/guide.md"],
+                TaskAddParams {
+                    relations: classified_link(&low, None),
+                    origin: Some(TaskOrigin::OperatorRequest),
+                    ..Default::default()
+                },
+            );
+
+            let server = fixture.server(false);
+            let analytics = |filter: &str| {
+                json_ok(server.get(&format!(
+                    "/api/codebase/analytics?{WS}&window=30d&min_support=1{filter}"
+                )))
+            };
+            let payload = analytics("");
+            let section = &payload["regressions"];
+            assert_eq!(
+                (
+                    &section["links"],
+                    &section["matching_links"],
+                    &section["regressed"]
+                ),
+                (&json!(3), &json!(3), &json!(2)),
+                "{section}"
+            );
+            let counts = |pairs: &[(&str, u64)]| -> Vec<(String, u64)> {
+                pairs
+                    .iter()
+                    .map(|(value, count)| (value.to_string(), *count))
+                    .collect()
+            };
+            assert_eq!(
+                breakdown(section, "nature"),
+                counts(&[("broke_existing", 1), ("unclassified", 1), ("absent", 1)]),
+                "a link without a payload is absent, not unclassified"
+            );
+            assert_eq!(
+                breakdown(section, "escape"),
+                counts(&[("no_test", 1), ("unclassified", 1), ("absent", 1)])
+            );
+            assert_eq!(
+                breakdown(section, "layer"),
+                counts(&[("docs_skills", 1), ("dashboard", 1), ("store_migration", 1)]),
+                "landed paths beat the footprint; tests and docs only support a fix"
+            );
+            assert_eq!(
+                breakdown(section, "detected_by"),
+                counts(&[("delivery_review", 1), ("qa_sweep", 1), ("operator", 1)])
+            );
+            let links: Vec<Value> = section["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["path"] == area)
+                .unwrap()["regressed_tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|task| task["regressions"].as_array().unwrap().clone())
+                .collect();
+            let sources: Vec<(&str, &str)> = links
+                .iter()
+                .map(|link| {
+                    (
+                        link["task_id"].as_str().unwrap(),
+                        link["layer_source"].as_str().unwrap(),
+                    )
+                })
+                .collect();
+            for (task, source) in [
+                (&reviewed, "landed"),
+                (&swept, "footprint"),
+                (&filed, "footprint"),
+            ] {
+                assert!(sources.contains(&(task.as_str(), source)), "{sources:?}");
+            }
+            assert_eq!(
+                section["cross_tabs"]["nature_escape"],
+                json!({
+                    "row": "nature", "column": "escape",
+                    "rows": ["broke_existing", "unclassified", "absent"],
+                    "columns": ["no_test", "unclassified", "absent"],
+                    "counts": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                })
+            );
+            assert_eq!(
+                section["cross_tabs"]["escape_layer"]["columns"],
+                json!(["docs_skills", "dashboard", "store_migration"])
+            );
+            assert_eq!(
+                slice_rows(section, "crew"),
+                vec![("opus".into(), 1, 2), ("sol".into(), 1, 3)],
+                "a crew's rate is its done tasks with a regression"
+            );
+            let tiers = slice_rows(section, "complexity");
+            assert_eq!(tiers[0], ("hard".into(), 1, 1), "{tiers:?}");
+            assert!(tiers.contains(&("low".into(), 1, 3)), "{tiers:?}");
+            assert_eq!(rate_of(section, area), (2, 4));
+
+            // A filter narrows the path rate, the rates and the cross-tabs;
+            // each breakdown still counts its own dimension's other values.
+            let payload = analytics("&nature=broke_existing");
+            let section = &payload["regressions"];
+            assert_eq!(
+                payload["regression_filter"],
+                json!({"nature": "broke_existing", "escape": null, "layer": null, "detected_by": null})
+            );
+            assert_eq!(rate_of(section, area), (1, 4));
+            assert_eq!(
+                (&section["matching_links"], &section["regressed"]),
+                (&json!(1), &json!(1))
+            );
+            assert_eq!(breakdown(section, "nature").len(), 3, "{section}");
+            assert_eq!(
+                breakdown(section, "detected_by"),
+                counts(&[("delivery_review", 1)])
+            );
+            assert!(slice_rows(section, "crew").contains(&("sol".into(), 0, 3)));
+            assert_eq!(
+                section["cross_tabs"]["nature_escape"]["counts"],
+                json!([[1]])
+            );
+
+            // The detail lists only the regressed tasks and links that match.
+            let detail = fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.show",
+                    json!({ "path": area, "window": "30d", "min_support": 1, "detected_by": "operator" }),
+                )
+                .unwrap();
+            assert_eq!(detail["regression_filter"]["detected_by"], "operator");
+            let standing = &detail["rankings"]["regressions"];
+            assert_eq!(standing["numerator"], 1, "{detail}");
+            let tasks = standing["tasks"].as_array().unwrap();
+            assert_eq!(tasks.len(), 1, "{detail}");
+            assert_eq!(tasks[0]["task_id"], low.as_str());
+            assert_eq!(tasks[0]["regression_tasks"], json!([filed]));
+            assert_eq!(tasks[0]["regressions"][0]["nature"], "absent");
+
+            let bad = server.get(&format!("/api/codebase/analytics?{WS}&layer=frontend"));
+            assert_eq!(bad.status(), 400, "an unknown layer is refused");
+            let bad = fixture
+                .runtime
+                .run_tool("orbit.codebase.analytics", json!({ "escape": "missed" }));
+            assert!(matches!(bad, Err(OrbitError::InvalidInput(_))), "{bad:?}");
         },
     );
 }

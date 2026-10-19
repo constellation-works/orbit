@@ -10,7 +10,7 @@
 //! requests (the dashboard) caches the facts and slices every window,
 //! threshold and rollup from them; the CLI and the tool scan once per call.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -31,6 +31,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+use super::regression::{PendingLink, RegressionLink};
 use crate::OrbitRuntime;
 
 /// Lock-conflict denials read per scan. Audit rows are pruned by retention,
@@ -164,6 +165,8 @@ pub(super) struct TaskFacts {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) crew: Option<String>,
+    /// The assessed complexity, as its tier name.
+    pub(super) complexity: Option<String>,
     pub(super) status: TaskStatus,
     /// The declared footprint: `context_files`, widened selectors included.
     pub(super) footprint: Vec<Anchor>,
@@ -179,8 +182,9 @@ pub(super) struct TaskFacts {
     pub(super) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
     /// Each entry into `blocked`, with its classified cause.
     pub(super) blocks: Vec<Block>,
-    /// Distinct tasks whose `regression_from` relation targets this task.
-    pub(super) regressed_by: BTreeSet<String>,
+    /// The `regression_from` links that target this task, one per
+    /// regression task, by its ID.
+    pub(super) regressions: Vec<super::regression::RegressionLink>,
     /// When the task entered a status other than `backlog`, ascending: each
     /// ends any lock wait in progress, since only a backlog task is admitted.
     pub(super) left_backlog: Vec<DateTime<Utc>>,
@@ -230,14 +234,18 @@ pub(super) fn scan(
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
 
-    let mut regressed_by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut pending_links = Vec::new();
     for task in &tasks {
         for relation in &task.relations {
             if relation.relation_type == TaskRelationType::RegressionFrom {
-                regressed_by
-                    .entry(relation.target.to_string())
-                    .or_default()
-                    .insert(task.id.to_string());
+                pending_links.push(PendingLink::new(
+                    relation.target.to_string(),
+                    task.id.to_string(),
+                    relation.regression,
+                    task.created_by.as_deref(),
+                    task.origin,
+                    &task.tags,
+                ));
             }
         }
     }
@@ -324,10 +332,13 @@ pub(super) fn scan(
             delivery_at,
             pilot,
             no_diff,
-            regressed_by: regressed_by.remove(&id).unwrap_or_default(),
+            regressions: Vec::new(),
             id,
             title: task.title,
             crew: task.crew.or(task.implemented_by),
+            complexity: task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
             status: task.status,
             footprint,
             updated_at: task.updated_at,
@@ -338,6 +349,29 @@ pub(super) fn scan(
             blocks,
             left_backlog,
         });
+    }
+
+    // A link's layer reads its regression task's landed paths, known only
+    // once every task is scanned.
+    let index: BTreeMap<String, usize> = facts
+        .iter()
+        .enumerate()
+        .map(|(at, task)| (task.id.clone(), at))
+        .collect();
+    let mut links: BTreeMap<String, Vec<RegressionLink>> = BTreeMap::new();
+    for pending in pending_links {
+        let fix = index.get(&pending.task_id).map(|at| &facts[*at]);
+        let regressed = pending.regressed.clone();
+        links
+            .entry(regressed)
+            .or_default()
+            .push(pending.resolve(fix));
+    }
+    for (regressed, mut task_links) in links {
+        if let Some(at) = index.get(&regressed) {
+            task_links.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+            facts[*at].regressions = task_links;
+        }
     }
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();

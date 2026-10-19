@@ -3,15 +3,19 @@
 //!
 //! The scan and rankings are the core codebase analytics service, shared with
 //! `orbit codebase` and the `orbit.codebase.*` tools. One scan per workspace
-//! runtime is cached for [`CODEBASE_ANALYTICS_TTL`]. Analytics uses history
-//! receipts only; related-file scans have a separate cache entry per window
-//! so delivery fallback never observes tasks outside the requested window.
+//! runtime is cached for [`CODEBASE_ANALYTICS_TTL`]; the window, minimum
+//! support, rollup and regression filters (`nature`, `escape`, `layer`,
+//! `detected_by`; an unknown value is a 400) only slice the cached facts, so
+//! changing them or polling inside the cache period never rescans task
+//! bundles. Analytics uses history receipts only; related-file scans have a
+//! separate cache entry per window so delivery fallback never observes tasks
+//! outside the requested window.
 
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::codebase::{self, CodebaseQuery};
+use orbit_core::application::codebase::{self, CodebaseQuery, RegressionFilter};
 use serde::Deserialize;
 
 use super::{bad_request, map_runtime_error};
@@ -30,6 +34,15 @@ pub(super) struct CodebaseAnalyticsQuery {
     /// `file` (default), `dir` or `crate`.
     #[serde(default)]
     rollup: Option<String>,
+    /// Regression filters: a nature, escape, fix layer or detector.
+    #[serde(default)]
+    nature: Option<String>,
+    #[serde(default)]
+    escape: Option<String>,
+    #[serde(default)]
+    layer: Option<String>,
+    #[serde(default)]
+    detected_by: Option<String>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -41,11 +54,20 @@ pub(super) async fn codebase_analytics(
     Ws(runtime): Ws,
     Query(query): Query<CodebaseAnalyticsQuery>,
 ) -> Response {
-    let query = match CodebaseQuery::parse(
+    let selection = CodebaseQuery::parse(
         query.window.as_deref(),
         query.min_support,
         query.rollup.as_deref(),
-    ) {
+    )
+    .and_then(|selection| {
+        Ok(selection.with_regression_filter(RegressionFilter::parse(
+            query.nature.as_deref(),
+            query.escape.as_deref(),
+            query.layer.as_deref(),
+            query.detected_by.as_deref(),
+        )?))
+    });
+    let query = match selection {
         Ok(query) => query,
         Err(orbit_core::OrbitError::InvalidInput(message)) => return bad_request(message),
         Err(error) => return map_runtime_error(error),
