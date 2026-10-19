@@ -27,6 +27,7 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
         |sandbox| {
             for case in [
                 "prior_write",
+                "later_write",
                 "prior_action",
                 "other_failed",
                 "cancelled",
@@ -58,7 +59,7 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                 in_fresh_row(sandbox, |row| {
                     let mut source: Value = serde_yaml::from_str(SOURCE).unwrap();
                     match case {
-                        "prior_write" | "prior_action" | "safe_prior_read" => {
+                        "prior_write" | "later_write" | "prior_action" | "safe_prior_read" => {
                             let step = match case {
                                 "prior_action" => {
                                     json!({"name":"Setup","uses":"actions/checkout@deadbeef"})
@@ -70,10 +71,12 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                                     json!({"name":"Setup","run":"gh api --method POST repos/example/issues"})
                                 }
                             };
-                            source["jobs"]["state"]["steps"]
-                                .as_array_mut()
-                                .unwrap()
-                                .insert(0, step);
+                            let steps = source["jobs"]["state"]["steps"].as_array_mut().unwrap();
+                            if case == "later_write" {
+                                steps.push(step);
+                            } else {
+                                steps.insert(0, step);
+                            }
                         }
                         "other_failed" => {
                             source["jobs"]["writer"] = json!({"name":"Writer","runs-on":"ubuntu-latest","steps":[{"run":"gh api -X DELETE repos/example/issues/42"}]});
