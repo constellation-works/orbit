@@ -239,7 +239,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
-      await page.locator('#tasks-body [data-key="task-SCOPE-1"] > .title').click();
+      await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
       await page.locator('button.claim-action.approve').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'visible' });
       await page.locator('input.claim-reason[data-reason-for="revoke"]').fill('Scope regression');

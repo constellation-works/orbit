@@ -47,7 +47,7 @@ const boot = async () => page.evaluate(async () => {
   initTaskCreate({ getWorkspaces: () => window.fixtureWorkspaces });
   document.querySelector('.tab-pane[data-tab="tasks"]').classList.add('active');
 });
-const open = () => page.getByRole('button', { name: 'Create Task', exact: true }).click();
+const open = () => page.getByRole('button', { name: 'New task', exact: true }).click();
 const fill = async title => {
   await page.getByLabel('Title', { exact: true }).fill(title);
   await page.getByLabel('Description', { exact: true }).fill('A human draft that must survive errors');
@@ -148,7 +148,7 @@ try {
   await full.goto(`${origin}/#tasks`);
   await full.waitForFunction(() => document.querySelector('#task-create-open')?.getAttribute('aria-expanded') === 'false');
   await full.waitForFunction(async () => (await import('/static/js/common.js')).getWorkspace() === 'ws_http_fixture');
-  await full.getByRole('button', { name: 'Create Task', exact: true }).click();
+  await full.getByRole('button', { name: 'New task', exact: true }).click();
   await full.waitForFunction(() => document.querySelectorAll('#task-create-workspace option').length > 1);
   assert.ok(await full.getByLabel('Title', { exact: true }).isVisible());
   await full.getByRole('button', { name: 'Cancel', exact: true }).click();

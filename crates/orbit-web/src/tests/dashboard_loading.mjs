@@ -510,7 +510,7 @@ for (const origin of ['detail', 'row']) {
   const detailShip = () => node(`detail-${shipFixture.id}`)?.querySelector('.action.ship');
   const openDetail = async () => {
     if (!detailShip()) {
-      click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] > .title`));
+      click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] .title`));
       // Task disclosure may use a view transition; wait for the rendered
       // detail instead of assuming five microtasks outlast its animation.
       for (let attempt = 0; attempt < 50 && !detailShip(); attempt++) {

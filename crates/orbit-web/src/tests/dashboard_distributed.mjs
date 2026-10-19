@@ -188,8 +188,10 @@ globalThis.fetch = async (path, options = {}) => {
 
 const distributed = await import("./js/distributed.js");
 const {
+  buildAttentionCallout,
   buildDistributedBlock,
   buildExecutionProvenance,
+  claimAttention,
   invalidateDistributedConsole,
   formatExecutionLocation,
   CONSOLE_TTL_MS,
@@ -1034,6 +1036,43 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   consoleBody = console_([stopped]);
   block = await mount();
   assert.ok(!button(block, "Retry landing"), "ordinary live work cannot be retried");
+}
+
+// A stopped landing raises the detail's attention callout, read from the same
+// claim read the panel paints; live or landed work raises none.
+{
+  const calloutFor = async (claims) => {
+    consoleBody = console_(claims);
+    let callout = "unread";
+    await mount("ORB-2", {
+      onClaims: (read) => { callout = buildAttentionCallout(claimAttention(read), { onRetry: () => {} }); },
+    });
+    return callout;
+  };
+  const stopped = claim();
+  stopped.handoff.authority.state = "authorized";
+  stopped.handoff.landing = {
+    state: "stopped", attempt: 2, summary: "stopped with durable evidence",
+    evidence: JSON.stringify({
+      schema_version: 1, kind: "owner_landing_refusal",
+      reason: { value: "pull request #7 cannot be merged (status check 'Test shard 1/3' failed); classified `candidate`: 'Test shard 1/3' (candidate) failed with signature `audit_gc_keeps_denials`; log excerpt:\npanicked" },
+    }),
+  };
+  const raised = await calloutFor([stopped]);
+  assert.ok(raised && raised.dataset.attention === "landing-stopped", "a stopped landing raises the callout");
+  const named = Array.from(raised.querySelectorAll(".mono")).map((node) => node.textContent);
+  assert.ok(named.includes("Test shard 1/3") && named.includes("audit_gc_keeps_denials"), `the callout names the failed check and test: ${named}`);
+  assert.ok(Array.from(raised.querySelectorAll("button")).some((node) => node.textContent.includes("Retry landing")), "an authorized stop offers the retry");
+  const plain = claim();
+  plain.handoff.authority.state = "authorized";
+  plain.handoff.landing = { state: "stopped", attempt: 1, evidence: "required review" };
+  const unparsed = await calloutFor([plain]);
+  assert.ok(unparsed && /required review/i.test(unparsed.textContent), `plain-text evidence still explains the stop: ${unparsed && unparsed.textContent}`);
+  const live = claim();
+  live.handoff.authority.state = "authorized";
+  live.handoff.landing = { state: "dispatched", attempt: 3, summary: "an owner landing job is carrying this handoff" };
+  assert.equal(await calloutFor([live]), null, "a landing in progress raises no callout");
+  assert.equal(await calloutFor([claim()]), null, "a handoff awaiting approval raises no callout");
 }
 
 // --- a settled claim is history, not a warning ---------------------------------

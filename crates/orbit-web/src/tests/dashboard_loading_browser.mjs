@@ -242,7 +242,7 @@ async function assertRowKeyboard(page) {
   if (nestedTasks.length) throw new Error(`Task rows nest controls in a button: ${nestedTasks.join('\n')}`);
   const keys = await page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').evaluateAll(rows => rows.map(row => row.dataset.key));
   if (keys.length < 4) throw new Error(`Row keyboard check needs several task rows, got ${keys.length}`);
-  const title = key => page.locator(`#tasks-body [data-key="${key}"] > .title`);
+  const title = key => page.locator(`#tasks-body [data-key="${key}"] .title`);
   if (await title(keys[0]).evaluate(node => node.tagName) !== 'BUTTON') throw new Error('Task title must be the row disclosure button');
   if (await page.locator('#tasks-body .row[role]').count()) throw new Error('Task rows must not carry a role of their own');
 
@@ -307,7 +307,7 @@ async function assertRowKeyboard(page) {
     };
     document.getElementById('refresh-btn').click();
   });
-  await page.waitForFunction(key => document.querySelector(`#tasks-body [data-key="${key}"] > .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
+  await page.waitForFunction(key => document.querySelector(`#tasks-body [data-key="${key}"] .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
   await expectFocus(keys[2], 'Refresh restores focus to the rebuilt disclosure');
   if (await page.evaluate(() => document.activeElement === globalThis.rowBeforeRefresh)) {
     throw new Error('The refresh check must rebuild the focused row for it to mean anything');
@@ -318,7 +318,7 @@ async function assertRowKeyboard(page) {
     delete globalThis.rowBeforeRefresh;
     document.getElementById('refresh-btn').click();
   });
-  await page.waitForFunction(key => !document.querySelector(`#tasks-body [data-key="${key}"] > .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
+  await page.waitForFunction(key => !document.querySelector(`#tasks-body [data-key="${key}"] .title`)?.textContent.endsWith('(refreshed)'), keys[2]);
 
   await page.keyboard.press('/');
   await expectFocus('task-search', '/ focuses the task search');
@@ -1393,6 +1393,11 @@ try {
       await assertVisibleTaskRow(page, viewport, 'page 2');
       await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}-page-2.png`), fullPage: true });
     }
+    // Closed statuses wait behind More, a disclosure that controls their group.
+    const more = page.locator('#task-filter .chip-more');
+    if (await page.locator('#task-filter .chip[data-status="done"]').isVisible()) throw new Error('An unpressed Done chip must wait behind More');
+    await more.click();
+    if (await more.getAttribute('aria-expanded') !== 'true') throw new Error('More must report itself expanded once open');
     await page.locator('#task-filter .chip[data-status="done"]').click();
     await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
     await page.locator('#task-filter .chip[data-role="all"]').click();

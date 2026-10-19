@@ -281,7 +281,7 @@ try {
   assert(await page.locator('#host-announcer').getAttribute('aria-live') === 'polite', 'announcements are polite');
   await until('the log stream on hostb', () => logged(/^GET \/api\/on\/hostb\/log\/stream\?/));
   await until('host resources on hostb', () => logged(/^GET \/api\/on\/hostb\/host\/resources$/));
-  await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
+  await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
   await page.locator('#task-detail-body').getByRole('tab', { name: /^Artifacts/ }).click();
   await page.locator('.artifact-row').first().click();
   await page.locator('.artifact-preview', { hasText: 'hello from hostb' }).waitFor({ state: 'visible' });
@@ -427,12 +427,12 @@ try {
   }
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
   assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
-  await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
+  await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
   const claimLink = page.locator('.distributed-block a.remote-run-link');
   await claimLink.waitFor({ state: 'visible' });
   assert(await claimLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit&window=7d#runs?run_id=jrun-claim-1', 'the claim panel links to the run on hostb');
-  await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
-  await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] > .title').click();
+  await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
+  await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] .title').click();
   await page.locator('.distributed-block .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
   assert(await page.locator('.distributed-block a.remote-run-link').count() === 0, 'an unregistered claim machine stays text');
   routeLog = [];
@@ -451,7 +451,7 @@ try {
   const quick = taskRow('hostb-NEW').locator('.task-quick.approve');
   assert(await quick.isDisabled(), 'the quick action is disabled on a read-only host');
   assert((await quick.getAttribute('title')).includes(READ_ONLY_REASON), 'the disabled quick action says why');
-  await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
+  await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
   await page.locator('.host-read-only-note').waitFor({ state: 'visible' });
   assert(await page.locator('#task-detail-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });

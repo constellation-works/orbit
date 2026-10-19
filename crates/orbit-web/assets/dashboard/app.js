@@ -18,7 +18,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
+import { drainHolderCounts, fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -379,9 +379,19 @@ function renderBodyBlock(body, fallbackClass) {
   ]);
 }
 
+// The last locks read and the workspace it belongs to.
+let lastLocks = null;
+
 function renderLocksPanel(payload) {
-  // The In progress rows count each task's locked files from the same read.
+  // The In progress rows count each task's locked files from the same read,
+  // and the Drain summary and wait rows read it too.
   setTaskLocks(payload);
+  setDrainLocks(payload);
+  lastLocks = { payload, workspace: getWorkspace() };
+  paintLocksPanel(payload);
+}
+
+function paintLocksPanel(payload) {
   const body = $("locks-body");
   const count = $("locks-count");
   if (!body || !count) return;
@@ -392,7 +402,7 @@ function renderLocksPanel(payload) {
   const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
     ? Number(payload.total_tasks)
     : byTask.length;
-  count.textContent = `${totalLocked} files · ${totalTasks} tasks`;
+  count.textContent = `${totalLocked} ${totalLocked === 1 ? "file" : "files"} · ${totalTasks} ${totalTasks === 1 ? "task" : "tasks"}`;
 
   if (byTask.length === 0) {
     const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
@@ -402,35 +412,51 @@ function renderLocksPanel(payload) {
     return;
   }
 
-  // One line per task: who holds the locks, its status, how many paths and
-  // which run. The paths themselves fold away, and stay open across refreshes
-  // once opened, so a dozen tasks never bury the dock in file paths.
+  // One row per task: who holds the locks, its status, how many paths and how
+  // many waiting tasks it holds back, then its title and run. The paths fold
+  // away and stay open across refreshes once opened, so a dozen tasks never
+  // bury the card in file paths. The task link sits outside the disclosure
+  // (a link cannot live in a summary); an invisible copy of the id keeps its
+  // place in the row, and the link is laid over it.
+  const blocking = drainHolderCounts();
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
     const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const blocks = blocking.get(taskId) || 0;
+    const title = typeof task.title === "string" ? task.title.trim() : "";
     const group = el("div", { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
-    group.dataset.hash = JSON.stringify(task);
+    group.dataset.hash = JSON.stringify([task, blocks]);
     const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
 
     const idButton = el("a", {
       class: "lock-task-id mono",
       text: taskId,
-      title: `Open ${taskId} in the task list`,
+      title: title ? `Open ${taskId}: ${title}` : `Open ${taskId} in the task list`,
     });
     // Locks live on Drain, so opening a task must navigate to Tasks too.
     bindTaskLink(idButton, taskId);
 
     const header = el("summary", { class: "lock-task-header" }, [
+      el("span", { class: "lock-task-id-space mono", text: taskId, "aria-hidden": "true" }),
       statusPill(task.status || "unknown"),
       el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
+      blocks > 0 ? el("span", {
+        class: "lock-blocks",
+        text: `blocks ${blocks}`,
+        title: `${blocks} waiting ${blocks === 1 ? "task waits" : "tasks wait"} on ${taskId}`,
+      }) : null,
     ]);
-    if (task.job_run_id) {
-      header.appendChild(el("span", {
-        class: "lock-job mono",
-        text: shortRunId(task.job_run_id),
-        title: `job_run=${task.job_run_id}`,
-      }));
+    const job = task.job_run_id ? el("span", {
+      class: "lock-job mono",
+      text: shortRunId(task.job_run_id),
+      title: `job_run=${task.job_run_id}`,
+    }) : null;
+    if (title || job) {
+      header.appendChild(el("span", { class: "lock-task-meta" }, [
+        title ? el("span", { class: "lock-task-title", text: title, title }) : null,
+        job,
+      ]));
     }
     details.appendChild(header);
 
@@ -1879,6 +1905,8 @@ const tasksContext = taskContext();
 // rows when it changes what they say about a backlog task's wait.
 onDrainReadinessChange(() => {
   if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  // Each lock row counts the waiting tasks it holds back.
+  if (lastLocks && lastLocks.workspace && lastLocks.workspace === getWorkspace()) paintLocksPanel(lastLocks.payload);
 });
 // Run start times and file locks arrive apart from the task list too.
 onTaskRuntimeChange(() => {

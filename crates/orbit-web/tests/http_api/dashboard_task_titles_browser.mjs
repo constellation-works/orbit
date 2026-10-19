@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// A long title, one that fits, and one with no break opportunity at all.
+// A long title, one that fits, and one with no break opportunity at all, long
+// enough to overflow the full-width title column at 1440px.
 const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel. '.repeat(2).trim();
-const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(8)];
+const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(12)];
 
 // Runs inside the full dashboard browser harness, with its full-width Tasks page.
 export async function assertTaskTitleLayout(page, evidence) {
@@ -111,10 +112,11 @@ export async function assertTaskTitleLayout(page, evidence) {
       measurements.push(measured);
       const fail = reason => { throw new Error(`${reason}: ${JSON.stringify(measured)}`); };
       if (layout.horizontalOverflow) fail('Task rows must not scroll sideways');
-      // Rows keep one height whatever the title length or badges, and the
-      // desktop row is compact because no title reserves a second line.
+      // Rows keep one height whatever the title length or badges. A desktop
+      // row is two lines by design (the title, then the full ID and its wait or
+      // run), so it stays compact at 56px: no title reserves a third line.
       if (Math.max(...layout.heights) - Math.min(...layout.heights) > 1) fail('Task rows must have a consistent height');
-      if (!layout.stacked && Math.max(...layout.heights) > 46.5) fail('A desktop task row must stay compact (46px at most)');
+      if (!layout.stacked && Math.max(...layout.heights) > 56.5) fail('A desktop task row is two fixed lines, title then ID, so it stays compact (56px at most)');
       for (const title of layout.titles) {
         if (title.whiteSpace !== 'nowrap' || title.textLines !== 1) fail(`Task title ${title.id} must render on a single line`);
         if (title.contentHeight >= title.characterHeight * 1.5) fail(`Task title ${title.id} must be one line box tall`);
