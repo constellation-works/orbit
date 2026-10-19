@@ -190,7 +190,11 @@ fn read_file_lock_holder_fifo_reader_child() {
             .status()
             .expect("start mkfifo");
         assert!(status.success(), "mkfifo must succeed: {status}");
-        std::fs::write(&stage_path, "fifo-ready").expect("report FIFO setup completion");
+        // Publish readiness by rename: `fs::write` truncates the stage file
+        // before it writes, so the parent could poll and read it empty.
+        let staged_path = format!("{stage_path}.tmp");
+        std::fs::write(&staged_path, "fifo-ready").expect("stage FIFO setup completion");
+        std::fs::rename(&staged_path, &stage_path).expect("report FIFO setup completion");
     });
 
     if std::env::var_os("ORBIT_FIFO_READER_UNSAFE_BLOCKING_OPEN").is_some() {
