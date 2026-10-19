@@ -1,5 +1,5 @@
 use crate::OrbitRuntime;
-use crate::application::codebase::CodebaseQuery;
+use crate::application::codebase::{CodebaseQuery, RegressionFilter};
 use orbit_common::{
     OrbitError,
     governance::{codebase::CodebaseVerb, operation::OperationVerb},
@@ -16,7 +16,13 @@ pub(super) fn dispatch(
         input.optional_string("window")?.as_deref(),
         input.optional_count("min_support")?,
         input.optional_string("rollup")?.as_deref(),
-    )?;
+    )?
+    .with_regression_filter(RegressionFilter::parse(
+        input.optional_string("nature")?.as_deref(),
+        input.optional_string("escape")?.as_deref(),
+        input.optional_string("layer")?.as_deref(),
+        input.optional_string("detected_by")?.as_deref(),
+    )?);
     match verb {
         CodebaseVerb::Related => runtime.codebase_related(
             &query,

@@ -423,6 +423,54 @@ tr.audit-detail-row td {
 .codebase-crew-row .codebase-frac { min-width: 0; }
 .codebase-pair-line { margin: 0; font-size: 13.5px; color: #c4cbd4; }
 
+/* Regressions: a chip row per dimension that filters the ranking, the
+   nature x escape and escape x layer cross-tabs, and crew and complexity
+   rates. A cross-tab cell's shade is its `data-level` (0-4) against the
+   table's largest count. */
+.codebase-tile-foot.filter { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb0a6; }
+.codebase-definitions { margin-top: 4px; max-width: 720px; font-size: 12.5px; color: var(--fg-dim); }
+.codebase-definitions > summary { cursor: pointer; color: var(--accent); }
+.codebase-definitions-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 8px 0 0; }
+.codebase-definitions-list dt { font-weight: 600; color: #c4cbd4; }
+.codebase-definitions-list dd { margin: 0; line-height: 1.5; }
+.codebase-facets { display: flex; flex-direction: column; gap: 8px; margin: 0 16px 12px; padding: 12px 14px; border: 1px solid #262c35; border-radius: 10px; background: #15191f; }
+.codebase-facet-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.codebase-facet-label { flex: 0 0 100%; font-size: 12px; font-weight: 600; color: var(--fg-mute); }
+.codebase-facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #262c35;
+  border-radius: 999px;
+  background: #191e25;
+  color: #c4cbd4;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.codebase-facet:hover { border-color: #3a424d; }
+.codebase-facet.on { border-color: #ff7a6b; background: rgba(255, 122, 107, 0.14); color: var(--fg); }
+.codebase-tag.dim { font-weight: 500; }
+.codebase-link-dims > .codebase-extra { font-family: var(--font-mono); }
+.codebase-breakdowns { display: flex; flex-direction: column; gap: 16px; padding: 14px 16px 16px; border-top: 1px solid var(--hair); }
+.codebase-crosstabs { display: flex; flex-direction: column; gap: 16px; }
+.codebase-slices { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.codebase-crosstab-block,
+.codebase-slice { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.codebase-crosstab-scroll { overflow-x: auto; }
+.codebase-crosstab { border-collapse: collapse; font-size: 12px; }
+.codebase-crosstab th { padding: 4px 8px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; white-space: nowrap; }
+.codebase-crosstab thead th { min-width: 48px; vertical-align: bottom; text-align: center; white-space: normal; }
+.codebase-crosstab td { min-width: 40px; padding: 5px 8px; border: 1px solid #1f252d; font-family: var(--font-mono); text-align: center; color: var(--fg-dim); }
+.codebase-crosstab td[data-level="1"] { background: rgba(255, 122, 107, 0.12); color: var(--fg); }
+.codebase-crosstab td[data-level="2"] { background: rgba(255, 122, 107, 0.24); color: var(--fg); }
+.codebase-crosstab td[data-level="3"] { background: rgba(255, 122, 107, 0.4); color: var(--fg); }
+.codebase-crosstab td[data-level="4"] { background: rgba(255, 122, 107, 0.6); color: #fff; font-weight: 600; }
+.codebase-slice .codebase-crew-row { grid-template-columns: minmax(64px, 120px) minmax(0, 1fr) 48px 60px; }
+
 @media (max-width: 520px) {
   .codebase-head { padding: 12px; }
   .panel > .body.codebase-body { padding: 12px; gap: 12px; }
@@ -438,6 +486,9 @@ tr.audit-detail-row td {
   .codebase-list > .codebase-causebar,
   .codebase-list > .codebase-legend,
   .codebase-list > .codebase-not-failure { margin: 0 12px 12px; }
+  .codebase-facets { margin: 0 12px 12px; }
+  .codebase-breakdowns { padding: 12px; }
+  .codebase-slices { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Reliability > Tools summary: one column of cards. On a wide screen the

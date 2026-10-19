@@ -17,7 +17,34 @@ const $ = (id) => document.getElementById(id);
 const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
-const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file" };
+// The dimensions a regression is broken down and filtered by, each value in
+// the server's breakdown order. `absent` (a link stored without a
+// classification) and `unclassified` (the filer could not tell) stay apart.
+const REGRESSION_DIMENSIONS = [
+  { key: "nature", label: "Nature", values: ["broke_existing", "defect_in_new", "incomplete", "merge_reintroduced", "contract_drift", "unclassified", "absent"] },
+  { key: "escape", label: "Escape", values: ["no_test", "test_not_selected", "platform_only", "review_missed", "spec_ambiguous", "nondeterministic", "unclassified", "absent"] },
+  { key: "layer", label: "Layer", values: ["ci_tests", "docs_skills", "dashboard", "sandbox_policy", "store_migration", "vcs_delivery", "config", "cli_mcp", "runtime_lifecycle", "other", "unknown"] },
+  { key: "detected_by", label: "Detected by", values: ["delivery_review", "security_review", "code_review", "qa_sweep", "post_merge_ci", "production_run", "operator", "other"] },
+];
+const VALUE_LABELS = {
+  broke_existing: "broke existing", defect_in_new: "defect in new code", merge_reintroduced: "merge reintroduced",
+  contract_drift: "contract drift", no_test: "no test", test_not_selected: "test not selected", platform_only: "platform only",
+  review_missed: "review missed", spec_ambiguous: "spec ambiguous", ci_tests: "CI/tests", docs_skills: "docs/skills",
+  sandbox_policy: "sandbox/policy", store_migration: "store/migration", vcs_delivery: "VCS/delivery", cli_mcp: "CLI/MCP surface",
+  runtime_lifecycle: "runtime/lifecycle", delivery_review: "delivery review", security_review: "security review",
+  code_review: "code review", qa_sweep: "QA sweep", post_merge_ci: "post-merge CI", production_run: "production run",
+};
+const valueLabel = (value) => VALUE_LABELS[value] || String(value ?? "").replace(/_/g, " ");
+// What each dimension means, shown under the Regressions definition.
+const REGRESSION_DEFINITIONS = [
+  ["Nature", "What kind of regression the regression_from link records: broke existing behavior, a defect in code the task added, an incomplete delivery, a merge that reintroduced removed code, or docs and contracts that drifted. Unclassified: the filer could not tell. Absent: the link carries no classification. Neither is guessed."],
+  ["Escape", "Why the delivery gates missed it, from the same link: no test covered it, a covering test was not selected, it shows only on another platform, review missed it, the spec was ambiguous, or it is nondeterministic. Unclassified and absent as for nature."],
+  ["Layer", "Where the fix sits: the layer most of the regression task's landed files map to, or its declared footprint until it lands. Tests and docs count only when the fix touched nothing else; unknown when it has neither. One table maps paths to layers: CI/tests, docs/skills, dashboard, sandbox/policy, store/migration, VCS/delivery, config, CLI/MCP surface, runtime/lifecycle, else other."],
+  ["Detected by", "Who found it, from the regression task's tags: delivery review, security review, code review, QA sweep, post-merge CI (CI failure sweep and CI repairs) or production run (run failure patterns); otherwise operator when an operator filed it, else other."],
+  ["Counts", "A chip counts links under the other dimensions' filters, so it shows what choosing it would leave. The cross-tabs count links under every filter. A crew's or complexity tier's rate is its done tasks with a matching regression ÷ its done tasks in the window (crew, else the implementer), listed when it has the minimum support. Filters narrow the path ranking and the detail too."],
+];
+const DEFAULT_FILTER = Object.fromEntries(REGRESSION_DIMENSIONS.map((dimension) => [dimension.key, null]));
+const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file", ...DEFAULT_FILTER };
 // The minimum-support stepper walks this ladder; a hashed value off it steps
 // to its neighbours.
 const SUPPORT_STEPS = [1, 2, 3, 5, 10, 15, 20, 30, 50, 100];
@@ -34,7 +61,7 @@ const PATH_RANKINGS = ["regressions", "footprint_misses", "blocked", "rejected"]
 const RANKINGS = {
   regressions: {
     label: "Regressions", short: "Regressed", unit: "done", below: "too few done tasks",
-    definition: "Done tasks that a later task named in regression_from ÷ done tasks that declared the path, for tasks done in the window.",
+    definition: "Done tasks that a later task named in regression_from ÷ done tasks that declared the path, for tasks done in the window. Each regression is broken down by nature, escape, layer and who detected it; choosing a value filters the paths, the detail and the crew and complexity rates.",
   },
   footprint_misses: {
     label: "Footprint misses", short: "Footprint", unit: "declared", below: "too few tasks",
@@ -105,7 +132,17 @@ function normalizedQuery(raw, fallback = DEFAULT_QUERY) {
   const support = Number(raw.min_support);
   const min_support = Number.isSafeInteger(support) && support >= 1 ? support : fallback.min_support;
   const rollup = ROLLUPS.includes(raw.rollup) ? raw.rollup : fallback.rollup;
-  return { window, min_support, rollup };
+  const query = { window, min_support, rollup };
+  // An omitted or cleared filter keeps every value; an unknown one falls back.
+  for (const { key, values } of REGRESSION_DIMENSIONS) {
+    const value = raw[key];
+    query[key] = value == null || value === "" ? null : values.includes(value) ? value : (fallback[key] ?? null);
+  }
+  return query;
+}
+
+function activeFilters(query = codebaseQuery) {
+  return REGRESSION_DIMENSIONS.filter((dimension) => query[dimension.key]);
 }
 
 /// Read the view's selection from an `#analytics/codebase?…` hash query.
@@ -114,6 +151,7 @@ function applyCodebaseHashQuery(query) {
     window: query.get("window"),
     min_support: query.get("min_support") ?? DEFAULT_QUERY.min_support,
     rollup: query.get("rollup"),
+    ...Object.fromEntries(REGRESSION_DIMENSIONS.map(({ key }) => [key, query.get(key)])),
   });
   syncCodebaseControls();
 }
@@ -125,6 +163,7 @@ function buildCodebaseHash() {
   if (codebaseQuery.window !== DEFAULT_QUERY.window) sp.set("window", codebaseQuery.window);
   if (codebaseQuery.min_support !== DEFAULT_QUERY.min_support) sp.set("min_support", String(codebaseQuery.min_support));
   if (codebaseQuery.rollup !== DEFAULT_QUERY.rollup) sp.set("rollup", codebaseQuery.rollup);
+  for (const { key } of activeFilters()) sp.set(key, codebaseQuery[key]);
   const qs = sp.toString();
   return qs ? `#analytics/codebase?${qs}` : "#analytics/codebase";
 }
@@ -203,6 +242,7 @@ function analyticsPath() {
   sp.set("window", codebaseQuery.window);
   sp.set("min_support", String(codebaseQuery.min_support));
   sp.set("rollup", codebaseQuery.rollup);
+  for (const { key } of activeFilters()) sp.set(key, codebaseQuery[key]);
   return `/api/codebase/analytics?${sp.toString()}`;
 }
 
@@ -472,6 +512,11 @@ function tileModels(model) {
     sub: `${count(three)} in three or more`,
     foot: `of ${plural(index.size, "ranked path")}`,
   };
+  const regressions = rateTile("regressions");
+  const filters = activeFilters(data.regression_filter || {});
+  if (filters.length) {
+    regressions.filter = `filtered: ${filters.map((dimension) => valueLabel(data.regression_filter[dimension.key])).join(" · ")}`;
+  }
   const { unclassified } = causeTotals(data);
   const blocked = { ...rateTile("blocked"), warn: unclassified > 0 ? `${plural(unclassified, "block")} unclassified` : null };
   const rejected = section(data, "rejected");
@@ -500,7 +545,7 @@ function tileModels(model) {
     sub: topPilot ? `top: ${crewName(topPilot)} · ${modelName(topPilot)}` : `${plural(pilots.assessed, "assessed task")} in this window`,
     foot: `${rowsOf(data, "task_pilot").length} ranked · ${count(pilots.below_support)} ${RANKINGS.task_pilot.below}`,
   };
-  return [overlap, rateTile("regressions"), rateTile("footprint_misses"), blocked, rejectedTile, coupling, lock, pilot];
+  return [overlap, regressions, rateTile("footprint_misses"), blocked, rejectedTile, coupling, lock, pilot];
 }
 
 function tilesNode(model) {
@@ -515,6 +560,7 @@ function tilesNode(model) {
       el("span", { class: `codebase-tile-foot${tile.tone ? ` ${tile.tone}` : ""}`, text: tile.foot }),
     ]);
     if (tile.warn) button.appendChild(el("span", { class: "codebase-tile-foot warn", text: tile.warn }));
+    if (tile.filter) button.appendChild(el("span", { class: "codebase-tile-foot filter", text: tile.filter, title: tile.filter }));
     button.dataset.tile = tile.key;
     button.addEventListener("click", () => {
       if (view.tile === tile.key) return;
@@ -592,7 +638,10 @@ function rankingContent(model, key) {
     const max = maxRejected(data);
     content.push(hint(`${plural(rejected.rejected_with_run, "task was", "tasks were")} rejected after a run in this window; ${count(rejected.excluded_without_run)} rejected at proposal are left out. The most on any one path is ${count(max)}${max <= 2 ? ", so treat this list as weak evidence." : "."}`));
   }
-  if (rows.length === 0) content.push(emptyRanking(data, key));
+  const filtered = key === "regressions" && activeFilters(data.regression_filter || {}).length > 0;
+  if (key === "regressions") content.push(regressionFilters(data));
+  if (rows.length === 0 && filtered) content.push(filteredEmpty(data));
+  else if (rows.length === 0) content.push(emptyRanking(data, key));
   else {
     content.push(rowList(rows.map((row, at) => {
       const hits = index.get(row.path) || {};
@@ -617,7 +666,160 @@ function rankingContent(model, key) {
     note(`${plural(below, "path")} below minimum support ${count(data.min_support)} ${below === 1 ? "is" : "are"} hidden.`),
     lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`),
   ]));
+  if (key === "regressions") content.push(regressionBreakdowns(data));
   return content;
+}
+
+// ---- regression breakdowns --------------------------------------------------
+
+function setFilter(key, value) {
+  updateQuery({ [key]: codebaseQuery[key] === value ? null : value });
+}
+
+function clearFiltersButton() {
+  return actionButton("Clear filters", () => updateQuery(DEFAULT_FILTER), "small");
+}
+
+/// One row of chips per dimension: every value some link takes (and the
+/// chosen one), with its link count; a chip toggles its filter.
+function regressionFilters(data) {
+  const regressions = section(data, "regressions");
+  const breakdowns = regressions.breakdowns || {};
+  const filter = data.regression_filter || {};
+  const block = el("div", { class: "codebase-facets", role: "group", "aria-label": "Filter regressions" });
+  if (!Number(regressions.links)) {
+    block.appendChild(note("No regression_from link targets a task done in this window, so there is nothing to break down or filter."));
+    return block;
+  }
+  for (const dimension of REGRESSION_DIMENSIONS) {
+    const entries = Array.isArray(breakdowns[dimension.key]) ? breakdowns[dimension.key] : [];
+    const shown = entries.filter((entry) => Number(entry.links) > 0 || entry.value === filter[dimension.key]);
+    const chips = el("span", { class: "codebase-chips" });
+    for (const entry of shown) {
+      const on = filter[dimension.key] === entry.value;
+      const chipButton = el("button", { class: `codebase-facet${on ? " on" : ""}`, type: "button", "aria-pressed": String(on) }, [
+        `${valueLabel(entry.value)} `,
+        el("span", { class: "codebase-chip-frac", text: count(entry.links) }),
+      ]);
+      chipButton.dataset.dimension = dimension.key;
+      chipButton.dataset.value = entry.value;
+      chipButton.addEventListener("click", () => setFilter(dimension.key, entry.value));
+      chips.appendChild(chipButton);
+    }
+    if (!shown.length) chips.appendChild(el("span", { class: "codebase-extra", text: "none under the other filters" }));
+    const row = el("div", { class: "codebase-facet-row" }, [el("span", { class: "codebase-facet-label", text: dimension.label }), chips]);
+    row.dataset.dimension = dimension.key;
+    block.appendChild(row);
+  }
+  const active = activeFilters(filter);
+  if (active.length) {
+    block.appendChild(el("div", { class: "codebase-facet-row" }, [
+      el("span", { class: "codebase-facet-label", text: "Filtered" }),
+      el("span", { class: "codebase-extra", text: `${count(regressions.matching_links)} of ${plural(regressions.links, "regression link")} on ${plural(regressions.regressed, "regressed task")}` }),
+      clearFiltersButton(),
+    ]));
+  }
+  return block;
+}
+
+function filteredEmpty(data) {
+  return el("div", { class: "codebase-empty-state" }, [
+    el("p", { class: "codebase-empty-title", text: "No path has a regression matching these filters." }),
+    note("Paths below the minimum support stay hidden; widen a filter or clear them all."),
+    el("div", { class: "codebase-actions" }, [clearFiltersButton(), lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`)]),
+  ]);
+}
+
+// A cell's shade, from none to the table's largest count.
+function cellLevel(value, max) {
+  if (!(value > 0) || !(max > 0)) return "0";
+  return String(Math.max(1, Math.ceil((value / max) * 4)));
+}
+
+function crossTabNode(tab, title) {
+  const rowsOfTab = Array.isArray(tab && tab.rows) ? tab.rows : [];
+  const columns = Array.isArray(tab && tab.columns) ? tab.columns : [];
+  const counts = Array.isArray(tab && tab.counts) ? tab.counts : [];
+  const block = el("div", { class: "codebase-crosstab-block" }, [el("p", { class: "codebase-eyebrow", text: title })]);
+  if (!rowsOfTab.length || !columns.length) {
+    block.appendChild(note("No regression matches these filters."));
+    return block;
+  }
+  const max = Math.max(0, ...counts.flat().map((value) => Number(value) || 0));
+  const header = (text, scope) => {
+    const cell = el("th", { text });
+    cell.setAttribute("scope", scope);
+    return cell;
+  };
+  const head = el("tr", {}, [header("", "col"), ...columns.map((column) => header(valueLabel(column), "col"))]);
+  const body = el("tbody");
+  rowsOfTab.forEach((rowValue, rowAt) => {
+    const cells = columns.map((column, columnAt) => {
+      const value = Number(counts[rowAt]?.[columnAt]) || 0;
+      const cell = el("td", { text: value ? count(value) : "·" });
+      cell.dataset.level = cellLevel(value, max);
+      cell.dataset.row = rowValue;
+      cell.dataset.column = column;
+      return cell;
+    });
+    body.appendChild(el("tr", {}, [header(valueLabel(rowValue), "row"), ...cells]));
+  });
+  const table = el("table", { class: "codebase-crosstab", "aria-label": `${title}: regression links` }, [el("thead", {}, [head]), body]);
+  table.dataset.tab = `${tab.row}_${tab.column}`;
+  block.appendChild(el("div", { class: "codebase-crosstab-scroll" }, [table]));
+  return block;
+}
+
+function sliceNode(rates, key, many, title, minSupport) {
+  const block = el("div", { class: "codebase-slice" }, [el("p", { class: "codebase-eyebrow", text: title })]);
+  const rows = Array.isArray(rates && rates.rows) ? rates.rows : [];
+  const below = Number(rates && rates.below_support) || 0;
+  if (!rows.length) {
+    block.appendChild(note(`No ${key} has ${count(minSupport)} or more done tasks in this window${below ? `; ${plural(below, key, many)} fall${below === 1 ? "s" : ""} below it` : ""}.`));
+    return block;
+  }
+  const list = el("ul", { class: "codebase-crews" });
+  for (const row of rows) {
+    const item = el("li", { class: "codebase-crew-row" }, [
+      el("span", { class: "codebase-crew-name", text: row[key] || "unassigned", title: row[key] || "unassigned" }),
+      rateBar(row.rate),
+      el("span", { class: "codebase-rate", text: pct(row.rate) }),
+      el("span", { class: "codebase-frac", text: `${count(row.numerator)}/${count(row.denominator)}` }),
+    ]);
+    item.dataset[key] = row[key] || "unassigned";
+    list.appendChild(item);
+  }
+  block.appendChild(list);
+  if (below) block.appendChild(note(`${plural(below, key, many)} below minimum support ${count(minSupport)} ${below === 1 ? "is" : "are"} hidden.`));
+  return block;
+}
+
+/// The cross-tabs and the crew and complexity rates under the path list.
+function regressionBreakdowns(data) {
+  const regressions = section(data, "regressions");
+  const tabs = regressions.cross_tabs || {};
+  const node = el("div", { class: "codebase-breakdowns" });
+  if (Number(regressions.links)) {
+    node.appendChild(el("div", { class: "codebase-crosstabs" }, [
+      crossTabNode(tabs.nature_escape, "Nature × escape"),
+      crossTabNode(tabs.escape_layer, "Escape × layer"),
+    ]));
+  }
+  node.appendChild(el("div", { class: "codebase-slices" }, [
+    sliceNode(regressions.by_crew, "crew", "crews", "Regression rate by crew", data.min_support),
+    sliceNode(regressions.by_complexity, "complexity", "complexities", "Regression rate by complexity", data.min_support),
+  ]));
+  node.appendChild(note("Rates are done tasks a matching regression named ÷ done tasks, by the regressed task's crew (else its implementer) and complexity. Crews take different complexity tiers, so compare crews within a tier."));
+  return node;
+}
+
+function definitionsNode() {
+  const list = el("dl", { class: "codebase-definitions-list" });
+  for (const [term, text] of REGRESSION_DEFINITIONS) {
+    list.appendChild(el("dt", { text: term }));
+    list.appendChild(el("dd", { text }));
+  }
+  return el("details", { class: "codebase-definitions" }, [el("summary", { text: "What nature, escape, layer and detected by mean" }), list]);
 }
 
 const CAUSE_LABELS = { run_failure: "Run failure", unclassified: "Unclassified", base_conflict: "Base conflict" };
@@ -844,6 +1046,7 @@ function listNode(model) {
         : RANKINGS[tile].definition,
     }),
   ]);
+  if (tile === "regressions") titles.appendChild(definitionsNode());
   head.appendChild(titles);
   if (tile === "change_coupling" && pairs.some((pair) => pair.expected)) {
     const toggle = actionButton("Hide expected pairs", () => {
@@ -878,7 +1081,7 @@ function listNode(model) {
       const hit = model.index.get(row.path)?.[key];
       return hit ? [key, hit.row.rate] : null;
     })) : null;
-  return keyed(node, "list", { tile, selected: model.selected, hideExpected: view.hideExpected, lockByWait: view.lockByWait, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
+  return keyed(node, "list", { tile, filter: data.regression_filter || null, selected: model.selected, hideExpected: view.hideExpected, lockByWait: view.lockByWait, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
 }
 
 // ---- detail -----------------------------------------------------------------
@@ -892,13 +1095,26 @@ function regressedTaskNode(task, regressedPaths) {
     top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task regressed several ranked paths at once" }));
   }
   const by = el("span", { class: "codebase-task-by" }, ["regressed by"]);
+  const links = Array.isArray(task.regressions) ? task.regressions : [];
+  const dimensions = [];
   for (const id of task.regression_tasks || []) {
     const regression = el("a", { class: "codebase-task-link", text: id });
     regression.setAttribute("href", taskHref(id));
     by.append(" ");
     by.appendChild(regression);
+    const link = links.find((entry) => entry.task_id === id);
+    if (!link) continue;
+    const tags = REGRESSION_DIMENSIONS.map(({ key, label }) => {
+      const tag = el("span", { class: "codebase-tag dim", text: valueLabel(link[key]), title: `${label}: ${valueLabel(link[key])}${key === "layer" && link.layer_source ? ` (from its ${link.layer_source === "landed" ? "landed diff" : link.layer_source === "footprint" ? "declared footprint" : "missing paths"})` : ""}` });
+      tag.dataset.dimension = key;
+      tag.dataset.value = link[key];
+      return tag;
+    });
+    const line = el("span", { class: "codebase-chips codebase-link-dims" }, [el("span", { class: "codebase-extra", text: id }), ...tags]);
+    line.dataset.task = id;
+    dimensions.push(line);
   }
-  const item = el("li", { class: "codebase-task" }, [top, el("span", { class: "codebase-task-title", text: task.title || "" }), by]);
+  const item = el("li", { class: "codebase-task" }, [top, el("span", { class: "codebase-task-title", text: task.title || "" }), by, ...dimensions]);
   item.dataset.task = task.task_id;
   if (wide >= WIDE_TASK_PATHS) item.dataset.wide = String(wide);
   return item;
@@ -918,6 +1134,10 @@ function regressionDetail(model, row) {
     head.appendChild(toggle);
   }
   block.appendChild(head);
+  const filters = activeFilters(model.data.regression_filter || {});
+  if (filters.length) {
+    block.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
+  }
   const shown = view.allTasks === true ? tasks : tasks.slice(0, TASKS_SHOWN);
   const list = el("ul", { class: "codebase-tasks" });
   for (const task of shown) list.appendChild(regressedTaskNode(task, model.regressedPaths));
@@ -1091,7 +1311,7 @@ function detailNode(model) {
   if (entry && entry.pilot) node.dataset.ranking = "task_pilot";
   const hits = entry && entry.path ? model.index.get(entry.path) : null;
   return keyed(node, "detail", {
-    key, rollup: model.data.rollup, limit: model.limit, allTasks: view.allTasks, copied: view.copied === (entry && entry.path),
+    key, rollup: model.data.rollup, filter: model.data.regression_filter || null, limit: model.limit, allTasks: view.allTasks, copied: view.copied === (entry && entry.path),
     hits, pair: entry && entry.pair ? entry.pair : null, pilot: entry && entry.pilot ? entry.pilot : null, lengths: PATH_RANKINGS.map((ranking) => rowsOf(model.data, ranking).length),
     wide: hits && hits.regressions ? (hits.regressions.row.regressed_tasks || []).map((task) => model.regressedPaths.get(task.task_id) || 0) : null,
   });
@@ -1123,8 +1343,13 @@ function renderCodebase(data) {
   }
 }
 
+// The related files read only the window and minimum support.
+function relatedSelection() {
+  return JSON.stringify([codebaseQuery.window, codebaseQuery.min_support]);
+}
+
 function relatedFetchKey(path) {
-  return JSON.stringify([path, codebaseQuery, lastPayloadKey]);
+  return JSON.stringify([path, relatedSelection(), lastPayloadKey]);
 }
 
 function renderPathOptions() {
@@ -1153,16 +1378,16 @@ async function fetchRelated(path, key = relatedFetchKey(path)) {
   relatedKey = key;
   relatedRequestFailed = false;
   const visit = captureWorkspaceVisit();
-  const selection = JSON.stringify(codebaseQuery);
+  const selection = relatedSelection();
   const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: "100" });
   results.textContent = "Loading related files…";
   try {
     const data = await fetchJson(`/api/codebase/related?${sp}`);
-    if (request !== relatedRequest || !visit.isCurrent() || selection !== JSON.stringify(codebaseQuery)) return;
+    if (request !== relatedRequest || !visit.isCurrent() || selection !== relatedSelection()) return;
     relatedData = data;
     renderRelated();
   } catch (error) {
-    if (request === relatedRequest && visit.isCurrent() && selection === JSON.stringify(codebaseQuery)) {
+    if (request === relatedRequest && visit.isCurrent() && selection === relatedSelection()) {
       relatedRequestFailed = true;
       results.textContent = `Could not load related files: ${error.message}`;
     }

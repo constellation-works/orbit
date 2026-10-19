@@ -20,6 +20,7 @@ mod facts;
 mod landed;
 mod lock_waits;
 mod pilot;
+mod regression;
 mod related;
 mod sections;
 
@@ -35,6 +36,7 @@ pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
     BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements,
 };
+pub use regression::RegressionFilter;
 use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";
@@ -47,13 +49,15 @@ const WINDOWS: &[(&str, Option<i64>)] = &[
 ];
 
 /// A validated selection: the window, the smallest denominator a ranked row
-/// needs, and how paths are grouped.
+/// needs, how paths are grouped, and which regressions the Regressions
+/// ranking counts.
 #[derive(Debug, Clone, Copy)]
 pub struct CodebaseQuery {
     window: &'static str,
     days: Option<i64>,
     min_support: usize,
     rollup: Rollup,
+    filter: RegressionFilter,
 }
 
 impl CodebaseQuery {
@@ -87,7 +91,15 @@ impl CodebaseQuery {
             days,
             min_support,
             rollup,
+            filter: RegressionFilter::default(),
         })
+    }
+
+    /// Count only the regressions `filter` keeps in the Regressions ranking,
+    /// its per-path detail and its crew and complexity rates.
+    pub fn with_regression_filter(mut self, filter: RegressionFilter) -> Self {
+        self.filter = filter;
+        self
     }
 
     /// The slicing parameters; the window ends now.
@@ -98,6 +110,7 @@ impl CodebaseQuery {
                 .map(|days| Utc::now() - chrono::Duration::days(days)),
             min_support: self.min_support,
             rollup: self.rollup,
+            filter: self.filter,
         }
     }
 
@@ -166,6 +179,7 @@ pub fn codebase_analytics(
     let params = query.params();
     let mut payload = sections::all_sections(facts, &params);
     payload = sections::merge(payload, query.header(facts, params.since));
+    payload["regression_filter"] = query.filter.json();
     payload["known_paths"] = json!(related::known_paths(facts));
     payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
     payload
@@ -181,7 +195,8 @@ pub fn codebase_path_detail(
     path: &str,
 ) -> Result<Value, OrbitError> {
     let params = query.params();
-    let detail = detail::path_detail(facts, &params, path)?;
+    let mut detail = detail::path_detail(facts, &params, path)?;
+    detail["regression_filter"] = query.filter.json();
     Ok(sections::merge(detail, query.header(facts, params.since)))
 }
 

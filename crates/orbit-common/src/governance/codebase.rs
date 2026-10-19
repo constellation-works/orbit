@@ -81,6 +81,82 @@ const SELECTION: &[ParamSpec] = &[
     ),
 ];
 
+const NATURES: &[EnumValue] = &[
+    EnumValue::plain("broke_existing"),
+    EnumValue::plain("defect_in_new"),
+    EnumValue::plain("incomplete"),
+    EnumValue::plain("merge_reintroduced"),
+    EnumValue::plain("contract_drift"),
+    EnumValue::plain("unclassified"),
+    EnumValue::plain("absent"),
+];
+const ESCAPES: &[EnumValue] = &[
+    EnumValue::plain("no_test"),
+    EnumValue::plain("test_not_selected"),
+    EnumValue::plain("platform_only"),
+    EnumValue::plain("review_missed"),
+    EnumValue::plain("spec_ambiguous"),
+    EnumValue::plain("nondeterministic"),
+    EnumValue::plain("unclassified"),
+    EnumValue::plain("absent"),
+];
+const LAYERS: &[EnumValue] = &[
+    EnumValue::plain("ci_tests"),
+    EnumValue::plain("docs_skills"),
+    EnumValue::plain("dashboard"),
+    EnumValue::plain("sandbox_policy"),
+    EnumValue::plain("store_migration"),
+    EnumValue::plain("vcs_delivery"),
+    EnumValue::plain("config"),
+    EnumValue::plain("cli_mcp"),
+    EnumValue::plain("runtime_lifecycle"),
+    EnumValue::plain("other"),
+    EnumValue::plain("unknown"),
+];
+const DETECTORS: &[EnumValue] = &[
+    EnumValue::plain("delivery_review"),
+    EnumValue::plain("security_review"),
+    EnumValue::plain("code_review"),
+    EnumValue::plain("qa_sweep"),
+    EnumValue::plain("post_merge_ci"),
+    EnumValue::plain("production_run"),
+    EnumValue::plain("operator"),
+    EnumValue::plain("other"),
+];
+
+/// Which regressions the Regressions ranking, its detail and its crew and
+/// complexity rates count; omitted dimensions keep every value.
+const REGRESSION_FILTER: &[ParamSpec] = &[
+    both(
+        "nature",
+        ParamType::Enum(NATURES),
+        "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        CliArgKind::flag("nature"),
+        "Count only regressions of this nature (absent: no classification)",
+    ),
+    both(
+        "escape",
+        ParamType::Enum(ESCAPES),
+        "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        CliArgKind::flag("escape"),
+        "Count only regressions that escaped this way (absent: no classification)",
+    ),
+    both(
+        "layer",
+        ParamType::Enum(LAYERS),
+        "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        CliArgKind::flag("layer"),
+        "Count only regressions whose fix sits in this layer",
+    ),
+    both(
+        "detected_by",
+        ParamType::Enum(DETECTORS),
+        "Count only regressions found this way, read from the regression task's tags, else its filer.",
+        CliArgKind::flag("detected-by"),
+        "Count only regressions found this way",
+    ),
+];
+
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
@@ -91,7 +167,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `task_pilot` grades each task-pilot crew and model's final selectors against the landed diffs of the tasks it assessed (recall, precision, F1, lift over the filer's selectors). The same payload the dashboard's Codebase view reads.",
+    tool_description: "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `regressions` also breaks its regression_from links down by nature, escape, fix layer and detector, cross-tabs nature x escape and escape x layer, and rates the regressed tasks' crews and complexities; nature, escape, layer and detected_by filter it. `task_pilot` grades each task-pilot crew and model's final selectors against the landed diffs of the tasks it assessed (recall, precision, F1, lift over the filer's selectors). The same payload the dashboard's Codebase view reads.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,
@@ -102,7 +178,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[SELECTION, MODEL],
+    params: &[SELECTION, REGRESSION_FILTER, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -121,11 +197,11 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.codebase.show",
-    tool_description: "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
+    tool_description: "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Each regressed task lists its regression_from links with nature, escape, layer and detected_by; the same filters as `orbit.codebase.analytics` narrow them. Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[PATH, SELECTION, MODEL],
+    params: &[PATH, SELECTION, REGRESSION_FILTER, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

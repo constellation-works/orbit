@@ -15,7 +15,7 @@ use super::facts::{CodebaseFacts, TaskFacts};
 use super::lock_waits::{WaitEpisode, wait_summary};
 use super::sections::{
     Params, blocked_rows, coupling_pairs, footprint_rows, lock_rows, lock_tally, merge, rank,
-    rank_blocked, rate_fields, regression_rows, rejected_rows,
+    rank_blocked, rate_fields, regressed_fields, regression_rows, rejected_rows,
 };
 
 pub(super) fn path_detail(
@@ -70,10 +70,10 @@ pub(super) fn path_detail(
         let tasks: Vec<Value> = tasks
             .into_iter()
             .map(|task| {
-                let mut entry = task_entry(task, task.done_at.unwrap_or(task.updated_at));
-                entry["crew"] = json!(task.crew);
-                entry["regression_tasks"] = json!(task.regressed_by);
-                entry
+                merge(
+                    task_entry(task, task.done_at.unwrap_or(task.updated_at)),
+                    regressed_fields(task, &params.filter),
+                )
             })
             .collect();
         merge(

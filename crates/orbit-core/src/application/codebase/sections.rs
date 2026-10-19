@@ -22,6 +22,7 @@ use super::facts::{
     TaskFacts,
 };
 use super::lock_waits::{WaitEpisode, wait_episodes, wait_summary};
+use super::regression::RegressionFilter;
 
 /// Rows returned per ranking.
 pub(super) const ROW_LIMIT: usize = 25;
@@ -98,6 +99,8 @@ pub(super) struct Params {
     pub(super) since: Option<DateTime<Utc>>,
     pub(super) min_support: usize,
     pub(super) rollup: Rollup,
+    /// The regressions the Regressions ranking counts.
+    pub(super) filter: RegressionFilter,
 }
 
 impl Params {
@@ -246,9 +249,9 @@ pub(super) struct RegressionRow<'a> {
     by_crew: BTreeMap<String, Tally>,
 }
 
-/// Distinct done tasks with an incoming `regression_from` ÷ done tasks whose
-/// footprint touched the path, for tasks that became done in the window.
-/// Also returns the number of done tasks in the window.
+/// Distinct done tasks with an incoming `regression_from` the filter keeps ÷
+/// done tasks whose footprint touched the path, for tasks that became done in
+/// the window. Also returns the number of done tasks in the window.
 pub(super) fn regression_rows<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
@@ -263,7 +266,7 @@ pub(super) fn regression_rows<'a>(
             continue;
         }
         population += 1;
-        let regressed = !task.regressed_by.is_empty();
+        let regressed = params.filter.regressed(task);
         let crew = task
             .crew
             .clone()
@@ -299,12 +302,10 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
                 .iter()
                 .take(DRILLDOWN_LIMIT)
                 .map(|task| {
-                    json!({
-                        "task_id": task.id,
-                        "title": task.title,
-                        "crew": task.crew,
-                        "regression_tasks": task.regressed_by,
-                    })
+                    merge(
+                        json!({ "task_id": task.id, "title": task.title }),
+                        regressed_fields(task, &params.filter),
+                    )
                 })
                 .collect();
             let mut by_crew: Vec<(String, Tally)> = row.by_crew.into_iter().collect();
@@ -331,7 +332,22 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
             )
         })
         .collect();
-    json!({ "rows": rows, "below_support": below_support, "population": population })
+    merge(
+        json!({ "rows": rows, "below_support": below_support, "population": population }),
+        super::regression::summary(facts, params),
+    )
+}
+
+/// What a regressed task's entry adds: its crew and complexity, and the
+/// links the filter keeps, as IDs and with their four dimensions.
+pub(super) fn regressed_fields(task: &TaskFacts, filter: &RegressionFilter) -> Value {
+    let links = filter.links(task);
+    json!({
+        "crew": task.crew,
+        "complexity": task.complexity,
+        "regression_tasks": links.iter().map(|link| &link.task_id).collect::<Vec<_>>(),
+        "regressions": links.iter().map(|link| link.json()).collect::<Vec<_>>(),
+    })
 }
 
 #[derive(Default)]

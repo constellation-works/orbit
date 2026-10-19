@@ -128,6 +128,55 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         "the regressed task and its regression are listed:\n{human}"
     );
 
+    // The human view gives each link's dimensions, and the regression flags
+    // filter what the rankings count.
+    let link = human
+        .lines()
+        .find(|line| line.trim_start().starts_with(regression.as_str()))
+        .unwrap_or_else(|| panic!("a line per regression link:\n{human}"));
+    for dimension in ["absent", "other", "operator"] {
+        assert!(link.contains(dimension), "{dimension} in {link}");
+    }
+    let filtered = fixture.json(
+        &[
+            &["codebase", "analytics"][..],
+            &selection,
+            &["--nature", "absent", "--detected-by", "operator", "--json"],
+        ]
+        .concat(),
+    );
+    assert_eq!(filtered["regression_filter"]["nature"], "absent");
+    assert_eq!(filtered["regressions"]["matching_links"], 1, "{filtered}");
+    assert_eq!(filtered["regressions"]["rows"][0]["numerator"], 1);
+    let excluded = fixture.json(
+        &[
+            &["codebase", "analytics"][..],
+            &selection,
+            &["--nature", "broke_existing", "--json"],
+        ]
+        .concat(),
+    );
+    assert_eq!(excluded["regressions"]["matching_links"], 0, "{excluded}");
+    let absent = excluded["regressions"]["breakdowns"]["nature"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["value"] == "absent")
+        .unwrap();
+    assert_eq!(absent["links"], 1, "a breakdown counts past its own filter");
+    let refused = fixture
+        .command(&["codebase", "analytics", "--layer", "frontend"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("frontend"),
+        "an unknown layer is refused: {refused}"
+    );
+
     let refused = fixture
         .command(&["codebase", "show", "src/absent.rs"])
         .assert()
