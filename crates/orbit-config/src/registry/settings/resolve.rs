@@ -536,12 +536,23 @@ pub(super) fn resolve_bounded_count(
     max: u32,
     key: &str,
 ) -> Result<u32, OrbitError> {
+    resolve_bounded_range(raw, default, 1, max, key)
+}
+
+/// A bounded setting whose representation or behavior requires a minimum.
+pub(super) fn resolve_bounded_range(
+    raw: Option<u32>,
+    default: u32,
+    min: u32,
+    max: u32,
+    key: &str,
+) -> Result<u32, OrbitError> {
     let value = raw.unwrap_or(default);
-    if (1..=max).contains(&value) {
+    if (min..=max).contains(&value) {
         Ok(value)
     } else {
         Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected 1..={max}"
+            "{key} has invalid value {value}; expected {min}..={max}"
         )))
     }
 }

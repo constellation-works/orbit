@@ -13,13 +13,14 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::activity_job::TRUSTED_HOST_ADMISSION_KEY;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{
-    AgentInvocation, AgentInvokeRequest, EXPLORE_JOB_ID, ExploreSubmission,
+    AgentInvocation, AgentInvokeRequest, AgentInvokeResult, EXPLORE_JOB_ID, ExploreSubmission,
+    agent_invoke_result,
 };
 
 use super::review_support::git;
@@ -634,6 +635,100 @@ fn the_operator_path_is_unchanged_by_exploration() {
     assert_eq!(explorer_count(&fx.runtime), 0);
 }
 
+// --------------------------------------------------------------- answer bounds
+
+fn empty_explorer_result() -> AgentInvokeResult {
+    let run: JobRun = serde_json::from_value(json!({
+        "run_id": "answer-fixture", "job_id": EXPLORE_JOB_ID, "attempt": 1,
+        "state": "success", "scheduled_at": Utc::now(), "created_at": Utc::now()
+    }))
+    .expect("run fixture");
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    state.record_step(0, JobRunState::Success, Some(json!({})), None);
+    let mut result = agent_invoke_result(&run, Some(&state), None).expect("explorer result");
+    result.answer.as_mut().expect("answer").paths_read = None;
+    result
+}
+
+fn answer_caps_smaller_than_the_supported_shape_are_refused() {
+    let minimum = serde_json::to_vec(&empty_explorer_result().answer.expect("answer"))
+        .expect("serialize minimal answer")
+        .len();
+    let root = TempDir::new().expect("config root");
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).expect("global config dir");
+    std::fs::create_dir_all(&workspace).expect("workspace config dir");
+    for cap in [0, 1, minimum - 1, 262_145] {
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[workflow.explore]\nmax_answer_bytes = {cap}\n"),
+        )
+        .expect("write cap");
+        let error = OrbitRuntime::from_roots(&global, &workspace)
+            .err()
+            .expect("an unrepresentable answer cap must be refused");
+        assert!(
+            matches!(&error, OrbitError::InvalidInput(message) if message.contains("workflow.explore.max_answer_bytes")),
+            "cap {cap}: {error:?}"
+        );
+    }
+}
+
+fn serialized_explorer_answers_fit_at_the_minimum_and_larger_caps() {
+    let minimum = serde_json::to_vec(&empty_explorer_result().answer.expect("answer"))
+        .expect("serialize minimal answer")
+        .len();
+    for cap in [minimum, 256, 512, 16_384, 262_144] {
+        let (_root, runtime, _) = super::engine_support::runtime_with_workspace_config(Some(
+            &format!("[workflow.explore]\nmax_answer_bytes = {cap}\n"),
+        ));
+        for (summary, blob_ref) in [
+            (None, None),
+            (
+                Some("\"\n\\雪🦀".repeat(cap)),
+                Some("stdout-blob".to_string()),
+            ),
+            (Some("\"\n\\雪🦀".repeat(cap)), Some("\"雪".repeat(cap))),
+        ] {
+            let mut original = empty_explorer_result();
+            let answer = original.answer.as_mut().expect("answer");
+            answer.summary = summary.clone();
+            if summary.is_some() {
+                answer.findings = vec![json!("finding".repeat(cap))];
+                answer.next_steps = vec![json!("next".repeat(cap))];
+                answer
+                    .extra
+                    .insert("extra".into(), json!("extra".repeat(cap)));
+                answer.paths_read = Some(vec!["path".repeat(cap)]);
+                answer.final_message = Some("final".repeat(cap));
+                answer.final_message_bytes = Some(u64::MAX);
+            }
+            original.summary = summary;
+            original.preview = Some("captured output".into());
+            original.stdout_blob_ref = blob_ref;
+            let bounded = runtime.bound_explore_answer(original.clone());
+            let answer = bounded
+                .result
+                .answer
+                .as_ref()
+                .expect("answer shape retained");
+            let bytes = serde_json::to_vec(answer).expect("serialize bounded answer");
+            assert!(bytes.len() <= cap, "{} bytes exceed cap {cap}", bytes.len());
+            assert_eq!(bounded.result.summary, answer.summary);
+            assert_eq!(bounded.result.stdout_blob_ref, original.stdout_blob_ref);
+            if original.summary.is_some() {
+                assert!(bounded.answer_truncated);
+                assert!(answer.final_message_truncated);
+                assert!(bounded.result.preview.is_none());
+            } else {
+                assert!(!bounded.answer_truncated);
+                assert_eq!(bounded.result, original, "an answer that fits stays intact");
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- denied write
 
 /// The explorer's write boundary is the `fsProfile` its shipped activity
@@ -775,7 +870,9 @@ crate::scenario_table!(
     the_switch_off_refuses_every_caller,
     other_agents_and_explorers_themselves_are_refused,
     the_operator_path_is_unchanged_by_exploration,
-    cost_analytics_compare_runs_with_and_without_explorers
+    cost_analytics_compare_runs_with_and_without_explorers,
+    answer_caps_smaller_than_the_supported_shape_are_refused,
+    serialized_explorer_answers_fit_at_the_minimum_and_larger_caps
 );
 
 #[cfg(target_os = "linux")]

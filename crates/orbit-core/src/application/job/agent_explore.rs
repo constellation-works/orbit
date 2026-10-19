@@ -567,7 +567,9 @@ impl OrbitRuntime {
     /// The cut drops the least essential parts first — the final message,
     /// then extra result fields, then trailing findings and next steps — and
     /// only then shortens the summary and the paths read. The complete answer
-    /// stays on the run for `orbit.workflow.run.show`.
+    /// stays on the run for `orbit.workflow.run.show`. If final-message metadata
+    /// alone exceeds the cap, the answer falls back to its minimal shape;
+    /// the result still carries the complete stdout reference.
     pub fn bound_explore_answer(&self, mut result: AgentInvokeResult) -> BoundedExploreAnswer {
         let cap = usize::try_from(self.explore_settings().max_answer_bytes).unwrap_or(usize::MAX);
         let mut answer_truncated = false;
@@ -607,6 +609,15 @@ impl OrbitRuntime {
             {
                 let keep = summary.len().saturating_sub(overflow);
                 summary.truncate(floor_char_boundary(summary, keep));
+            }
+            if size(answer) > cap {
+                // The admitted floor (167 bytes) holds this fixed shape, even
+                // without a summary. Blob references have no length bound, so
+                // a cap alone cannot guarantee that metadata fits.
+                answer.summary = None;
+                answer.paths_read = None;
+                answer.final_message_bytes = None;
+                answer.final_message_blob_ref = None;
             }
             // The legacy top-level summary mirrors the answer's.
             result.summary = answer.summary.clone();
