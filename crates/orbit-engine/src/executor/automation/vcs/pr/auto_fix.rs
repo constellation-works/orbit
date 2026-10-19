@@ -616,6 +616,27 @@ pub(super) fn adopt_published_repairs<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
+/// Resolve a completion recovery's original publication through the same
+/// contiguous, host-recorded push chain the watcher adopts. Provider input
+/// and the live branch cannot supply a replacement head or retry authority.
+pub(crate) fn recovery_published_head(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    task_id: &str,
+    pr_number: &str,
+    published_head: &str,
+) -> Result<String, OrbitError> {
+    let ledger_runs = repair_ledger_runs(host, run_id)?;
+    let history = host.get_task_history(task_id)?;
+    let mut head = published_head.to_string();
+    for push in pr_auto_fix_pushes(&history, pr_number) {
+        if ledger_runs.contains(&push.run_id) && head == push.from_head_sha {
+            head = push.to_head_sha;
+        }
+    }
+    Ok(head)
+}
+
 /// Record a head this run published on the pull request.
 pub(super) fn record_published_repair<H: RuntimeHost + ?Sized>(
     host: &H,

@@ -59,6 +59,8 @@ const BASE: &str = "agent-main";
 #[cfg(unix)]
 mod absorbed_candidate;
 #[cfg(unix)]
+mod auto_fix_conflict;
+#[cfg(unix)]
 mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
