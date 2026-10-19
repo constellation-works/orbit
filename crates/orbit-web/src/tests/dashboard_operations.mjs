@@ -515,6 +515,23 @@ drainTasksOverride = [
   backlogTask(35, 'surface_reserved'),
 ];
 await fetchAndRenderAutoDrainPane();
+const waitsBody = get('drain-waits-body');
+const waitRows = [...waitsBody.querySelectorAll('.drain-wait')];
+const waitTaskLinks = [...waitsBody.querySelectorAll('.drain-wait-task-links a')];
+const waitTaskIdsIn = row => [...row.querySelectorAll('.drain-wait-task-links a')].map(link => link.textContent).sort();
+const expectedWaitGroups = [
+  Array.from({ length: 17 }, (_, i) => `ORB-${9000 + i}`),
+  Array.from({ length: 13 }, (_, i) => `ORB-${9017 + i}`),
+  Array.from({ length: 3 }, (_, i) => `ORB-${9030 + i}`),
+  ['ORB-9033'], ['ORB-9034'], ['ORB-9035'],
+].sort((left, right) => left[0].localeCompare(right[0]));
+const actualWaitGroups = waitRows.map(waitTaskIdsIn).sort((left, right) => left[0].localeCompare(right[0]));
+assert(waitTaskLinks.length === 36 && waitTaskLinks.every(link => link.getAttribute('href')?.includes(link.textContent)), 'every readiness task is linked from its reason row');
+assert(JSON.stringify(actualWaitGroups) === JSON.stringify(expectedWaitGroups), 'each wait reason links exactly the tasks in its reason group');
+const lockWaitRow = waitRows.find(row => row.dataset.pool === 'locks' && row.querySelector('.drain-wait-count')?.textContent === '17');
+assert(lockWaitRow?.querySelector('details.drain-wait-task-disclosure') && !lockWaitRow.querySelector('details').open && lockWaitRow.querySelectorAll('.drain-wait-task-links a').length === 17, 'long reason groups fold all member task links in a closed disclosure');
+const shortWaitRow = waitRows.find(row => row.dataset.pool === 'capacity' && row.querySelector('.drain-wait-count')?.textContent === '3');
+assert(shortWaitRow && !shortWaitRow.querySelector('details') && shortWaitRow.querySelectorAll('.drain-wait-task-links a').length === 3, 'short reason groups show their task links inline');
 const poolSizes = {};
 for (const task of drainTasksOverride) {
   const pool = drainReadinessFor(task.task_id)?.pool;

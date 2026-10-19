@@ -262,6 +262,9 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-wait-reason { color: var(--fg); font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .drain-wait-reason::first-letter { text-transform: uppercase; }
 .drain-wait-detail { color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-wait-tasks { color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-wait-task-disclosure > summary { width: fit-content; cursor: pointer; }
+.drain-wait-task-disclosure .drain-wait-task-links { display: block; }
 .drain-wait a { font-family: var(--font-mono); font-size: 0.93em; text-decoration: none; }
 .drain-wait a:hover { text-decoration: underline; }
 .drain-waits-note { margin: 4px 18px 0; color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; }
