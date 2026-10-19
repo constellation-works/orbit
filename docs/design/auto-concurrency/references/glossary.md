@@ -1,13 +1,13 @@
 ---
 type: design
 summary: "Glossary: Auto-concurrency"
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Glossary: Auto-concurrency
 
-Terms the auto-concurrency proposal gives a specific meaning. Drain, leaf,
-claim and pull are defined by the distributed-drain glossary and are not
+Terms the auto-concurrency proposal gives a specific meaning. Claim, pull and
+pulled leaf are defined by the distributed-drain glossary and are not
 repeated here.
 
 | Term | Meaning |
