@@ -29,7 +29,7 @@ use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
 
-use super::apply_admission::{PreparedTaskSnapshot, ValidatedTask};
+use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, warning_hold_findings,

@@ -39,7 +39,6 @@
 
 mod admission;
 mod apply;
-mod apply_admission;
 mod assessment;
 mod attachment_budget;
 mod blockers;

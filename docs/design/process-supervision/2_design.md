@@ -218,7 +218,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-common/src/process/identity.rs` (`ps -o lstart`) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind; must not itself sample the process table (§4.4) |
 | `orbit-core/src/runtime/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
 | `orbit-core/src/application/gc/scratch.rs` (`lsof`) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-core/src/application/task/final_recovery.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/retained_candidate.rs` (`git status`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/job/catalog.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/routines/clock/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |

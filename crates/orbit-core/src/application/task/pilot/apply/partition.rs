@@ -10,8 +10,8 @@ use orbit_engine::DispatchError;
 use serde_json::{Value, json};
 
 use super::super::PILOT_NORMALIZATIONS;
-use super::super::apply_admission::PreparedTaskSnapshot;
 use super::super::persist::{failed_partition, task_outcome};
+use super::admission::PreparedTaskSnapshot;
 use super::input::{PartitionResult, Record};
 use super::task::settle_task;
 use super::{Applied, ApplyContext, detail, settled};

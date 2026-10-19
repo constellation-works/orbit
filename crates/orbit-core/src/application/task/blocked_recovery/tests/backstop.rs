@@ -21,9 +21,9 @@ use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use super::{assert_isolated_child, enter_isolated_child};
 use crate::OrbitRuntime;
 use crate::application::task::blocked_recovery::ATTRIBUTION_SLACK_MS;
+use crate::application::task::tests::{assert_isolated_child, enter_isolated_child};
 use crate::application::task::{
     BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, BlockedRecoveryPreparation,
     BlockedRecoveryTick, EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord,

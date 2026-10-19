@@ -13,10 +13,6 @@ use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::super::PostDeployRequirement;
 
-use super::super::apply_admission::{
-    Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
-    approve_promoted, close_verified_no_diff,
-};
 use super::super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
@@ -32,6 +28,10 @@ use super::super::{
     required_machine, required_os, required_string, required_string_array,
     retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
     user_facing_ui, validate_after_selectors, validate_recommendations,
+};
+use super::admission::{
+    Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
+    approve_promoted, close_verified_no_diff,
 };
 use super::{Applied, ApplyContext};
 

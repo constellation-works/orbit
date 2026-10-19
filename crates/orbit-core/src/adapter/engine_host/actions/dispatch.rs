@@ -23,7 +23,7 @@ use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
 use crate::application::task::pilot as task_pilot;
-use crate::application::task::{blocked_recovery_steps, finding_verification_steps};
+use crate::application::task::{blocked_recovery, finding_verification_steps};
 use crate::application::workspace_auto;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
@@ -318,10 +318,10 @@ pub(crate) fn run_deterministic(
         // checkout for final recovery, then apply its decision through the
         // shared final-recovery applier and remove that checkout.
         CoreDeterministicAction::PrepareBlockedTaskRecovery => {
-            blocked_recovery_steps::prepare(runtime, action, input, recovery_run_id(&tool_context))
+            blocked_recovery::steps::prepare(runtime, action, input, recovery_run_id(&tool_context))
         }
         CoreDeterministicAction::ApplyBlockedTaskRecovery => {
-            blocked_recovery_steps::apply(runtime, action, input, recovery_run_id(&tool_context))
+            blocked_recovery::steps::apply(runtime, action, input, recovery_run_id(&tool_context))
         }
         // Run a held candidate's named Linux CodeQL check at the held commit
         // and attach its log, plus the result when it passed; receipt queues
