@@ -248,7 +248,7 @@ assert.deepEqual(named(body, 'config-sys-resource').map(node => node.dataset.res
 assert.match(textOf(body, 'config-note').join(' '), /Edits write the global file \(\/home\/test\/\.orbit\/config\.toml\)/);
 assert.match(textOf(body, 'config-warning').join(' '), /workspace file overrides/);
 assert.equal(textOf(body, 'config-verdict')[0], 'held');
-assert.match(textOf(body, 'config-sys-verdict-text')[0], /Holding new admissions: cpu 97% ≥ 90% since 2026-10-04 01:41 PDT; disk \/data 91% ≥ 90% since 2026-10-04 01:45 PDT/);
+assert.match(textOf(body, 'config-sys-verdict-text')[0], /Holding new admissions: cpu 97% ≥ 90% since 2026-10-04 08:41 UTC; disk \/data 91% ≥ 90% since 2026-10-04 08:45 UTC/);
 const cpu = resource('cpu');
 assert.equal(textOf(cpu, 'config-sys-reading')[0].startsWith('97.2%'), true);
 assert.match(textOf(cpu, 'config-sys-reading')[0], /critical.*held/);

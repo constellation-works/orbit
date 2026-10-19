@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router to select the Drain or Log view.
 
-import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -306,6 +306,7 @@ function renderLogEvent(ev, isFresh) {
   row.dataset.code = ev.code || "";
   row.dataset.level = ev.level || "info";
   row.dataset.agentStdout = String(ev.agent_stdout === true);
+  row.dataset.ts = ev.ts || "";
 
   const { text: timeStr, title: timeTitle } = logTime(ev.ts);
   const tSpan = el("span", { class: "t", text: timeStr, title: timeTitle });
@@ -450,8 +451,21 @@ function clearLogView() {
   refreshLogStatusBar();
 }
 
+export function repaintLogTimes() {
+  for (const row of logRows) {
+    if (!row.dataset.ts) continue;
+    const time = row.querySelector(".t");
+    if (!time) continue;
+    const painted = logTime(row.dataset.ts);
+    time.textContent = painted.text;
+    time.title = painted.title;
+  }
+  refreshLogStatusBar();
+}
+
 export function initLogTail() {
   logHost = getHost();
+  onClockZoneChange(repaintLogTimes);
   onWorkspaceChange(restartLogTailForHost);
   wireLogVisibility();
   wireLogPanelPreferences();

@@ -7,14 +7,19 @@ import vm from 'node:vm';
 
 assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/Los_Angeles', 'the harness pins the zone');
 
-const context = vm.createContext({ URLSearchParams, window: { location: { search: '', hash: '' } }, console });
+const store = new Map();
+const localStorage = {
+  getItem(key) { return store.has(key) ? store.get(key) : null; },
+  setItem(key, value) { store.set(String(key), String(value)); },
+};
+const context = vm.createContext({ URLSearchParams, window: { location: { search: '', hash: '' }, localStorage }, console });
 const load = name => new vm.SourceTextModule(fs.readFileSync(new URL(`../../assets/dashboard/js/${name}`, import.meta.url), 'utf8'), { context, identifier: name });
 const common = load('common.js');
 const reliability = load('reliability.js');
 await common.link(() => { throw new Error('unexpected common dependency'); });
 await reliability.link(name => { assert.equal(name, './common.js'); return common; });
 await reliability.evaluate();
-const { formatAge, formatClock, formatDateTime, formatUtcDateTime, formatUtcRange, fmtDuration, elapsedDurationInfo } = common.namespace;
+const { formatAge, formatClock, formatDateTime, formatUtcDateTime, formatUtcRange, fmtDuration, elapsedDurationInfo, getClockZone, setClockZone } = common.namespace;
 const { fmtWindowRange } = reliability.namespace;
 
 // The incident: a 06:33Z → 06:33Z window read "Oct 5, 11:33 PM → Oct 6, 11:33 PM UTC".
@@ -27,16 +32,39 @@ assert.equal(fmtWindowRange({ since: 'garbage', until: '2026-10-07T06:33:00Z' })
 assert.equal(formatUtcRange('2026-10-06T23:00:00-07:00', '2026-10-07T00:00:00-07:00'), '2026-10-07 06:00 → 2026-10-07 07:00 UTC', 'offsets convert to UTC');
 assert.equal(formatUtcDateTime('2026-10-07T06:33:00Z'), '2026-10-07 06:33 UTC');
 
-// Absolute local times are 24-hour and name their zone, across daylight saving.
-assert.equal(formatDateTime('2026-10-07T06:31:00Z'), '2026-10-06 23:31 PDT', 'task and run detail time');
-assert.equal(formatDateTime('2026-12-07T06:31:09Z', { seconds: true }), '2026-12-06 22:31:09 PST', 'winter time names PST');
+// The clock defaults to UTC so a dashboard time matches the CLI, and Local
+// names the browser zone across daylight saving. The choice is per browser.
+assert.equal(getClockZone(), 'utc', 'unset storage defaults to UTC');
+assert.equal(formatDateTime('2026-10-07T06:31:00Z'), '2026-10-07 06:31 UTC', 'task and run detail time');
+assert.equal(formatDateTime('2026-12-07T06:31:09Z', { seconds: true }), '2026-12-07 06:31:09 UTC', 'a winter instant stays on the UTC clock');
 assert.equal(formatDateTime(''), '-');
 assert.equal(formatDateTime('not a time'), 'not a time', 'unparseable values are shown as given');
+assert.equal(setClockZone('nope'), false, 'an unknown zone is ignored');
+assert.equal(setClockZone('local'), true);
+assert.equal(formatDateTime('2026-10-07T06:31:00Z'), '2026-10-06 23:31 PDT', 'Local selects the browser zone');
+assert.equal(formatDateTime('2026-12-07T06:31:09Z', { seconds: true }), '2026-12-06 22:31:09 PST', 'winter time names PST');
+assert.equal(setClockZone('local'), false, 'selecting the current zone changes nothing');
 
 // One clock for the rail, log dock and status bar: 24-hour with seconds.
 assert.equal(formatClock('2026-10-07T06:32:57Z'), '23:32:57 PDT', 'the rail clock names its zone');
 assert.equal(formatClock('2026-10-07T06:32:57Z', { zone: false }), '23:32:57', 'dense log columns carry the zone in a title');
 assert.equal(formatClock('2026-10-07T07:05:00Z', { seconds: false }), '00:05 PDT', 'midnight is 00, never 24 or 12 AM');
+assert.equal(setClockZone('utc'), true);
+assert.equal(formatClock('2026-10-07T06:32:57Z'), '06:32:57 UTC', 'UTC is 24-hour and labelled');
+assert.equal(formatClock('2026-10-07T06:32:57Z', { zone: false }), '06:32:57');
+assert.equal(formatClock('2026-10-07T07:05:00Z', { seconds: false }), '07:05 UTC');
+
+// A later evaluation of the same module sees the stored choice.
+setClockZone('local');
+const reloaded = new vm.SourceTextModule(
+  fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'),
+  { context, identifier: 'common-reloaded.js' },
+);
+await reloaded.link(() => { throw new Error('unexpected common dependency'); });
+await reloaded.evaluate();
+assert.equal(reloaded.namespace.getClockZone(), 'local', 'the choice survives a reload in this browser');
+assert.equal(reloaded.namespace.formatDateTime('2026-10-07T06:31:00Z'), '2026-10-06 23:31 PDT');
+setClockZone('utc');
 
 const now = Date.parse('2026-10-07T12:00:00Z');
 assert.equal(formatAge('2026-10-07T11:59:30Z', now), '30s');

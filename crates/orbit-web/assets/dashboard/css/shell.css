@@ -215,9 +215,26 @@
 }
 .rail-conn .status-dot { flex: none; }
 .rail-conn .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The refresh line yields before the host chips, which do not shrink. */
+.topbar-conn { flex: 0 1 auto; min-width: 0; }
 .topbar-conn .conn-host { display: none; }
 @media (max-width: 1279px) {
   .topbar-conn { display: none; }
+}
+
+/* UTC | Local. The top bar copy sits with the refresh time from 1280px up.
+   Below that the bar is already one packed row, so the rail copy under the
+   workspace picker is the control, and only one of the two is shown. */
+.topbar .clock-zone { flex: 0 0 auto; margin-left: 0; }
+.rail-clock { width: 100%; margin-left: 0; box-sizing: border-box; }
+.rail-clock .clock-zone-btn { flex: 1 1 0; padding-left: 4px; padding-right: 4px; text-align: center; }
+@media (max-width: 1279px) {
+  .topbar .clock-zone { display: none; }
+}
+@media (min-width: 1280px) {
+  /* Beats `.scoreboard-window-selector { display: inline-flex }`, which is
+     concatenated later and would otherwise keep this copy on screen. */
+  .rail-workspace .rail-clock { display: none; }
 }
 
 .main-col {
@@ -260,7 +277,14 @@
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
 .topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
 
+/* Shrinks only while the bar is tight. From 1900px the per-window usage
+   chips are shown, and the group stays rigid so a longer list takes the
+   refresh line's spare room instead of sliding these chips. The UTC/Local
+   control sits in that same spare room from 1280px. */
 .host-resource-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+@media (min-width: 1900px) {
+  .host-resource-group { flex: 0 0 auto; }
+}
 /* The selected host's name, so the readings are never read as another host's. */
 .host-resource-name {
   flex: 0 1 auto;

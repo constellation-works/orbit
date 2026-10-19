@@ -156,9 +156,9 @@ try {
   assert.match(await rows.nth(98).textContent(), /run_cancelled/);
   assert.match(await rows.last().textContent(), /run_finished/);
   const times = await rows.locator('td:first-child').allTextContents();
-  assert.match(times[0], /2026-10-09 23:59:10 PDT/);
-  assert.match(times[50], /2026-10-10 00:00:00 PDT/);
-  assert.match(times[99], /^00:00:49 PDT$/);
+  assert.match(times[0], /2026-10-10 06:59:10 UTC/);
+  assert.match(times[50], /^07:00:00 UTC$/);
+  assert.match(times[99], /^07:00:49 UTC$/);
   assert.equal(new Set(times).size, 100, 'each event second is distinguishable');
   results.times = { first: times[0], midnight: times[50], last: times[99] };
   for (const width of [1440, 600]) {
