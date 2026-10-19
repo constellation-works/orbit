@@ -109,6 +109,7 @@ jobs:
       # script, even for a PR branch cut before the script existed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Classify the change
@@ -137,6 +138,20 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Orchestration follows the workflow revision; candidate checks stay at the PR head.
+      - &workflow-ci
+        name: Check out workflow CI helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: .orbit/tmp/workflow-ci
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ci-await-jobs.py
+            /scripts/ci-download-verified.sh
+
       - name: Install ripgrep
         run: |
           set -euo pipefail
@@ -146,7 +161,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
           rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -258,6 +273,8 @@ jobs:
           # triggered it, not whatever the branch points to once it starts.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - *workflow-ci
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
         with:
@@ -380,7 +397,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$CARGO_DENY_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$CARGO_DENY_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
           cargo deny --version | awk -v expected="${CARGO_DENY_VERSION}" '{print} $1 == "cargo-deny" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -399,7 +416,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
           rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -535,7 +552,7 @@ jobs:
           for shard in $(seq 1 "$NEXTEST_SHARDS"); do
             jobs+=(--job "Test shard $shard/$NEXTEST_SHARDS")
           done
-          python3 scripts/ci-await-jobs.py "${jobs[@]}"
+          python3 .orbit/tmp/workflow-ci/scripts/ci-await-jobs.py "${jobs[@]}"
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
@@ -673,6 +690,8 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - *workflow-ci
+
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
         with:
           toolchain: "1.98.1"
@@ -797,7 +816,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
           tar zxf "$archive" -C "$cargo_bin"
           cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -925,6 +944,8 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - *workflow-ci
+
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
         with:
           toolchain: "1.98.1"
@@ -938,7 +959,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
           tar zxf "$archive" -C "$cargo_bin"
           cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -951,7 +972,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
           rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -967,7 +988,7 @@ jobs:
           trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
           archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_LINUX_SHA256" "$archive"
+          .orbit/tmp/workflow-ci/scripts/ci-download-verified.sh "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
           uv --version | awk -v expected="${UV_VERSION}" '{print} $1 == "uv" && $2 == expected {ok=1} END {exit !ok}'
 
@@ -1068,15 +1089,7 @@ jobs:
       - name: Await the nextest archive
         env:
           GH_TOKEN: ${{ github.token }}
-        # A pull request head older than the `--step` option checks out a
-        # helper without it, while this workflow comes from the merge ref; such
-        # a head waits for the whole test build instead (ORB-16850).
-        run: |
-          if [ -f scripts/ci-await-jobs.py ] && ! grep -q -- '"--step"' scripts/ci-await-jobs.py; then
-            python3 scripts/ci-await-jobs.py --job "Test build"
-          else
-            python3 scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
-          fi
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
 
       - name: Download nextest archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
