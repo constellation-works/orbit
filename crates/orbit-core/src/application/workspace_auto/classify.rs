@@ -321,6 +321,10 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     {
         return Err(release_unadmitted_reservations(runtime, &reserved, error));
     }
+    // A candidate the section then refused starts no run, and gap fit would
+    // reserve it again on the next pass: give back every reservation of the
+    // wave that the section did not admit.
+    release_refused_reservations(runtime, &reserved, &selection.selected);
     if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
         record_admission_forecast(
             runtime,
@@ -596,8 +600,34 @@ fn release_unadmitted_reservations(
     reserved: &[(String, String)],
     error: PassError,
 ) -> PassError {
+    release_logged(runtime, reserved, &error.reason());
+    error
+}
+
+/// Give back the reservations of `reserved` whose task the admission section
+/// did not admit (`admitted`). A release that fails is logged: the pass
+/// admitted its wave regardless, and the reservation the store could not drop
+/// is replaced by the task's next reservation or expires with its TTL.
+fn release_refused_reservations(
+    runtime: &OrbitRuntime,
+    reserved: &[(String, String)],
+    admitted: &[String],
+) {
+    let refused: Vec<(String, String)> = reserved
+        .iter()
+        .filter(|(_, task)| !admitted.contains(task))
+        .cloned()
+        .collect();
+    release_logged(
+        runtime,
+        &refused,
+        "the admission section refused the candidates",
+    );
+}
+
+fn release_logged(runtime: &OrbitRuntime, reserved: &[(String, String)], cause: &str) {
     if reserved.is_empty() {
-        return error;
+        return;
     }
     let keys: Vec<(&str, &str)> = reserved
         .iter()
@@ -606,13 +636,12 @@ fn release_unadmitted_reservations(
     if let Err(release_error) = release_reservations(runtime, &keys) {
         tracing::warn!(
             target: "orbit.core.job_run",
-            error = %error.reason(),
+            cause,
             release_error = %release_error,
             reservations = ?reserved,
             "drain could not release the reservations of a wave it did not admit; they expire with their TTL"
         );
     }
-    error
 }
 
 fn release_reservations(
@@ -671,10 +700,12 @@ pub(crate) mod release_failure_hook {
 /// and admits what `select(None)` admits, as `off` does. A pass that can
 /// admit nothing takes no lock and carries only the starvation guard's head.
 ///
-/// A candidate the pull admission section refuses afterwards keeps its
-/// reservation until it expires, which can only hold back admission. A
-/// section that fails outright admits none of the wave, and the pass
-/// releases every reservation it wrote ([`release_unadmitted_reservations`]).
+/// A candidate the admission section refuses afterwards starts no run, so
+/// the pass releases its reservation ([`release_refused_reservations`]); left
+/// to the TTL, a candidate refused every pass would stack a copy per pass
+/// onto the forecast. A section that fails outright admits none of the wave,
+/// and the pass releases every reservation it wrote
+/// ([`release_unadmitted_reservations`]).
 fn gap_fit_selection(
     runtime: &OrbitRuntime,
     action: &str,

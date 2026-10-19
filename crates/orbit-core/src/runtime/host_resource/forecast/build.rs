@@ -22,8 +22,8 @@ use crate::runtime::run_input::singular_task_id_from_input;
 const UNKNOWN_WORK_CLASS: &str = "change";
 
 /// A pending pull's CPU per minute, and the profile minute of its alternative
-/// with the most memory then.
-type PendingSeries = (Vec<f64>, Vec<Option<ProfileMinute>>);
+/// with the most memory then, with the chance it is still alive.
+type PendingSeries = (Vec<f64>, Vec<Option<(ProfileMinute, f64)>>);
 
 /// The forecast over `0 ..= horizon` minutes from `now`.
 pub(crate) fn build_forecast(
@@ -92,24 +92,31 @@ pub(crate) fn build_forecast(
             },
         };
         let found = profiles.lookup(&lookup);
-        if let Some(profile) = found.profile.as_deref() {
-            for (t, minute) in profile.series.iter().take(points).enumerate() {
-                let cores = minute.cpu_cores * minute.alive;
+        // Priced at its age since it was written, as a running delivery of
+        // that age is, so a reservation a pass keeps does not restart at
+        // minute 0.
+        let age = reservation_age(reservation, now);
+        if let Some((profile, alive_now)) = found.profile.as_deref().and_then(|profile| {
+            let alive_now = profile.series.get(age)?.alive;
+            (alive_now > 0.0).then_some((profile, alive_now))
+        }) {
+            for (t, minute) in profile.series[age..].iter().take(points).enumerate() {
+                let alive = minute.alive / alive_now;
+                let cores = minute.cpu_cores * alive;
                 if reservation.task_id.starts_with("pending:") {
                     let (cpu, memory) = pending
                         .entry((&reservation.workspace_id, &reservation.task_id))
                         .or_insert_with(|| (vec![0.0; points], vec![None; points]));
                     cpu[t] = cpu[t].max(cores);
-                    let bytes = |at: &ProfileMinute| at.memory_bytes as f64 * at.alive;
-                    if memory[t]
-                        .as_ref()
-                        .is_none_or(|heaviest| bytes(minute) > bytes(heaviest))
-                    {
-                        memory[t] = Some(minute.clone());
+                    let bytes = |at: &ProfileMinute, alive: f64| at.memory_bytes as f64 * alive;
+                    if memory[t].as_ref().is_none_or(|(heaviest, heaviest_alive)| {
+                        bytes(minute, alive) > bytes(heaviest, *heaviest_alive)
+                    }) {
+                        memory[t] = Some((minute.clone(), alive));
                     }
                 } else {
                     cpu[t] += cores;
-                    memory[t].add_profiled(minute, minute.alive);
+                    memory[t].add_profiled(minute, alive);
                 }
             }
         }
@@ -127,8 +134,8 @@ pub(crate) fn build_forecast(
     for (pending_cpu, pending_memory) in pending.into_values() {
         for t in 0..points {
             cpu[t] += pending_cpu[t];
-            if let Some(minute) = &pending_memory[t] {
-                memory[t].add_profiled(minute, minute.alive);
+            if let Some((minute, alive)) = &pending_memory[t] {
+                memory[t].add_profiled(minute, *alive);
             }
         }
     }
@@ -162,6 +169,15 @@ pub(crate) fn build_forecast(
         memory_terms: memory,
         profiles,
     }
+}
+
+/// `a_r`: whole minutes since the reservation was written.
+fn reservation_age(
+    reservation: &orbit_store::contracts::AdmissionReservation,
+    now: DateTime<Utc>,
+) -> usize {
+    let seconds = (now - reservation.reserved_at).num_seconds().max(0);
+    usize::try_from(seconds / 60).unwrap_or(usize::MAX)
 }
 
 /// When a delivery whose live runs have not recorded a minute started: the

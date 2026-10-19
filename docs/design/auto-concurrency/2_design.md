@@ -515,7 +515,7 @@ separately.
 
 ```
 F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)
-         + Σ over reservations r of P_r(t) · alive_r(t)
+         + Σ over reservations r of P_r(a_r + t) · alive_r(a_r + t) / alive_r(a_r)
 ```
 
 - **Running deliveries.** A running delivery `i` has age `a_i` and profile
@@ -533,7 +533,10 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   explicit `orbit run ship` deliveries and before-landing reviews are all
   included.
 - **Reservations.** An admission that has been decided but whose run does not
-  exist yet is a reservation (§5.2). It is counted from `t = 0`.
+  exist yet is a reservation (§5.2). It has age `a_r`, the whole minutes since
+  it was written, and is priced like a running delivery of that age, so a
+  reservation a pass keeps does not restart at minute 0. A task holds one
+  reservation (§5.2).
 - **Memory sums as a quantile.** For memory, the sum over profiled
   deliveries and reservations is a high quantile of their summed memory, not
   the sum of their 90th percentiles (§4.1).
@@ -615,7 +618,7 @@ with 24 GiB available.
 
 At minute `t`, each profiled delivery or reservation `i`, still running with
 chance `s_i` (`alive_i(a_i + t) / alive_i(a_i)` for a running delivery,
-`alive_r(t)` for a reservation or candidate), contributes its percentile
+`alive_r(a_r + t) / alive_r(a_r)` for a reservation, `alive(t)` for a candidate), contributes its percentile
 `p_i = mem_i · s_i`, its mean `μ_i = mem_mean_i · s_i`, and the variance of
 "running with chance `s_i`, then drawn from that minute's deliveries":
 `v_i = s_i · mem_sd_i² + s_i · (1 − s_i) · mem_mean_i²`. Treating the
@@ -819,9 +822,11 @@ Implemented for local and pull drains, with local passes in `admission/gap_fit.r
 - **Modes.** `off` builds no forecast. `shadow` builds it and selects the wave
   with gap fit under the host lock, records that, writes no reservation, and
   admits the wave `off` selects. `enforce` admits the gap-fit wave and
-  reserves each task it admitted in the same lock; a candidate the pull
-  admission section refuses afterwards keeps its reservation until it
-  expires.
+  reserves each task it admitted in the same lock; a candidate the owner-wave
+  admission section refuses afterwards starts no run, so the pass releases
+  its reservation once the section has decided. Left to the five-minute
+  expiry, a candidate refused every pass would stack a reservation per pass
+  onto the forecast.
 - **No lock without a choice.** A pass with no free slot, because of the
   ceiling or the throttle, or with no candidate, builds no forecast and takes
   no lock.
@@ -861,8 +866,10 @@ Two drains on one host must not fill the same gap. Each takes a host lock
    id (or `pending:<request_id>` for a pull), profile keys and time.
 4. Release the lock.
 
-A reservation leaves the forecast once its run exists in `job_runs`, or after
-five minutes if dispatch failed. The lock covers only computation over local
+A reservation leaves the forecast once its run exists in `job_runs`, when the
+pass that wrote it releases it because the admission section refused its
+task, when a later decision reserves the same task, or after five minutes if
+dispatch failed. The lock covers only computation over local
 tables, so it is held for milliseconds.
 
 Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
@@ -886,6 +893,11 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
   minute, counted as one delivery in the quantile (§4.1), not their sum:
   exactly one task can be granted. This covers different CPU and memory
   peaks without assuming one profile dominates both.
+- **One reservation per task.** Writing a decision's reservations replaces
+  any row already held for the same workspace and task, so passes that
+  re-admit a task do not stack copies; the rows one decision writes for one
+  key, a pending pull's alternatives, are all kept. The forecast prices a
+  reservation at its age since `reserved_at`.
 - **Exchange and release.** The store can remove reservation keys, read the
   remaining load and write replacements in one host transaction. A returned
   claim replaces its pending key with the task's precise key before creating
