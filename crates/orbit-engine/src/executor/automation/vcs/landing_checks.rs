@@ -829,11 +829,22 @@ fn same_job_passes<H: RuntimeHost + ?Sized>(
 /// tip needs the same emitted diagnostic; sharing a job name alone is not
 /// enough to suppress a candidate repair.
 ///
-/// A green tip is not proof that the base fixed the failure: when the
+/// A green tip is not proof that the base fixed that one failure. When the
 /// latest push run of the head's fork point with that tip passed the same
-/// job, the base was never red there and the failure is the candidate's, so
-/// this returns `None` and the ordinary repair path decides. An unreadable or
-/// missing fork-point run keeps the green-tip refresh.
+/// job, the failure is the candidate's: that check adds no refresh evidence
+/// and does not end the comparison. A required sibling that fails on the tip
+/// with the same diagnostic is still a known-red base, and it wins. The
+/// result lists only those known-red checks.
+///
+/// The result is `None`, so the ordinary repair path decides and no base
+/// refresh is recorded, when no check is known-red and any of these holds:
+/// every required failure was candidate-owned, at least one was (a green-tip
+/// sibling must not spend the base update, including when that update is
+/// already reserved), or the tip is already contained in the head. An
+/// unreadable or missing fork-point run on a green tip that no
+/// candidate-owned check accompanies keeps the green-tip refresh. A pending
+/// tip job, a tip conclusion other than success or failure, a different
+/// diagnostic, or a transient log still returns `None` for the whole call.
 pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -847,6 +858,10 @@ pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     let mut fork_point_jobs = None;
     let mut evidence = Vec::new();
     let mut red = false;
+    // A check the fork point and the tip both passed is the candidate's.
+    // Remember it and keep reading. Returning here dropped a known-red
+    // sibling, and completion then spent a repair on that inherited failure.
+    let mut candidate_owned = false;
     for check in failed {
         let job = jobs
             .iter()
@@ -867,7 +882,8 @@ pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
                 .and_then(|fork_point_jobs| single_completed_job(fork_point_jobs, job))
                 .is_some_and(|fork_point_job| fork_point_job["conclusion"] == "success")
             {
-                return None;
+                candidate_owned = true;
+                continue;
             }
             evidence.push(json!({"failed_job":job,"passing_job":base_job}));
             continue;
@@ -905,7 +921,10 @@ pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
         red = true;
         evidence.push(json!({"failed_job":job,"base_job":base_job,"signature":signature.text,"log_excerpt":excerpt(&log)}));
     }
-    if evidence.is_empty() || (!red && contains(workspace, tip, head)) {
+    // No known-red check, and either nothing to refresh or a candidate-owned
+    // failure that must keep the ordinary repair. A green-tip sibling alone
+    // would be a base refresh; beside a candidate-owned check it is not.
+    if evidence.is_empty() || (!red && (candidate_owned || contains(workspace, tip, head))) {
         return None;
     }
     Some(

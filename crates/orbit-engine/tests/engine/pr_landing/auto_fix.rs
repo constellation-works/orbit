@@ -1867,12 +1867,175 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
     fs::write(dir.join("log"), log).unwrap();
 }
 
+/// One push run whose jobs are `(name, conclusion)`. One log serves every job
+/// in the run. Callers that compare diagnostics plant the same text on each
+/// commit whose failed job is read.
+fn plant_paired_commit_ci(fx: &Fixture, sha: &str, run_id: u64, jobs: &[(&str, &str)], log: &str) {
+    let dir = fx.forge.join("commit-ci").join(sha);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
+    fs::write(
+        dir.join("runs.json"),
+        serde_json::to_vec(&json!({
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": run_id,
+                "name": "CI",
+                "workflow_id": 1,
+                "event": "push",
+                "head_sha": sha,
+                "head_branch": BASE
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let listed = jobs
+        .iter()
+        .enumerate()
+        .map(|(index, (name, conclusion))| {
+            let id = run_id + 1 + u64::try_from(index).unwrap();
+            json!({
+                "id": id,
+                "name": name,
+                "status": "completed",
+                "conclusion": conclusion,
+                "steps": [{
+                    "name": "compile",
+                    "conclusion": if *conclusion == "failure" { "failure" } else { "success" }
+                }]
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        dir.join("jobs.json"),
+        serde_json::to_vec(&json!({"total_count": jobs.len(), "jobs": listed})).unwrap(),
+    )
+    .unwrap();
+    fs::write(dir.join("log"), log).unwrap();
+}
+
+/// Two required failures on one pull request. `test` passed on the fork point
+/// and on the current tip, so it is the candidate's. `lint` is the sibling:
+/// known-red on the tip, also candidate-owned, or green on the tip with no
+/// fork-point job.
+fn paired_required_base_case(row: &std::path::Path, case: &str) {
+    let fx = Fixture::new(row);
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    open_for_completion(&fx, &host);
+    let shared = "error[E0433]: cannot find module `broken_base`\n";
+    let own = "error[E0433]: cannot find module `different_failure`\n";
+    let known_red = case.starts_with("known_red_");
+    plant_paired_commit_ci(
+        &fx,
+        &fx.candidate,
+        11,
+        &[("test", "failure"), ("lint", "failure")],
+        if known_red { shared } else { own },
+    );
+    let fork_point = fx.local_tip(BASE);
+    // The sibling has no successful fork-point job unless every failure is
+    // candidate-owned. Known-red does not consult that job. The green-tip
+    // sibling must not become candidate-owned because of it.
+    let fork_jobs: &[(&str, &str)] = if case.starts_with("candidate_owned_pair") {
+        &[("test", "success"), ("lint", "success")]
+    } else {
+        &[("test", "success")]
+    };
+    plant_paired_commit_ci(&fx, &fork_point, 51, fork_jobs, "");
+    fx.advance_base();
+    let tip = fx.local_tip(BASE);
+    let tip_jobs: &[(&str, &str)] = if known_red {
+        &[("test", "success"), ("lint", "failure")]
+    } else {
+        &[("test", "success"), ("lint", "success")]
+    };
+    plant_paired_commit_ci(&fx, &tip, 31, tip_jobs, if known_red { shared } else { "" });
+    if case.ends_with("_reserved") {
+        seed_auto_fix_history(
+            &host,
+            orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
+            &orbit_types::workflow::PrBaseUpdateReservation {
+                execution: RUN_ID.into(),
+                repository: "forge/remote".into(),
+                pr_number: PR_NUMBER.into(),
+                head_sha: fx.candidate.clone(),
+                head_branch: BRANCH.into(),
+                base_branch: BASE.into(),
+                base_sha: tip.clone(),
+                deadline_ms: 1_100_000,
+                evidence: json!({"cause": "inherited"}),
+            },
+        );
+    }
+    let rollup = if matches!(
+        case,
+        "known_red_before_candidate" | "candidate_beside_green_tip"
+    ) {
+        "paired_failure_reversed"
+    } else {
+        "paired_failure"
+    };
+    fx.script_checks(&[rollup]);
+    let mut input = fx.complete_ungated_input();
+    input["auto_fix"] = json!(true);
+    input["completion"] = json!("review");
+    input["max_wait_seconds"] = json!(15);
+    input["poll_interval_seconds"] = json!(5);
+    let result = super::complete_with_logical_clock(&host, &input);
+    let history = host.history(TASK_ID);
+    let attempts = pr_auto_fix_attempts(&history, PR_NUMBER);
+    let base_red = history
+        .iter()
+        .filter(|entry| entry.event == "pr_auto_fix_base_red")
+        .count();
+    let refreshed = history
+        .iter()
+        .any(|entry| entry.event == "pr_auto_fix_base_refresh");
+    if known_red {
+        let error = result
+            .expect_err("known-red sibling admits no repair")
+            .to_string();
+        assert!(error.contains("base_red"), "{case}: {error}");
+        assert!(
+            attempts.is_empty(),
+            "{case}: known-red base spends no repair attempt"
+        );
+        assert_eq!(base_red, 1, "{case}: one pr_auto_fix_base_red record");
+        assert!(!refreshed, "{case}: known-red base records no refresh");
+        assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+    } else {
+        let error = result
+            .expect_err("candidate-owned checks take one repair")
+            .to_string();
+        assert!(
+            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+            "{case}: {error}"
+        );
+        assert_eq!(attempts.len(), 1, "{case}: one ordinary repair");
+        assert_eq!(base_red, 0, "{case}: no known-red record");
+        assert!(
+            !refreshed,
+            "{case}: candidate-owned checks record no refresh"
+        );
+        assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+    }
+    assert!(
+        fx.merge_requests().is_empty(),
+        "{case}: auto-fix alone never merges"
+    );
+}
+
 /// A failed PR cut before a base fix must refresh before repair admission,
 /// even without historical CI on its fork point. Current-base failures with
 /// the same diagnostic hold instead; a distinct diagnostic still repairs. A
 /// failure whose same job passed on the fork point is the candidate's: a
 /// green tip does not spend the base update on it, and a base update already
-/// reserved for the pull request does not stop its repair.
+/// reserved for the pull request does not stop its repair. A candidate-owned
+/// check beside a known-red sibling records that red base and admits no
+/// repair, in either rollup order. Two candidate-owned checks, and a
+/// candidate-owned check beside a green tip with no successful fork-point
+/// job, still take one ordinary repair and record no base refresh.
 #[test]
 #[allow(
     clippy::print_stderr,
@@ -1896,10 +2059,30 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                 "fixed_base_reserved",
                 "candidate_green_tip",
                 "candidate_green_tip_reserved",
+                "known_red_beside_candidate",
+                "known_red_before_candidate",
+                "candidate_owned_pair",
+                "candidate_owned_pair_reserved",
+                "candidate_beside_green_tip",
             ] {
                 in_fresh_row(sandbox, |row| {
                     eprintln!("scenario: {case}");
                     let row_started = std::time::Instant::now();
+                    if matches!(
+                        case,
+                        "known_red_beside_candidate"
+                            | "known_red_before_candidate"
+                            | "candidate_owned_pair"
+                            | "candidate_owned_pair_reserved"
+                            | "candidate_beside_green_tip"
+                    ) {
+                        paired_required_base_case(row, case);
+                        eprintln!(
+                            "scenario: {case} row elapsed {:.3} s",
+                            row_started.elapsed().as_secs_f64()
+                        );
+                        return;
+                    }
                     let fx = Fixture::new(row);
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
                     open_for_completion(&fx, &host);
