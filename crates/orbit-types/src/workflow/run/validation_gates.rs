@@ -19,6 +19,11 @@ pub struct ValidationGates {
     /// `review.baseline_commands`.
     #[serde(default)]
     pub baseline_commands: Vec<String>,
+    /// `workflow.light_delivery_paths` [ORB-16855]. `None` from an owner
+    /// that predates light delivery: its claims never skip review or
+    /// validation, since that owner would refuse the handoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_delivery_paths: Option<Vec<String>>,
 }
 
 impl ValidationGates {
@@ -109,6 +114,18 @@ impl HostValidationGates {
         (self.source != ValidationGateSource::ReplicaConfig
             && !self.gates.required_validation_commands.is_empty())
         .then_some(self.gates.required_validation_commands.as_slice())
+    }
+
+    /// The allow-list a light-delivery tag is judged against: this host's
+    /// own, or the owner's its claim captured. A replica fallback, or an
+    /// owner that captured none, yields an empty list, which no candidate
+    /// matches.
+    #[must_use]
+    pub fn light_delivery_paths(&self) -> &[String] {
+        match (&self.gates.light_delivery_paths, self.source) {
+            (_, ValidationGateSource::ReplicaConfig) | (None, _) => &[],
+            (Some(paths), _) => paths,
+        }
     }
 
     /// Gates read from this host's own configuration.

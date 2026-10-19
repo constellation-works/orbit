@@ -13,6 +13,11 @@ pub(crate) const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] =
         include_str!("../../assets/tag_instructions/no-diff-expected/implement.md"),
     ),
     (
+        "skip-validation",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/skip-validation/implement.md"),
+    ),
+    (
         "ui",
         TagInstructionRole::Implement,
         include_str!("../../assets/tag_instructions/ui/implement.md"),

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
+use orbit_types::task::SKIP_VALIDATION_TAG;
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
@@ -14,6 +15,7 @@ use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{git_output, git_output_raw};
 use super::super::handoff::reports_failure;
+use super::super::light_delivery::light_delivery_decision;
 use super::input::{refused, required_workspace};
 use super::no_diff;
 use super::observe::{observe, require_clean_candidate};
@@ -61,7 +63,22 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         .unwrap_or_default();
     // [ORB-15764] A `no-diff-expected` skip ran no command, and the owner
     // exempts exactly that checkpoint from required validation.
-    if validation.is_empty() && !context.required_commands.is_empty() && !no_diff_expected {
+    // [ORB-16855] So does a `skip-validation` candidate that changes only
+    // the owner's light-delivery paths; the owner re-judges it on acceptance.
+    let light = validation.is_empty()
+        && !context.required_commands.is_empty()
+        && !no_diff_expected
+        && light_delivery_decision(
+            host,
+            &workspace_path,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+            std::slice::from_ref(&context.task_id),
+            SKIP_VALIDATION_TAG,
+        )?
+        .is_some_and(|decision| decision.applies());
+    if validation.is_empty() && !context.required_commands.is_empty() && !no_diff_expected && !light
+    {
         return Err(refused(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
@@ -70,6 +87,8 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         HandoffChecks::Passed
     } else if no_diff_expected {
         HandoffChecks::NoDiffExpected
+    } else if light {
+        HandoffChecks::LightDelivery
     } else {
         HandoffChecks::NoneConfigured
     };
@@ -301,6 +320,9 @@ enum HandoffChecks {
     NoneConfigured,
     /// A `no-diff-expected` skip, which runs no command [ORB-15764].
     NoDiffExpected,
+    /// A `skip-validation` candidate within the light-delivery paths, which
+    /// runs no command [ORB-16855].
+    LightDelivery,
 }
 
 /// The `execution_summary` the typed handoff carries to the owner.
@@ -338,6 +360,10 @@ fn handoff_execution_summary(
         HandoffChecks::NoDiffExpected => {
             "the task is tagged no-diff-expected and changed nothing, so no required \
              validation ran"
+        }
+        HandoffChecks::LightDelivery => {
+            "the task is tagged skip-validation and every changed path matches \
+             `workflow.light_delivery_paths`, so no required validation ran"
         }
     };
     let delivered = format!(

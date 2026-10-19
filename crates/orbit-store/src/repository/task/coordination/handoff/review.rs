@@ -22,6 +22,7 @@ impl TaskCommitBoundary {
         ship: &AdmissionShipContract,
         observed: Option<&HandoffReviewObservation>,
         require_observation: bool,
+        light: &[orbit_types::task::LightDeliveryDecision],
     ) -> Result<(), OrbitError> {
         use HandoffReviewRefusal as R;
         // No candidate or PR exists to review. The owner independently
@@ -34,6 +35,13 @@ impl TaskCommitBoundary {
                     "NoDiff carries no before-PR review",
                 ));
             }
+            return Ok(());
+        }
+        // [ORB-16855] A `skip-review` candidate within the owner's
+        // light-delivery paths carries no review, whatever the claim captured.
+        if handoff.review == HandoffReview::not_required()
+            && self.light_delivery_applies(handoff, light, orbit_types::task::SKIP_REVIEW_TAG)?
+        {
             return Ok(());
         }
         let Some(contract) = &ship.review else {

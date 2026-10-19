@@ -421,6 +421,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.light_delivery_paths": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.low_complexity_crews": {
       "scope": "built-in",
       "state": "default",

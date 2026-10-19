@@ -45,6 +45,24 @@ pub(super) fn resolve_unlocked_context_paths(
     Ok(patterns)
 }
 
+/// `workflow.light_delivery_paths`: unset is Orbit's documentation and CI
+/// default; `[]` lets no candidate keep a light-delivery tag [ORB-16855].
+pub(super) fn resolve_light_delivery_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| {
+        orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect()
+    });
+    orbit_common::fs::path_filter::PathFilter::new(
+        orbit_types::task::LIGHT_DELIVERY_PATHS_KEY,
+        &patterns,
+    )?;
+    Ok(patterns)
+}
+
 /// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
 /// so a list of only blanks keeps full validation like an unset key.
 pub(super) fn resolve_unlocked_path_validation_commands(

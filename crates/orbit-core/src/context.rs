@@ -455,6 +455,9 @@ pub(crate) struct OrbitRuntimeSettings {
     unlocked_path_validation_commands: Vec<String>,
     /// `workflow.generated_paths`: path glob to regenerate command.
     generated_paths: std::collections::BTreeMap<String, String>,
+    /// `workflow.light_delivery_paths`: the paths a `skip-review` or
+    /// `skip-validation` candidate may change [ORB-16855].
+    light_delivery_paths: Vec<String>,
 }
 
 impl OrbitRuntimeSettings {
@@ -492,6 +495,7 @@ impl OrbitRuntimeSettings {
         unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
+        light_delivery_paths: Vec<String>,
     ) -> Self {
         Self {
             persistence,
@@ -526,6 +530,7 @@ impl OrbitRuntimeSettings {
             unlocked_context_paths,
             unlocked_path_validation_commands,
             generated_paths,
+            light_delivery_paths,
         }
     }
 
@@ -549,6 +554,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn generated_paths(&self) -> &std::collections::BTreeMap<String, String> {
         &self.generated_paths
+    }
+
+    pub(crate) fn light_delivery_paths(&self) -> &[String] {
+        &self.light_delivery_paths
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

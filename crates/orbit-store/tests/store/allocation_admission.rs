@@ -1449,6 +1449,7 @@ impl Delivery {
                     repository: REPOSITORY.into(),
                 }),
             known_red: self.known_red.clone(),
+            light_delivery: Vec::new(),
         }
     }
 

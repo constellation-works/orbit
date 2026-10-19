@@ -23,6 +23,7 @@ pub(crate) mod finding_verification_steps;
 mod helpers;
 pub(crate) mod legacy_decisions;
 mod lifecycle;
+pub(crate) mod light_delivery;
 mod lint;
 mod listing;
 mod os_readout;

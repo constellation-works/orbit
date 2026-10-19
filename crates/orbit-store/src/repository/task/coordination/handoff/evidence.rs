@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{LightDeliveryDecision, SKIP_VALIDATION_TAG};
 use orbit_types::workflow::{KnownRedValidation, handoff::*};
 
 use super::super::lifecycle::invalid;
@@ -50,11 +51,16 @@ impl TaskCommitBoundary {
     /// base runs, and accepts such a log only when the owner's run shares
     /// exactly the failures it reports; approval and landing pass `None` and
     /// recheck the pinned logs, which acceptance already judged.
+    ///
+    /// [ORB-16855] So does a handoff with no log whose candidate the owner
+    /// judged within its light-delivery paths for `skip-validation`, while
+    /// the owner's copy of the task still carries the tag (`light`).
     pub(super) fn validate_handoff_evidence(
         &self,
         handoff: &TaskHandoff,
         required: &[String],
         known_red: Option<&[KnownRedObservation]>,
+        light: &[LightDeliveryDecision],
     ) -> Result<Vec<KnownRedValidation>, OrbitError> {
         // An empty requirement list is no required check; any log the
         // handoff still carries must pin this claim's candidate all the same.
@@ -148,7 +154,9 @@ impl TaskCommitBoundary {
         // required command, as the owner's own pipelines skip `validate` for
         // the tag. Any log it still carries, such as one from a leaf built
         // before the exemption, was checked above like every other.
-        if !no_diff_expected && !commands.iter().all(|c| passed.contains(*c)) {
+        let light_delivery = handoff.validation.is_empty()
+            && self.light_delivery_applies(handoff, light, SKIP_VALIDATION_TAG)?;
+        if !no_diff_expected && !light_delivery && !commands.iter().all(|c| passed.contains(*c)) {
             return Err(invalid("required validation missing"));
         }
         if let HandoffDelivery::AlreadyLanded {
@@ -215,6 +223,31 @@ impl TaskCommitBoundary {
             }
         }
         Ok(known)
+    }
+
+    /// Whether the owner judged `handoff`'s candidate within its
+    /// light-delivery paths for `tag`, and its copy of the task still carries
+    /// the tag [ORB-16855].
+    pub(super) fn light_delivery_applies(
+        &self,
+        handoff: &TaskHandoff,
+        light: &[LightDeliveryDecision],
+        tag: &str,
+    ) -> Result<bool, OrbitError> {
+        if !light.iter().any(|decision| {
+            decision.tag == tag
+                && decision.applies()
+                && decision.candidate == handoff.candidate.candidate.commit
+        }) {
+            return Ok(false);
+        }
+        Ok(self
+            .bundle_store
+            .read_bundle_lightweight(&handoff.task_id)?
+            .envelope
+            .tags
+            .iter()
+            .any(|carried| carried == tag))
     }
 
     pub(super) fn observe_handoff<'a>(

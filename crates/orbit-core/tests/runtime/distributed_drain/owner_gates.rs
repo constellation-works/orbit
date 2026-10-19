@@ -27,6 +27,14 @@ fn owner_gates() -> ValidationGates {
     ValidationGates {
         required_validation_commands: vec!["make owner-check".into()],
         baseline_commands: vec!["make owner-affected".into()],
+        // The owner captures its own `workflow.light_delivery_paths`, here
+        // the default.
+        light_delivery_paths: Some(
+            orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS
+                .iter()
+                .map(|pattern| (*pattern).to_string())
+                .collect(),
+        ),
     }
 }
 
@@ -34,6 +42,8 @@ fn replica_gates() -> ValidationGates {
     ValidationGates {
         required_validation_commands: vec!["make replica-check".into()],
         baseline_commands: vec![],
+        // A replica fallback carries its own list, which no leaf applies.
+        light_delivery_paths: owner_gates().light_delivery_paths,
     }
 }
 
@@ -157,6 +167,10 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
     let gates = RuntimeHost::validation_gates(&leaf.bound);
     assert_eq!(gates.source, ValidationGateSource::ReplicaConfig);
     assert_eq!(gates.gates, replica_gates());
+    assert!(
+        gates.light_delivery_paths().is_empty(),
+        "a replica's own list never lets a claimed candidate skip review or validation"
+    );
     let base = leaf.base.commit.as_str();
     let refusal = derive_deferral("make owner-affected", base, &gates).unwrap_err();
     assert!(

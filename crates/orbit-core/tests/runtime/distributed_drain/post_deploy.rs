@@ -99,6 +99,7 @@ fn authorize_landing(pair: &Pair, delivered: &TaskHandoff) -> (String, ClaimInvo
         owner_completion_authority: None,
         review: None,
         known_red: vec![],
+        light_delivery: Vec::new(),
     });
     for (id, mutation) in [
         (

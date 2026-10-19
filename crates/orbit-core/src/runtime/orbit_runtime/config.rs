@@ -172,6 +172,12 @@ impl OrbitRuntime {
         self.context.settings().unlocked_context_paths()
     }
 
+    /// `workflow.light_delivery_paths`: the paths a candidate may change
+    /// and keep its `skip-review` or `skip-validation` tag [ORB-16855].
+    pub(crate) fn workflow_light_delivery_paths(&self) -> &[String] {
+        self.context.settings().light_delivery_paths()
+    }
+
     /// `[workflow.tag_instructions]` as admitted.
     pub(crate) fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
         self.context.settings().tag_instructions()

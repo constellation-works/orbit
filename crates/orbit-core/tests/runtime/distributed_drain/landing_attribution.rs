@@ -49,6 +49,7 @@ fn complete_landing(pair: &Pair) -> String {
         owner_completion_authority: None,
         review: None,
         known_red: vec![],
+        light_delivery: Vec::new(),
     });
     owner
         .mutate_execution_claim(

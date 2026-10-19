@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-17
+last_validated: 2026-10-18
 ---
 
 # Operate the Review Gate
@@ -94,6 +94,31 @@ as `review_gate_blocked`, `review_abandoned`, `review_timeout_incomplete` and
 `review_awaiting_evidence`; before these codes, they reached it as
 `pipeline_step_failed`. Each refusal message still leads with the same
 `code:` for readers. Other review-gate refusals keep `pipeline_step_failed`.
+
+### Tasks tagged `skip-review`
+
+A task filed with `skip-review`, or given it by an operator, gets no review at
+any timing while its candidate stays within `workflow.light_delivery_paths`
+([light delivery](../CONFIG.md#light-delivery-skip-review-and-skip-validation)).
+Every path the candidate changes since its pinned base must match, and every
+task it delivers must carry the tag. When both hold, `review_gate_admit` and
+`landing_review_gate_admit` return `applies: false` with reason
+`skip_review_light_delivery`. Settle then records `gate: not_required`, and the
+PR opens and merges gated only by the required hosted checks. The
+`delivery-code-review` auto-task also excludes the landing (assurance
+`light_delivery`). The budget preflight runs before any candidate exists, so it
+keeps its normal decision.
+
+Read the decision in the task's history. `light_delivery_applied` names the
+candidate. `light_delivery_ignored` names the first path outside the list, or
+the delivered tasks without the tag. An ignored tag means normal review: the
+gate admits a reviewer as for any other task. A claimed leaf skips review against
+the owner's captured list. The owner judges the handed-off candidate again when
+it accepts, approves or lands it, and it records that decision in history.
+
+An agent cannot add the tag to an existing task, including its own during its
+run. To review a tagged task anyway, remove the tag (`orbit task update <id>
+--tags ...` without it) before it is dispatched.
 
 ### Before-landing review
 

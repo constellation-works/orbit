@@ -323,6 +323,72 @@ fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
     assert_eq!(updated["tags"], json!(["docs", "perf"]));
 }
 
+/// [ORB-16855] `skip-review` and `skip-validation` skip delivery gates, so
+/// only filing or an operator sets them: an agent's update, such as the
+/// implementer's own during its run, is refused and changes nothing.
+fn light_delivery_tags_are_set_only_by_filing_or_an_operator() {
+    let workspace = workspace();
+    let filed = workspace.add_task_cli_with_tags("Docs task", &["skip-review"]);
+    assert_eq!(filed["tags"], json!(["skip-review"]), "filing sets the tag");
+    let task_id = filed["id"].as_str().expect("task id");
+
+    let input = json!({
+        "id": task_id, "model": "claude",
+        "tags": ["skip-review", "skip-validation"],
+    })
+    .to_string();
+    let mut agent = assert_cmd::cargo::cargo_bin_cmd!("orbit");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        agent.env_remove(name);
+    });
+    let refused = agent
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("ORBIT_AGENT_NAME", "claude")
+        .env("ORBIT_AGENT_MODEL", "claude")
+        .env("ORBIT_TASK_ID", task_id)
+        .args(["tool", "run", "orbit.task.update", "--input", &input])
+        .output()
+        .expect("run orbit as the implementing agent");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "an agent adding `skip-validation` to its own task must be refused"
+    );
+    let error: Value = serde_json::from_slice(&refused.stderr).expect("stderr JSON");
+    assert_eq!(error["code"], "capability_denied", "{stderr}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("skip-validation")),
+        "names the tag: {stderr}"
+    );
+    let shown = workspace.run(&["task", "show", task_id, "--json"], "show task");
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("show JSON");
+    assert_eq!(
+        shown["tags"],
+        json!(["skip-review"]),
+        "the refusal wrote nothing"
+    );
+
+    let approved = workspace.run_as_operator(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "skip-review",
+            "--tag",
+            "skip-validation",
+            "--json",
+        ],
+        "operator adds skip-validation",
+    );
+    let approved: Value = serde_json::from_slice(&approved.stdout).expect("update JSON");
+    assert_eq!(approved["tags"], json!(["skip-review", "skip-validation"]));
+}
+
 fn assert_task_titles(output: &Output, expected: &[&str]) {
     let value: Value = serde_json::from_slice(&output.stdout).expect("task array JSON");
     let tasks = value.as_array().expect("task array");
@@ -386,6 +452,10 @@ fn task_tags_status_filters_and_identity() {
         (
             "task_update_refuses_dropping_system_identity_tag_without_override",
             task_update_refuses_dropping_system_identity_tag_without_override as fn(),
+        ),
+        (
+            "light_delivery_tags_are_set_only_by_filing_or_an_operator",
+            light_delivery_tags_are_set_only_by_filing_or_an_operator as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

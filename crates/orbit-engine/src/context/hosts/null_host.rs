@@ -461,6 +461,7 @@ pub trait NullRuntimeHost: Send + Sync {
         orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
             required_validation_commands: NullRuntimeHost::required_validation_commands(self),
             baseline_commands: NullRuntimeHost::review_baseline_commands(self),
+            light_delivery_paths: None,
         })
     }
 

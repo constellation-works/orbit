@@ -6,6 +6,7 @@ mod context_widening;
 mod decision;
 mod epic;
 mod error;
+mod light_delivery;
 mod model;
 mod os_requirement;
 mod plan;
@@ -29,6 +30,11 @@ pub use decision::{
     RecordedFinalRecovery, TaskDecision,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
+pub use light_delivery::{
+    DEFAULT_LIGHT_DELIVERY_PATHS, LIGHT_DELIVERY_APPLIED_EVENT, LIGHT_DELIVERY_IGNORED_EVENT,
+    LIGHT_DELIVERY_PATHS_KEY, LIGHT_DELIVERY_TAGS, LightDeliveryDecision, LightDeliveryJudgement,
+    SKIP_REVIEW_TAG, SKIP_VALIDATION_TAG,
+};
 
 pub use artifacts::{
     ArtifactManifestFileV2, ArtifactManifestV2, ArtifactWriter, CYCLIC_RELATION_TYPES,

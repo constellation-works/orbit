@@ -508,6 +508,7 @@ impl crate::OrbitRuntime {
             }
         }
         let review = self.observe_handoff_review(handoff, &candidate)?;
+        let light_delivery = self.owner_light_delivery(&handoff.task_id, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
         // validation logs, the way the owner's own delivery runs none.
         Ok(HandoffObservation {
@@ -517,6 +518,7 @@ impl crate::OrbitRuntime {
             owner_completion_authority: self.owner_completion_authority(),
             review,
             known_red: Vec::new(),
+            light_delivery,
         })
     }
 

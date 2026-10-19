@@ -8,6 +8,7 @@ use orbit_engine::DispatchError;
 use orbit_engine::review_gate::candidate_identity;
 use orbit_store::contracts::ReviewReserveRequest;
 use orbit_types::identity::Crew;
+use orbit_types::task::SKIP_REVIEW_TAG;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
@@ -25,6 +26,9 @@ use super::super::evidence::{
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use crate::application::review::crew::pool_source;
+use crate::application::task::light_delivery::{
+    carries, light_delivery_decision, record_light_delivery,
+};
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
@@ -163,6 +167,16 @@ fn admission_output(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    // [ORB-16855] A candidate whose tasks all carry `skip-review` and that
+    // changes only `workflow.light_delivery_paths` is published and landed
+    // gated only by the hosted checks. The budget preflight runs before any
+    // candidate exists, so it keeps its normal decision.
+    if !preflight
+        && light_review_skipped(runtime, &context)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
+    {
+        return Ok(not_applicable(SKIP_REVIEW_REASON, Some(&admission)));
+    }
     let mut awaiting_evidence = false;
     let outcome = awaiting_external_evidence(runtime, &context).and_then(|awaiting| {
         awaiting_evidence = awaiting;
@@ -215,6 +229,40 @@ fn admission_output(
         }
         other => refused_or_failed(other),
     })
+}
+
+/// Why a `skip-review` candidate within the light-delivery paths is not
+/// reviewed [ORB-16855].
+const SKIP_REVIEW_REASON: &str = "skip_review_light_delivery";
+
+/// Judge the checked-out candidate on its pinned base for `skip-review`,
+/// record the decision in each task's history, and say whether review is
+/// skipped. A run none of whose tasks carry the tag judges nothing.
+fn light_review_skipped(runtime: &OrbitRuntime, context: &GateContext) -> Result<bool, OrbitError> {
+    if !context
+        .tasks
+        .iter()
+        .any(|task| carries(task, SKIP_REVIEW_TAG))
+    {
+        return Ok(false);
+    }
+    let base = context.base_sha()?;
+    let head = candidate_identity(&context.workspace_path, &base)?
+        .head
+        .commit;
+    let Some(decision) = light_delivery_decision(
+        runtime,
+        &context.workspace_path,
+        &base,
+        &head,
+        &context.tasks,
+        SKIP_REVIEW_TAG,
+    )?
+    else {
+        return Ok(false);
+    };
+    record_light_delivery(runtime, &context.task_ids, &decision)?;
+    Ok(decision.applies())
 }
 
 /// Whether a task's held candidate is still waiting for named external

@@ -95,6 +95,7 @@ mod host_ui_routing;
 mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;
+mod light_delivery;
 mod local_route_before_pr;
 mod mid_run_steering;
 mod orphan_adoption;

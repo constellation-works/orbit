@@ -43,6 +43,12 @@
 //! passed the full list on only in `workflow.unlocked_context_paths` runs
 //! `workflow.unlocked_path_validation_commands` instead, when that is set
 //! (see [`super::validation_scope`]); every output and log names the scope.
+//!
+//! [ORB-16855] A candidate whose delivered tasks all carry `skip-validation`
+//! and whose every changed path since `base_sha` matches
+//! `workflow.light_delivery_paths` runs no command: the decision is
+//! `skipped_light_delivery` and each task's history records why (see
+//! [`super::light_delivery`]). Any other changed path ignores the tag.
 
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -50,7 +56,7 @@ use std::time::Instant;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{ContextWideningStep, TaskDecision, TaskHistoryEntry};
+use orbit_types::task::{ContextWideningStep, SKIP_VALIDATION_TAG, TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::handoff::HandoffArtifactRef;
 use orbit_types::workflow::{
     BaselineRedFailures, BaselineRedHold, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
@@ -65,13 +71,15 @@ use super::baseline::{
     run_validation_command,
 };
 use super::claim::{
-    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_NO_REQUIRED_COMMANDS, require_clean_checkout,
+    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_LIGHT_DELIVERY, SKIPPED_NO_REQUIRED_COMMANDS,
+    require_clean_checkout,
 };
 use super::commit::attribute_candidate_paths;
 use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
+use super::light_delivery::{light_delivery_decision, record_light_delivery};
 use super::validation_scope::validation_scope;
 
 /// Run the workspace's required commands on the owner's committed candidate
@@ -156,6 +164,34 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         )));
     }
     require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+    if let Some(base_sha) = base_sha.as_deref()
+        && let Some(decision) = light_delivery_decision(
+            host,
+            &workspace_path,
+            base_sha,
+            &candidate,
+            &task_ids,
+            SKIP_VALIDATION_TAG,
+        )?
+    {
+        record_light_delivery(host, &task_ids, &decision)?;
+        if decision.applies() {
+            let mut output = json!({
+                "phase": "validate",
+                "base_sha": base_sha,
+                "decision": SKIPPED_LIGHT_DELIVERY,
+                "note": decision.note(),
+                "commands": [],
+                "validation": [],
+                "branch": branch,
+                "tested_head": candidate,
+            });
+            if let Some(owned_paths) = owned_paths {
+                output["owned_paths"] = json!(owned_paths);
+            }
+            return Ok(output);
+        }
+    }
     let tree = git_output(
         &workspace_path,
         &["rev-parse", "--verify", &format!("{candidate}^{{tree}}")],

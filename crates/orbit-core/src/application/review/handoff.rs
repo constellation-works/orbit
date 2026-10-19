@@ -399,6 +399,8 @@ impl OrbitRuntime {
             review: None,
             // Acceptance ran the known-red bases; approval rechecks the logs.
             known_red: Vec::new(),
+            light_delivery: self
+                .owner_light_delivery(&accepted.handoff.task_id, &accepted.handoff.candidate)?,
         };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),

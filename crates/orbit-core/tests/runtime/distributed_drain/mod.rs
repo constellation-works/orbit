@@ -292,6 +292,7 @@ impl Wire {
             owner_completion_authority: None,
             review: None,
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         let request = format!("handoff:{}", handoff.claim_id);
         self.owner

@@ -2,7 +2,10 @@ use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
+use orbit_types::task::{
+    LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
+    refuses_implementer_writes,
+};
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
@@ -96,11 +99,32 @@ pub(crate) fn task_context_for_agent_input(
         input,
         &runtime.paths().repo_root,
     );
-    if !task.tags.iter().any(|tag| tag == "no-diff-expected")
+    // [ORB-16855] A `skip-validation` task leaves no command to the
+    // pipeline while it stays within the light-delivery paths; the tag's
+    // instruction says what to run when it does not.
+    if !task
+        .tags
+        .iter()
+        .any(|tag| tag == "no-diff-expected" || tag == SKIP_VALIDATION_TAG)
         && let Some(commands) = final_validation_commands(runtime, input)
         && let Some(map) = context.as_object_mut()
     {
         map.insert("final_validation_commands".to_string(), commands.into());
+    }
+    let light_tags = LIGHT_DELIVERY_TAGS
+        .iter()
+        .filter(|tag| task.tags.iter().any(|carried| carried == *tag))
+        .collect::<Vec<_>>();
+    if !light_tags.is_empty()
+        && let Some(map) = context.as_object_mut()
+    {
+        map.insert(
+            "light_delivery".to_string(),
+            serde_json::json!({
+                "tags": light_tags,
+                "paths": runtime.host_validation_gates().light_delivery_paths(),
+            }),
+        );
     }
     if runtime.mid_run_steering().enabled
         && let Some(steering) = runtime
