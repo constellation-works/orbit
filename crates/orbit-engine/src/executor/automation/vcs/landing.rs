@@ -633,14 +633,16 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         state = match checked {
             Ok(state) => state,
             Err(reason) => {
+                let message = format!("pull request #{pr_number} cannot be merged ({reason})");
+                let error = reason
+                    .into_error(|_| OrbitError::Execution(format!("handoff_land: {message}")));
+                // Keep the provider's transport class until the outer loop
+                // applies the shared deadline and the external-write fence.
+                if transport_failure(&error) {
+                    return Err(error);
+                }
                 diagnostic["classification"] = diagnostics::text("required_check_refusal");
-                return Err(stop_pr(
-                    host,
-                    context,
-                    &diagnostic,
-                    false,
-                    &format!("pull request #{pr_number} cannot be merged ({reason})"),
-                )?);
+                return Err(stop_pr(host, context, &diagnostic, false, &message)?);
             }
         };
         diagnostic["classification"] = diagnostics::text(&describe(&state));

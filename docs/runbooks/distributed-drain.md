@@ -1384,7 +1384,9 @@ one. From then on:
   connection, an HTTP 5xx) that interrupts the landing before it records a
   merge intent or requests a check rerun or branch update is retried by the
   same landing job against the same handoff: at most three passes, 20s and
-  then 60s apart, within the job's check-wait budget. A credential,
+  then 60s apart, within the job's check-wait budget. This includes the
+  required-check evidence read for a blocked pull request; recovery still
+  requires fresh check evidence for the accepted head. A credential,
   permission or rate-limit refusal is not retried. A landing job that still
   fails, for that or any other reason, records its attempt `stopped` with
   the error, so the dashboard and `orbit.drain.claims` show the stop instead
