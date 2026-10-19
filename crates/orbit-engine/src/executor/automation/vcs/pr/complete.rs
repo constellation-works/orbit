@@ -97,9 +97,9 @@ use super::answers::{
     PullRequestStatus, ReviewedMergeOutcome, read_pr_status, read_pr_status_before,
 };
 use super::auto_fix::{
-    AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
-    landed_repair, publish_local_repair, record_landed_repair, record_published_repair,
-    red_base_wait, repair_failed_checks, stopped,
+    AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, base_tip_checks,
+    blocked_verdict, publish_local_repair, record_base_path, record_landed_repair,
+    record_published_repair, red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
 use super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -646,26 +646,43 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         ));
                     }
                     BlockedVerdict::RepairChecks(failed) => {
-                        if !landed_refresh_attempted
-                            && let Some(evidence) = landed_repair(
-                                host,
-                                input,
-                                workspace_path,
-                                pr_number,
-                                &status,
-                                &failed,
-                            )
+                        let base_evidence = base_tip_checks(
+                            host,
+                            input,
+                            workspace_path,
+                            pr_number,
+                            &status,
+                            &failed,
+                        );
+                        if base_evidence
+                            .as_ref()
+                            .is_some_and(|evidence| evidence["path"] == "known_red_base")
                         {
+                            let evidence = base_evidence
+                                .as_ref()
+                                .ok_or_else(|| stopped(pr_number, "missing base evidence"))?;
+                            record_base_path(host, auto_fix, "pr_auto_fix_base_red", evidence)?;
+                            base_red_reason = Some(format!(
+                                "base_red: required failures also fail on current base {}, so no repair agent runs",
+                                evidence["landed_base"]
+                            ));
+                        } else if !landed_refresh_attempted && let Some(evidence) = base_evidence {
                             let from = status
                                 .head_sha
                                 .as_deref()
                                 .ok_or_else(|| stopped(pr_number, "missing failed head"))?;
-                            admit(
+                            let candidate = base_candidate.as_ref().ok_or_else(|| {
+                                stopped(
+                                    pr_number,
+                                    "the base refresh lacks an owned candidate identity",
+                                )
+                            })?;
+                            reserve_base_refresh(
                                 host,
                                 auto_fix,
-                                pr_number,
-                                from,
-                                PrAutoFixBlocker::FailedChecks,
+                                candidate,
+                                completion_deadline_ms,
+                                &evidence,
                             )?;
                             record_landed_repair(host, auto_fix, &evidence)?;
                             let mut refresh_input = input.clone();
@@ -712,10 +729,15 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             pin.adopt_refreshed_candidate(Some(to));
                             landed_refresh_attempted = true;
                             continue;
-                        }
-                        if let Some(reason) =
+                        } else if let Some(reason) =
                             red_base_wait(host, input, workspace_path, pr_number, &status, &failed)
                         {
+                            record_base_path(
+                                host,
+                                auto_fix,
+                                "pr_auto_fix_base_red",
+                                &json!({"failed_head":status.head_sha,"reason":reason}),
+                            )?;
                             base_red_reason = Some(reason);
                         } else {
                             return Err(repair_failed_checks(

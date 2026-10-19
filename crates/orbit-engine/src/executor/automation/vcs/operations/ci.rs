@@ -9,6 +9,7 @@
 //! The log read is the CI sweep's own (`orbit_tools::github_cli`), so landing
 //! classifies a failure from exactly the excerpt the sweep would file.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -32,22 +33,63 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             "private automation VCS commit jobs requires a full commit id, not '{commit}'"
         )));
     }
-    let runs = gh_json(
-        vec![
-            "api".to_string(),
-            "--method".to_string(),
-            "GET".to_string(),
-            "repos/{owner}/{repo}/actions/runs".to_string(),
-            "-F".to_string(),
-            format!("head_sha={commit}"),
-            "-F".to_string(),
-            "per_page=100".to_string(),
-        ],
-        workspace_path,
-        "commit runs",
-    )?;
+    // Auto-fix compares against the latest push run of each workflow on the
+    // exact base tip, never an older green run or a PR run of the same commit.
+    let push_branch = input.get("latest_push_branch").and_then(Value::as_str);
+    let mut args = vec![
+        "api".to_string(),
+        "--method".to_string(),
+        "GET".to_string(),
+        "repos/{owner}/{repo}/actions/runs".to_string(),
+        "-F".to_string(),
+        format!("head_sha={commit}"),
+        "-F".to_string(),
+        "per_page=100".to_string(),
+    ];
+    if let Some(branch) = push_branch {
+        args.extend([
+            "-F".into(),
+            "event=push".into(),
+            "-F".into(),
+            format!("branch={branch}"),
+        ]);
+    }
+    let runs = gh_json(args, workspace_path, "commit runs")?;
+    let listed = runs["workflow_runs"]
+        .as_array()
+        .ok_or_else(|| OrbitError::Execution("commit runs carried no workflow run list".into()))?;
+    let mut selected: Vec<&Value> = listed.iter().collect();
+    if let Some(branch) = push_branch {
+        if runs["total_count"]
+            .as_u64()
+            .is_none_or(|total| total > listed.len() as u64)
+        {
+            return Err(OrbitError::Execution(
+                "base push runs were incomplete".into(),
+            ));
+        }
+        let mut newest = BTreeMap::<u64, &Value>::new();
+        for run in &selected {
+            if run["event"] != "push" || run["head_sha"] != commit || run["head_branch"] != branch {
+                continue;
+            }
+            let (Some(workflow), Some(id)) = (run["workflow_id"].as_u64(), run["id"].as_u64())
+            else {
+                return Err(OrbitError::Execution(
+                    "base push run omitted its identity".into(),
+                ));
+            };
+            if newest
+                .get(&workflow)
+                .is_none_or(|prior| prior["id"].as_u64().is_some_and(|prior| id > prior))
+            {
+                newest.insert(workflow, run);
+            }
+        }
+        selected = newest.into_values().collect();
+    }
     let mut jobs = Vec::new();
-    for run in runs["workflow_runs"].as_array().into_iter().flatten() {
+    for run in selected {
         let Some(run_id) = run["id"].as_u64() else {
             continue;
         };
@@ -63,7 +105,19 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             workspace_path,
             "run jobs",
         )?;
-        for job in listing["jobs"].as_array().into_iter().flatten() {
+        let listed_jobs = listing["jobs"]
+            .as_array()
+            .ok_or_else(|| OrbitError::Execution("run jobs carried no job list".into()))?;
+        if push_branch.is_some()
+            && listing["total_count"]
+                .as_u64()
+                .is_none_or(|total| total > listed_jobs.len() as u64)
+        {
+            return Err(OrbitError::Execution(
+                "base push jobs were incomplete".into(),
+            ));
+        }
+        for job in listed_jobs {
             let failed_steps: Vec<Value> = job["steps"]
                 .as_array()
                 .into_iter()

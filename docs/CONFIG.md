@@ -1181,17 +1181,19 @@ existing recovery activities, final validation and push do the repair:
   unclassified or optional pending check grants no wait, and a
   required failure still takes precedence over pending checks. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
-  whose job log shows a code failure is repaired, with that head's failed step,
-  error signature and log excerpt as evidence. When that same signature already
-  fails on the base commit and the base branch has not moved past it, the
-  watcher admits no repair: it waits for the base within the completion
-  deadline and then stops with a base-red reason. The same wait applies when
-  the base has moved to a commit whose same job has not concluded. A concluded
-  job on that commit, including a failure, or a commit that lists no such job,
-  is not this wait. That classification is the
-  landing's, not a second copy. A failure the base does not fail the same way
-  is still repaired, and the three-attempt budget is unchanged. A conflict is
-  rebased onto the current base by PR conflict recovery.
+  whose job log shows a code failure is compared with the current base tip
+  before a repair is admitted. Orbit reads the latest push run of the same
+  workflow on that exact tip. If every failed required job succeeds there and
+  the PR is behind, it refreshes the branch through the existing pinned rebase,
+  validation and lease-checked publication path, then watches checks on the new
+  head. This spends no agent repair attempt. A reviewed head returns for
+  independent re-review before publication. A matching failure on the current
+  base is known red: the watcher records it and waits within the completion
+  deadline, spending no repair attempt. The existing inherited-failure wait also
+  applies while a moved base's same job has not concluded. Missing, pending or
+  unreadable tip evidence cannot prove a landed fix or a known-red base. A
+  distinct candidate failure keeps the ordinary repair path and three-attempt
+  budget. A conflict is rebased onto the current base by PR conflict recovery.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them
@@ -1317,15 +1319,14 @@ existing recovery activities, final validation and push do the repair:
   concurrent remote movement is refused. Resume spends no new
   repair attempt merely to finish an inherited repair and grants no merge
   authority.
-- When a shared-base repair has already landed, Orbit can refresh the owned
-  branch instead of dispatching duplicate edits. Every failed required job
-  must have the same diagnostic on the old base and pass on the newer base.
-  It retains those failed and passing job identities and the landed base in
-  `auto-fix/<run>/landed-<failed-head>.json`, spends an ordinary repair attempt,
-  pins that base, validates the refreshed candidate, and uses the same review
-  and publication leases before watching the new exact head. Missing evidence
-  leaves the ordinary diagnosis path in place; it never means the failure is
-  outside authorized repair scope.
+- A base refresh retains the failed and passing job identities and exact base
+  tip in `auto-fix/<run>/landed-<failed-head>.json` and records
+  `pr_auto_fix_base_refresh` in task history before mutation. Its owner-side
+  reservation bounds base refreshes independently of the repair-attempt budget.
+  Old fork-point failure logs are unnecessary: the current tip's latest push
+  jobs supply the evidence. Matching current-base failures record
+  `pr_auto_fix_base_red`; ordinary agent repairs retain their existing admission
+  history. Missing evidence leaves the ordinary diagnosis path in place.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`
