@@ -123,6 +123,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         tool_disallow_list: None,
         instruction: String::new(),
         steering_instruction: None,
+        regression_risk_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

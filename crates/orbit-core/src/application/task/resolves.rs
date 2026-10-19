@@ -205,7 +205,7 @@ impl OrbitRuntime {
     }
 
     /// Append system-authored side-effect bookkeeping to a task's history.
-    pub(super) fn append_system_history(
+    pub(in crate::application) fn append_system_history(
         &self,
         task_id: &str,
         history: Vec<TaskHistoryEntry>,

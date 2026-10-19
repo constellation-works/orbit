@@ -147,6 +147,28 @@ pub(crate) fn task_context_for_agent_input(
     Ok(Some(context))
 }
 
+/// The `regression_risk` section for the task `input` names, as the prompt
+/// `run_id` builds for `activity_name` shows it, or `None` when marks are
+/// off, no `file:` selector qualifies, or the input names no single task.
+/// Marks are advisory, so a scan that fails is logged and yields none rather
+/// than refusing the dispatch.
+pub(crate) fn regression_risk_for_agent_input(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+) -> Option<Value> {
+    let task_id = singular_task_id_from_input(input)?;
+    let section = runtime.get_task(task_id).and_then(|task| {
+        let selectors = envelope_context_files(&task, input, &runtime.paths().repo_root);
+        runtime.regression_risk_section(task_id, &selectors, run_id, activity_name)
+    });
+    section.unwrap_or_else(|error| {
+        tracing::warn!(%task_id, %run_id, %error, "regression risk: marks unavailable");
+        None
+    })
+}
+
 /// The required commands this invocation's pipeline runs itself on the final
 /// candidate, for an implementer that need not run them first. Only a
 /// delivery pipeline whose deterministic final validation follows the
@@ -178,22 +200,7 @@ fn agent_task_context_json(
         .get("repo_root")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    // The envelope carries the task's full declared footprint: a selector for
-    // a file the task is about to create is scope the implementer needs, and
-    // dropping it here would hand the agent a narrower boundary than the one
-    // its locks and reservations protect [ORB-12490]. A selector that cannot
-    // be canonicalized against this run's root — an unreadable worktree path,
-    // or a declaration written against another checkout — is passed through
-    // verbatim for the same reason; the envelope reports scope, it does not
-    // decide it.
-    let context_root = context_workspace_root(fallback_repo_root, workspace_path.as_deref());
-    let context_files = task
-        .context_files
-        .iter()
-        .map(|entry| {
-            canonical_selector_in_workspace(entry, &context_root).unwrap_or_else(|_| entry.clone())
-        })
-        .collect::<Vec<_>>();
+    let context_files = envelope_context_files(task, input, fallback_repo_root);
 
     // `json!` with a braced literal always yields `Value::Object`; the fallback
     // arm keeps this total so the agent context never panics on a malformed
@@ -252,6 +259,28 @@ fn agent_task_context_json(
     }
 
     Value::Object(context)
+}
+
+/// The task's selectors as the envelope carries them, canonical against this
+/// run's root.
+///
+/// The envelope carries the task's full declared footprint: a selector for
+/// a file the task is about to create is scope the implementer needs, and
+/// dropping it here would hand the agent a narrower boundary than the one
+/// its locks and reservations protect [ORB-12490]. A selector that cannot
+/// be canonicalized against this run's root — an unreadable worktree path,
+/// or a declaration written against another checkout — is passed through
+/// verbatim for the same reason; the envelope reports scope, it does not
+/// decide it.
+fn envelope_context_files(task: &Task, input: &Value, fallback_repo_root: &Path) -> Vec<String> {
+    let workspace_path = input.get("workspace_path").and_then(Value::as_str);
+    let context_root = context_workspace_root(fallback_repo_root, workspace_path);
+    task.context_files
+        .iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry, &context_root).unwrap_or_else(|_| entry.clone())
+        })
+        .collect()
 }
 
 /// The comment projection for one envelope: the retained comments plus what

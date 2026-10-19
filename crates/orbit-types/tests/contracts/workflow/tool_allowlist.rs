@@ -37,6 +37,7 @@ fn agent_loop_activity(
         spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
             instruction: "test".to_string(),
             steering_instruction: None,
+            regression_risk_instruction: None,
             tools,
             on_denial: OnDenial::Terminate,
             model: None,

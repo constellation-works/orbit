@@ -540,6 +540,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Option<Value>, DispatchError> {
         NullRuntimeHost::task_context_for_agent_input(self, run_id, step_id, input)
     }
+    fn regression_risk_for_agent_input(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<Value> {
+        NullRuntimeHost::regression_risk_for_agent_input(self, run_id, activity_name, input)
+    }
     fn tag_instructions_for_activity(
         &self,
         run_id: &str,

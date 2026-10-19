@@ -636,6 +636,44 @@ spec:
       task), and rerun the checks the change affects. The round and its
       budget are the host's record; nothing you return spends or refunds
       one.
+  regression_risk_instruction: |
+    Regression-risk marks
+
+    `task.regression_risk.marks` names context files whose recent
+    deliveries often regressed: `regressed` counts the tasks that touched
+    the file in the last `window_days` and were later named by a
+    regression, and `nature` and `escape` say how those regressions most
+    often happened and why the gates missed them. `lesson` is the newest
+    regression's one-line summary. A mark points at where earlier work
+    broke; it does not describe the current code, so read the file as it is
+    now and do not re-fix old bugs.
+
+    For each marked file you change, act on every category its mark lists:
+    - escape `no_test`: add a focused regression check at the public
+      CLI/API boundary for the behavior you change there.
+    - escape `test_not_selected`: run the existing tests that cover the
+      file by name, not only an affected-test selection.
+    - escape `platform_only`: name each platform or host the change
+      behaves differently on, and exercise it or record it as owed.
+    - escape `review_missed`: before handoff, re-read your diff of the file
+      against every acceptance criterion and its callers.
+    - escape `spec_ambiguous`: say in the execution summary which reading
+      of the requirement you implemented and why.
+    - escape `nondeterministic`: keep timing, ordering and environment out
+      of the change and its tests.
+    - nature `broke_existing`: run the tests of the file's existing callers.
+    - nature `defect_in_new`: cover the new paths you add, failure paths
+      included.
+    - nature `incomplete`: check each acceptance criterion against the diff.
+    - nature `merge_reintroduced`: after a rebase or base sync, re-verify
+      the touched area, and that nothing removed earlier came back.
+    - nature `contract_drift`: update the affected docs, schemas or
+      contract in the same diff.
+    - `unclassified`: no specific check; apply the ones above that fit.
+
+    `orbit.codebase.show` with the path lists the tasks behind a mark when
+    you need them. In the execution summary, say what you did for each
+    marked file you changed.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add

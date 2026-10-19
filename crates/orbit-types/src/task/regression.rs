@@ -51,3 +51,22 @@ pub struct RegressionClassification {
     pub nature: RegressionNature,
     pub escape: RegressionEscape,
 }
+
+/// History event recording which context files an agent prompt marked as
+/// regression-prone.
+pub const REGRESSION_RISK_MARKED_EVENT: &str = "regression_risk_marked";
+
+/// The decision of one [`REGRESSION_RISK_MARKED_EVENT`] history entry: the
+/// paths one run's prompt for one activity marked, so analytics can compare
+/// how marked paths fare once agents are told about them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionRiskMarks {
+    /// The run whose prompt carried the marks.
+    pub run_id: String,
+    /// The activity the prompt was built for.
+    pub activity: String,
+    /// The marked repository-relative file paths, highest risk first.
+    pub paths: Vec<String>,
+    /// The trailing window, in days, the marks were computed over.
+    pub window_days: u32,
+}

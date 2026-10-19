@@ -21,8 +21,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::identity::all_agent_families;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, NO_DIFF_EXPECTED_TAG, TaskHistoryEntry,
-    TaskRelationType, TaskStatus,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, NO_DIFF_EXPECTED_TAG, RegressionRiskMarks,
+    Task, TaskDecision, TaskHistoryEntry, TaskRelationType, TaskStatus,
 };
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
@@ -188,6 +188,46 @@ pub(super) struct TaskFacts {
     /// When the task entered a status other than `backlog`, ascending: each
     /// ends any lock wait in progress, since only a backlog task is admitted.
     pub(super) left_backlog: Vec<DateTime<Utc>>,
+    /// Each `regression_risk_marked` event: when a prompt for the task
+    /// marked context files, and what it marked.
+    pub(super) marks: Vec<(DateTime<Utc>, RegressionRiskMarks)>,
+}
+
+impl TaskFacts {
+    /// A task's identity, status and declared footprint, with no history
+    /// read: the facts a [`scan_regressions`] task carries.
+    fn from_envelope(task: &Task, done_at: Option<DateTime<Utc>>) -> Self {
+        let mut footprint: Vec<Anchor> = task
+            .context_files
+            .iter()
+            .filter_map(|selector| Anchor::parse(selector))
+            .collect();
+        footprint.sort();
+        footprint.dedup();
+        Self {
+            landed: None,
+            delivery_at: done_at,
+            pilot: None,
+            no_diff: task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+            id: task.id.to_string(),
+            title: task.title.clone(),
+            crew: task.crew.clone().or_else(|| task.implemented_by.clone()),
+            complexity: task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
+            status: task.status,
+            footprint,
+            updated_at: task.updated_at,
+            done_at,
+            rejected_at: None,
+            had_run: false,
+            widenings: Vec::new(),
+            blocks: Vec::new(),
+            regressions: Vec::new(),
+            left_backlog: Vec::new(),
+            marks: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -233,22 +273,7 @@ pub(super) fn scan(
 ) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
-
-    let mut pending_links = Vec::new();
-    for task in &tasks {
-        for relation in &task.relations {
-            if relation.relation_type == TaskRelationType::RegressionFrom {
-                pending_links.push(PendingLink::new(
-                    relation.target.to_string(),
-                    task.id.to_string(),
-                    relation.regression,
-                    task.created_by.as_deref(),
-                    task.origin,
-                    &task.tags,
-                ));
-            }
-        }
-    }
+    let pending_links = pending_links(&tasks);
 
     let settlements = failed_claim_settlements(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
@@ -260,17 +285,10 @@ pub(super) fn scan(
             tracing::warn!(task_id = %id, %error, "codebase analytics: task history unreadable");
             Vec::new()
         });
-        let entered = |status: TaskStatus| {
-            history
-                .iter()
-                .rev()
-                .find(|entry| entry.to_status == Some(status))
-                .map(|entry| entry.at)
-        };
         let done_at = (task.status == TaskStatus::Done)
-            .then(|| entered(TaskStatus::Done).unwrap_or(task.updated_at));
+            .then(|| entered(&history, TaskStatus::Done).unwrap_or(task.updated_at));
         let rejected_at = (task.status == TaskStatus::Rejected)
-            .then(|| entered(TaskStatus::Rejected).unwrap_or(task.updated_at));
+            .then(|| entered(&history, TaskStatus::Rejected).unwrap_or(task.updated_at));
         let widenings: Vec<_> = history
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
@@ -321,6 +339,15 @@ pub(super) fn scan(
                     .read(runtime, &id, receipt, delivery_window.is_some())
             });
         let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+        let marks = history
+            .iter()
+            .filter_map(|entry| match &entry.decision {
+                Some(TaskDecision::RegressionRiskMarked(marked)) => {
+                    Some((entry.at, marked.clone()))
+                }
+                _ => None,
+            })
+            .collect();
         let pilot = (landed.is_some() && !no_diff)
             .then(|| {
                 let runs = pilot_runs.get_or_insert_with(|| super::pilot::PilotRuns::load(runtime));
@@ -348,31 +375,10 @@ pub(super) fn scan(
             widenings,
             blocks,
             left_backlog,
+            marks,
         });
     }
-
-    // A link's layer reads its regression task's landed paths, known only
-    // once every task is scanned.
-    let index: BTreeMap<String, usize> = facts
-        .iter()
-        .enumerate()
-        .map(|(at, task)| (task.id.clone(), at))
-        .collect();
-    let mut links: BTreeMap<String, Vec<RegressionLink>> = BTreeMap::new();
-    for pending in pending_links {
-        let fix = index.get(&pending.task_id).map(|at| &facts[*at]);
-        let regressed = pending.regressed.clone();
-        links
-            .entry(regressed)
-            .or_default()
-            .push(pending.resolve(fix));
-    }
-    for (regressed, mut task_links) in links {
-        if let Some(at) = index.get(&regressed) {
-            task_links.sort_by(|left, right| left.task_id.cmp(&right.task_id));
-            facts[*at].regressions = task_links;
-        }
-    }
+    attach_regressions(&mut facts, pending_links);
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
     let reservations = runtime
@@ -427,6 +433,95 @@ pub(super) fn scan(
         lock_denials,
         admissions,
     })
+}
+
+/// The facts the regression-risk marks read, and nothing else: every task's
+/// footprint and incoming `regression_from` links, with history read only
+/// for a done task that may have become done since `since`. A task updated
+/// before then became done before then too, so its update time stands in.
+pub(super) fn scan_regressions(
+    runtime: &OrbitRuntime,
+    since: DateTime<Utc>,
+) -> Result<CodebaseFacts, OrbitError> {
+    let computed_at = Utc::now();
+    let tasks = runtime.list_task_metadata()?;
+    let pending_links = pending_links(&tasks);
+    let mut facts: Vec<TaskFacts> = tasks
+        .iter()
+        .map(|task| {
+            let done_at = (task.status == TaskStatus::Done).then(|| {
+                if task.updated_at < since {
+                    return task.updated_at;
+                }
+                let id = task.id.to_string();
+                let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
+                    tracing::warn!(task_id = %id, %error, "regression risk: task history unreadable");
+                    Vec::new()
+                });
+                entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)
+            });
+            TaskFacts::from_envelope(task, done_at)
+        })
+        .collect();
+    attach_regressions(&mut facts, pending_links);
+    Ok(CodebaseFacts {
+        computed_at,
+        tasks: facts,
+        reservations: Vec::new(),
+        lock_denials: Vec::new(),
+        admissions: BTreeMap::new(),
+    })
+}
+
+/// When the task last entered `status`, by its history.
+fn entered(history: &[TaskHistoryEntry], status: TaskStatus) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(status))
+        .map(|entry| entry.at)
+}
+
+/// Every `regression_from` link, as its regression task records it.
+fn pending_links(tasks: &[Task]) -> Vec<PendingLink> {
+    let mut pending = Vec::new();
+    for task in tasks {
+        for relation in &task.relations {
+            if relation.relation_type == TaskRelationType::RegressionFrom {
+                pending.push(PendingLink::new(
+                    relation.target.to_string(),
+                    task,
+                    relation.regression,
+                ));
+            }
+        }
+    }
+    pending
+}
+
+/// Give each regressed task its links. A link's layer reads its regression
+/// task's landed paths, known only once every task is scanned.
+fn attach_regressions(facts: &mut [TaskFacts], pending_links: Vec<PendingLink>) {
+    let index: BTreeMap<String, usize> = facts
+        .iter()
+        .enumerate()
+        .map(|(at, task)| (task.id.clone(), at))
+        .collect();
+    let mut links: BTreeMap<String, Vec<RegressionLink>> = BTreeMap::new();
+    for pending in pending_links {
+        let fix = index.get(&pending.task_id).map(|at| &facts[*at]);
+        let regressed = pending.regressed.clone();
+        links
+            .entry(regressed)
+            .or_default()
+            .push(pending.resolve(fix));
+    }
+    for (regressed, mut task_links) in links {
+        if let Some(at) = index.get(&regressed) {
+            task_links.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+            facts[*at].regressions = task_links;
+        }
+    }
 }
 
 /// A history entry only a job run writes: worktree setup moving the task to

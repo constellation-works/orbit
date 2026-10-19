@@ -368,6 +368,7 @@ pub(crate) fn build_context_from_roots(
                 .snapshot
                 .workflow_light_delivery_paths
                 .clone(),
+            runtime_config.snapshot.regression_risk(),
         ),
     ))
 }

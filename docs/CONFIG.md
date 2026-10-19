@@ -475,6 +475,31 @@ With it on, `task_pr_pipeline` and `task_local_pipeline` gate `commit` ([design]
 
 Steering settings refresh at prompt and gate checkpoints. Enabling with runs in flight leaves missing watermarks absent: their gates treat post-dispatch operator comments as undelivered (or use an inherited candidate/claim baseline when present). Disabling stops recording and gating at the next checkpoint; existing watermarks and steering-round state stay inert, not deleted. Invalid config retains the last successfully resolved settings. Prefer enabling between drains; enabling does not change admission authority or turn steering on in `orbit init`. See [migration](design/mid-run-steering/specs/steering-delivery.md#migration).
 
+### `[workflow.regression_risk]` — regression-prone context files in prompts
+
+```toml
+[workflow.regression_risk]
+enabled = true
+window_days = 30
+min_support = 5
+threshold_percent = 40
+max_files = 3
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.regression_risk.enabled` | `true` | Mark a task's regression-prone `file:` context files in its implement and review prompts. |
+| `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks a mark is computed over (`1`–`365`). |
+| `workflow.regression_risk.min_support` | `5` | **Advanced.** Done tasks in the window whose declared footprint named the file before it can be marked (`1`–`10000`). |
+| `workflow.regression_risk.threshold_percent` | `40` | **Advanced.** Share of those tasks, in percent, that a `regression_from` link names before the file is marked (`1`–`100`). |
+| `workflow.regression_risk.max_files` | `3` | **Advanced.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
+
+Analytics › Codebase knows which paths regress; these marks tell the agent that edits one, and its reviewer. An activity asks for marks by declaring a `regression_risk_instruction`; the shipped `agent_implement`, `agent_review_repair` and `review_reconciliation_review` do. For each canonical `file:` selector of the task, Orbit counts, among the tasks that became `done` in the trailing window and declared the file, those a `regression_from` link names, the same rate as the Regressions ranking at file grouping. The file is marked when it has at least `min_support` such tasks and at least `threshold_percent` of them regressed, so a file few tasks touched, or a hub every task touches, stays unmarked, and a fixed hotspot drops out once its regressed tasks leave the window. At most `max_files` files are marked, by rate, then regressed count, then path.
+
+Marks reach the agent as `task.regression_risk` in the envelope: `window_days` and `marks`, each with `path`, `regressed` (`"N of M touching tasks"`), `nature` and `escape` (the one or two values most of the file's links record; a link without a typed classification reads `unclassified`, never a guess) and `lesson`, the newest regression task's title cut to one line, with internal task and friction IDs removed (omitted when nothing is left). The activity's `regression_risk_instruction` follows the main instruction and maps each nature and escape to one check: for example `no_test` asks the implementer for a focused regression check at the public boundary, `merge_reintroduced` to re-verify the touched area after a rebase, and `contract_drift` to update the affected docs or contract in the same diff, and the reviewer checks those categories on the marked files. With the switch off, a task without `file:` selectors, or no file qualifying, the envelope has no `regression_risk` key and the instruction is unchanged. `orbit codebase show <path>` and `orbit.codebase.show` give the tasks behind a mark.
+
+Each prompt that carries marks records them on the task as a `regression_risk_marked` history event whose decision names the run, the activity, the marked paths and the window, once per run, activity and paths. A claimed follower leaf computes marks from its own records and records none, since it cannot write its owner's task. The Regressions ranking reads these events back and compares the marked paths' regression rate for tasks delivered with marks against the same paths' rate in the window before the first mark, with the counts shown ([dashboard](design/user-interface/2_design.md)). Building marks scans task metadata and the history of tasks updated in the window; a scan that fails, or a record that cannot be written, is logged and never refuses the dispatch. Settings are read when the runtime opens.
+
 ### `[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks
 
 ```toml

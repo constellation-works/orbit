@@ -332,10 +332,12 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
             )
         })
         .collect();
-    merge(
+    let mut section = merge(
         json!({ "rows": rows, "below_support": below_support, "population": population }),
         super::regression::summary(facts, params),
-    )
+    );
+    section["risk_marks"] = super::risk::comparison(facts, params);
+    section
 }
 
 /// What a regressed task's entry adds: its crew and complexity, and the

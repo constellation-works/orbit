@@ -572,6 +572,24 @@ assert.deepEqual(linkDims().map(line => [line.dataset.task, line.querySelectorAl
 assert.match(linkDims()[1].querySelectorAll('span.codebase-tag')[2].title, /declared footprint/, 'a layer read from the footprint says so');
 assert.equal(part('detail').querySelector('p.codebase-filter-note'), null, 'no filter, no filter note');
 
+// Regression-risk marks: the marked paths' rate with marks against the
+// window before the first mark, each with its counts, so a small sample
+// reads as one. Before any prompt marked a file there is nothing to compare.
+const riskTable = () => part('list').querySelector('table.codebase-risk-table');
+assert.equal(riskTable(), null, 'no comparison before any mark');
+assert.match(slice('Regression-risk marks: with marks vs before').querySelector('p.codebase-note').textContent, /nothing to compare/);
+const marked = JSON.parse(JSON.stringify(sliced));
+marked.regressions.risk_marks = {
+  enabled_at: '2026-10-01T00:00:00Z', before_since: '2026-09-01T00:00:00Z', window_days: 30, marked_paths: 2,
+  with_marks: rate(1, 4), before: rate(6, 10),
+  rows: [{ path: 'src/a/x.rs', with_marks: rate(1, 3), before: rate(5, 8) }, { path: 'src/b.rs', with_marks: rate(0, 1), before: rate(0, 0) }],
+};
+await serve(marked);
+assert.deepEqual(riskTable().querySelectorAll('tbody tr').map(row => [row.dataset.path, ...row.querySelectorAll('td').map(cell => cell.querySelector('span.codebase-frac')?.textContent ?? cell.textContent)]),
+  [['', '1/4', '6/10'], ['src/a/x.rs', '1/3', '5/8'], ['src/b.rs', '0/1', 'no tasks']], 'each rate shows its counts; an empty sample says so');
+assert.deepEqual(riskTable().querySelectorAll('thead th').map(cell => cell.textContent), ['', 'With marks', '30 days before']);
+await serve(sliced);
+
 // A chip filters: the request and the hash carry it, the tile names it, the
 // served ranking and its detail are the filtered ones, and the chip reads
 // pressed. Choosing it again clears it.

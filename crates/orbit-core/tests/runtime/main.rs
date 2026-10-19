@@ -109,6 +109,7 @@ mod provider_limit_budget;
 mod provider_limit_hold;
 mod purpose_crews;
 mod readiness_population;
+mod regression_risk;
 mod resource_profiles;
 
 mod run_cli_invocations;
