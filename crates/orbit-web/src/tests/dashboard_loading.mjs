@@ -216,8 +216,7 @@ function fixture(url) {
         touched: 'declared_footprint', tasks_scanned: 0, computed_at: new Date().toISOString(), cache_ttl_seconds: 300,
         regressions: empty, lock_contention: { ...empty, wait_time_recorded: false }, footprint_misses: empty,
         change_coupling: { ...empty, excluded_large: 0, large_footprint_cap: 12 }, blocked: { ...empty, causes: [] },
-        rejected: { ...empty, excluded_without_run: 0 }, overlap: { rows: [], ranked_paths: 0 },
-        task_pilot: { ...empty, assessed: 0, unattributed: 0, without_assessment: 0, excluded_large: 0, excluded_no_diff: 0 } };
+        rejected: { ...empty, excluded_without_run: 0 }, overlap: { rows: [], ranked_paths: 0 } };
     }
     case '/api/frictions': {
       const status = url.searchParams.get('status');
@@ -873,7 +872,10 @@ const pressedValue = id => node(id).querySelector('[aria-pressed="true"]')?.data
 check(pressedValue('codebase-window') === '30d' && pressedValue('codebase-rollup') === 'crate' && node('codebase-min-support').value === '15', 'the hash restores the codebase controls');
 const codebaseQuery = codebaseQueries.at(-1);
 check(codebaseQuery && codebaseQuery.get('window') === '30d' && codebaseQuery.get('rollup') === 'crate' && codebaseQuery.get('min_support') === '15', 'the restored view requests its selection');
-check(node('codebase-body').querySelectorAll('.codebase-tile[aria-pressed]').length === 8, 'the codebase view renders its eight ranking tiles');
+const codebaseTiles = [...node('codebase-body').querySelectorAll('.codebase-tile[aria-pressed]')].map(tile => tile.dataset.tile);
+check(codebaseTiles.includes('regressions') && codebaseTiles.includes('overlap') && codebaseTiles.includes('lock_contention'), 'the codebase view renders supported ranking destinations');
+check(!codebaseTiles.includes('task_pilot'), 'the codebase view omits retired task-pilot ranking tile');
+check(node('agents-roles')?.querySelector('[data-view="pilots"]'), 'task-pilot ranking destination is available under Agents > Pilots');
 const denialBadge = node('rail-count-denials');
 check(denialBadge.closest('.tab')?.dataset.tab === 'diagnostics', 'the denial badge sits on the Health rail entry');
 check(!denialBadge.hidden && denialBadge.textContent === '4 denied', 'the denial badge shows the canonical denial count');
