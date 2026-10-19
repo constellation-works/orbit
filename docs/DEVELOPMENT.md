@@ -491,6 +491,24 @@ These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
+The Rust build caches in `ci.yml` are the `Swatinem/rust-cache` dependency
+archives, one each for `Test build`, the Check job and the MSRV job. They hold
+dependency artifacts only; every run compiles the workspace members from its
+checkout. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
+pull request restores the base branch's entries and never writes one: only a
+push to `main` or `agent-main` saves. A missed key or a failed restore leaves a
+cold or partial `target/`, and Cargo rebuilds what is missing. Hosted CI keeps
+no compiler-object cache: `Test build` runs `rustc` directly
+(`ORBIT_COMPILER_CACHE=0`), and the Check job installs sccache only for the
+compiler-cache namespace regression, with a runner-local cache that nothing
+restores or saves. sccache cannot cache the workspace members, which Cargo
+compiles through `clippy-driver`, and rust-cache already supplies every
+dependency. The
+[compiler-cache runbook](runbooks/compiler-cache.md#ordinary-linux-ci) records
+the measurements, including why caching workspace members would not pay.
+`scripts/test-pr-state-workflows.py` fails if any cache step in `ci.yml` can
+save on a non-push event.
+
 #### PR test selection
 
 On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci-test-affected.py --pull-request-scope`, the same graph walk as `make ci-test-affected`, over the PR's changed paths and the merge ref's Cargo metadata (read with the runner's stable toolchain). It selects the changed crates, their transitive reverse workspace dependents, and the crates `FILE_READERS` declares as readers of a changed path, and outputs `affected:<crate>,...`. It runs every test instead (`full`) when any of these holds:

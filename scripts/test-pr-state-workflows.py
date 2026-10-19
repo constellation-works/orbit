@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute PR-state and compiler-cache workflow controls offline."""
+"""Execute PR-state and CI cache workflow controls offline."""
 
 import http.server
 import json
@@ -224,7 +224,7 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
 
 
 @unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
-class CompilerCacheWorkflowTests(unittest.TestCase):
+class CiCacheWorkflowTests(unittest.TestCase):
     """Execute the ordinary CI cache contract, without network or cache uploads."""
 
     def setUp(self):
@@ -242,29 +242,7 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
         self.bin.mkdir()
         self.env = dict(PATH=f"{self.bin}:{os.environ['PATH']}", HOME=str(self.root / "home"),
                         GITHUB_OUTPUT=str(self.output), GITHUB_ENV=str(self.envfile),
-                        RUNNER_TEMP=str(self.root / "runner temp"),
-                        CARGO_INCREMENTAL=self.document["env"]["CARGO_INCREMENTAL"],
-                        COMPILER_CACHE_RESTORE_STARTED="0", RESTORE_OUTCOME="success")
-        # Resolve job env before any runner exists, as Actions does. This
-        # fixture supports property lookups; runner/env/steps are unavailable
-        # at this boundary and must not be silently replaced by fixture data.
-        contexts = {name: {} for name in ("github", "needs", "strategy", "matrix", "vars", "secrets", "inputs")}
-
-        def resolve(match):
-            value = contexts
-            for part in match[1].strip().split("."):
-                value = value[part]
-            return str(value)
-
-        self.env.update({name: re.sub(r"\$\{\{(.*?)\}\}", resolve, str(value))
-                         for name, value in self.job["env"].items()})
-        for step in self.job["steps"]:
-            if step.get("id") == "compiler-key":
-                break
-            if step.get("id") == "compiler-env":
-                self.env.update(self.run_step(step)[1])
-        self.assertIn("SCCACHE_DIR", self.env,
-                      "runtime environment must reach cache identity before restore and setup")
+                        RUNNER_TEMP=str(self.root / "runner temp"))
 
     def write(self, name, text, *, executable=False):
         path = self.root / name
@@ -286,93 +264,33 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
         exports = dict(line.split("=", 1) for line in self.envfile.read_text().splitlines())
         return outputs, exports, result.stdout
 
-    def test_only_successful_upstream_integration_push_can_upload(self):
-        save = self.steps["compiler-save"]
-        restore = self.steps["compiler-restore"]
-        # Restore-only has no post action; simulate scheduling the real save
-        # condition, including failures, cancellation, forks and exact hits.
-        self.assertRegex(restore["uses"], r"^actions/cache/restore@[0-9a-f]{40}$")
-        self.assertRegex(save["uses"], r"^actions/cache/save@[0-9a-f]{40}$")
-        for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch"):
-            for repository in ("constellation-works/orbit", "fork/orbit"):
-                for ref in ("refs/heads/agent-main", "refs/heads/main", "refs/pull/42/merge"):
-                    for success, cancelled, ready, hit in ((True, False, "true", "false"),
-                                                          (False, False, "true", "false"),
-                                                          (False, True, "true", "false"),
-                                                          (True, False, "false", "false"),
-                                                          (True, False, "true", "true")):
-                        with self.subTest(event=event, repository=repository, ref=ref,
-                                          success=success, cancelled=cancelled, ready=ready, hit=hit):
-                            allowed = evaluate(save["if"], event, success=success, cancelled=cancelled,
-                                               bindings={"github.repository": repository, "github.ref": ref,
-                                                         "steps.compiler-setup.outputs.ready": ready,
-                                                         "steps.compiler-restore.outputs.cache-hit": hit})
-                            self.assertEqual(allowed, event == "push" and repository == "constellation-works/orbit"
-                                             and ref == "refs/heads/agent-main" and success and not cancelled
-                                             and ready == "true" and hit != "true")
-        cache_steps = [s for s in self.job["steps"] if s.get("uses", "").startswith("actions/cache")]
-        self.assertEqual(cache_steps, [restore, save], "compiler objects must have no implicit upload action")
-        # The test-build job compiles with the same cache contract.
+    def test_pull_requests_restore_caches_without_writing_them(self):
+        # PR heads are untrusted input: no cache a PR run writes may reach a
+        # later run, so only pushes (main and agent-main) save.
+        writers = []
         for name, job in self.document["jobs"].items():
-            steps = {step["id"]: step for step in job["steps"] if step.get("id", "").startswith("compiler-")}
-            if steps:
-                with self.subTest(job=name):
-                    self.assertEqual(steps, {key: value for key, value in self.steps.items()
-                                             if key.startswith("compiler-")},
-                                     "every job's compiler-object steps must match the Check job's")
-                    self.assertEqual(job["env"]["SCCACHE_CACHE_SIZE"], self.job["env"]["SCCACHE_CACHE_SIZE"])
-        self.assertEqual(restore["with"]["path"], "${{ env.SCCACHE_DIR }}")
-        self.assertEqual(save["with"]["path"], restore["with"]["path"])
-        self.assertEqual(save["with"]["key"], restore["with"]["key"])
-        self.assertEqual(restore["with"]["restore-keys"], "${{ steps.compiler-key.outputs.prefix }}")
-        # Dependency cache remains its own archive; object restores never
-        # include source files, Cargo fingerprints, mtimes or executables.
-        dependency = self.steps["rust-cache"]
-        self.assertNotEqual(dependency["with"]["shared-key"], restore["with"]["key"])
-        self.assertRegex(str(Path(self.env["SCCACHE_DIR"]).relative_to(self.env["RUNNER_TEMP"])),
-                         r"^orbit-ci-compiler-v\d+$",
-                         "compiler objects must stay in a versioned runner-local archive apart from Cargo target state")
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if uses.startswith("Swatinem/rust-cache@"):
+                    condition = step.get("with", {}).get("save-if")
+                    self.assertIsNotNone(condition, f"{name}: rust-cache saves on every event unless save-if limits it")
+                elif uses.startswith("actions/cache/save@"):
+                    condition = step.get("if")
+                    self.assertIsNotNone(condition, f"{name}: an unconditional cache save runs on pull requests")
+                else:
+                    self.assertFalse(uses.startswith("actions/cache@"),
+                                     f"{name}: actions/cache saves in its post step on every event; "
+                                     "use actions/cache/restore with a push-only actions/cache/save")
+                    continue
+                writers.append(name)
+                for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
+                    with self.subTest(job=name, event=event):
+                        self.assertEqual(evaluate(condition, event), event == "push")
+        self.assertEqual(sorted(set(writers)), ["ci", "msrv", "test-build"])
+        self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
+                         "push-only saves are trusted only while pushes come from protected branches")
 
-    def test_compatibility_identity_invalidates_inputs_but_not_source_content(self):
-        for name in ("rustc", "cargo", "clippy-driver"):
-            self.write("bin/" + name, '#!/bin/sh\nprintf "%s\\n" "${FIXTURE_COMPILER:-compiler-v1}"\n', executable=True)
-        for name in ("Cargo.toml", "crates/member/Cargo.toml", "Cargo.lock", ".cargo/config.toml",
-                     "rust-toolchain.toml", "scripts/compiler-cache.sh", "scripts/rustc-compiler-cache.sh",
-                     "scripts/ci-guardrails.sh", ".github/workflows/ci.yml", "src/lib.rs"):
-            self.write(name, "original\n")
-        self_test_hang.run(["git", "init", "-q", str(self.root)], step="git init",
-                           check=True, capture_output=True)
-        self_test_hang.run(["git", "add", "."], step="git add", cwd=self.root,
-                           check=True, capture_output=True)
-        step = self.steps["compiler-key"]
-        baseline, _, _ = self.run_step(step)
-        self.assertTrue(baseline["key"].startswith(baseline["prefix"]))
-        self.assertEqual(self.run_step(step)[0]["prefix"], baseline["prefix"])
-        for name in ("Cargo.toml", "crates/member/Cargo.toml", "Cargo.lock", ".cargo/config.toml",
-                     "rust-toolchain.toml", "scripts/compiler-cache.sh", "scripts/rustc-compiler-cache.sh",
-                     "scripts/ci-guardrails.sh", ".github/workflows/ci.yml"):
-            with self.subTest(file=name):
-                path = self.write(name, "changed profile/features/configuration/command\n")
-                changed = self.run_step(step)[0]
-                self.assertNotEqual(changed["prefix"], baseline["prefix"])
-                path.write_text("original\n")
-        # GITHUB_JOB: the Check and test-build jobs compile different units,
-        # so each saves its own archive instead of racing for one key.
-        for name in ("FIXTURE_COMPILER", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_PROFILE_TEST_DEBUG",
-                     "CARGO_BUILD_TARGET", "CARGO_FEATURE_EXPERIMENT", "ImageVersion", "GITHUB_JOB"):
-            with self.subTest(env=name):
-                self.env[name] = "different"
-                self.assertNotEqual(self.run_step(step)[0]["prefix"], baseline["prefix"])
-                del self.env[name]
-        self.write("home/.cargo/config.toml", "[build]\nrustflags=['--cfg', 'changed']\n")
-        self.assertNotEqual(self.run_step(step)[0]["prefix"], baseline["prefix"])
-        self.write("home/.cargo/config.toml", "")
-        with_home_config = self.run_step(step)[0]
-        self.write("src/lib.rs", "changed source\n")
-        self.assertEqual(self.run_step(step)[0]["prefix"], with_home_config["prefix"],
-                         "source reuse relies on compiler content keys, never archive fingerprints")
-
-    def test_setup_enables_verified_install_or_falls_back_without_upload(self):
+    def test_namespace_regression_install_or_ordinary_rustc_fallback(self):
         # Execute setup against an installer transport fixture. Existing public
         # wrapper tests separately execute rustc fallback and argv preservation.
         self.write("scripts/compiler-cache.sh", '''#!/bin/sh
@@ -382,29 +300,18 @@ exit "${FIXTURE_INSTALL_EXIT:-0}"
 ''', executable=True)
         self.write("home/.orbit/cache/bin/sccache", '''#!/bin/sh
 set -eu
-[ "$SCCACHE_SERVER_UDS" = /tmp/orbit-sccache.sock ]
-[ "$SCCACHE_CACHE_SIZE" = "$FIXTURE_EXPECT_CAPACITY" ]
-case "$1" in --show-stats|--zero-stats) exit "${FIXTURE_STATS_EXIT:-0}";; *) exit 9;; esac
+[ "$1" = --version ] || exit 9
+exit "${FIXTURE_VERSION_EXIT:-0}"
 ''', executable=True)
         step = self.steps["compiler-setup"]
-        self.env["FIXTURE_EXPECT_CAPACITY"] = self.job["env"]["SCCACHE_CACHE_SIZE"]
-        for install_exit, stats_exit, expected in (("0", "0", "true"), ("1", "0", "false"), ("0", "1", "false")):
-            with self.subTest(install_exit=install_exit, stats_exit=stats_exit):
-                self.env.update(FIXTURE_INSTALL_EXIT=install_exit, FIXTURE_STATS_EXIT=stats_exit)
+        for install_exit, version_exit, expected in (("0", "0", "true"), ("1", "0", "false"), ("0", "1", "false")):
+            with self.subTest(install_exit=install_exit, version_exit=version_exit):
+                self.env.update(FIXTURE_INSTALL_EXIT=install_exit, FIXTURE_VERSION_EXIT=version_exit)
                 outputs, exports, log = self.run_step(step)
                 self.assertEqual(outputs["ready"], expected)
                 self.assertEqual(exports.get("ORBIT_COMPILER_CACHE"), "0" if expected == "false" else None)
-                self.assertRegex(log, r"compiler_cache_restore_seconds=\d+")
                 self.assertRegex(log, r"compiler_cache_setup_seconds=\d+")
                 self.assertEqual(exports["ORBIT_COMPILER_CACHE_BIN"], str(self.root / "home/.orbit/cache/bin/sccache"))
-        # A restore service failure is just a cold writable cache; an unusable
-        # local restore must instead force ordinary rustc and disable upload.
-        self.env.update(FIXTURE_INSTALL_EXIT="0", FIXTURE_STATS_EXIT="0", RESTORE_OUTCOME="failure")
-        self.assertEqual(self.run_step(step)[0]["ready"], "true")
-        self.env["SCCACHE_DIR"] = str(self.write("unusable-cache", "not a directory"))
-        outputs, exports, _ = self.run_step(step)
-        self.assertEqual(outputs["ready"], "false")
-        self.assertEqual(exports["ORBIT_COMPILER_CACHE"], "0")
 
     def test_slow_step_past_the_removed_cap_completes(self):
         # Sleep stands in for a correct step that loses the CPU under idle
