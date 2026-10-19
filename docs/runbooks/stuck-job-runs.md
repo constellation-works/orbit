@@ -214,7 +214,11 @@ incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascad
 counts the parents folded into it. `orbit run history --failures` folds further, to one row
 per task and root cause: `RUN_ID` is the root-cause run even when that run is outside the
 page, `STEP` and `CREW` are that run's, `CAUSE` is its error's first line with no
-60-character cap, and `SHOW` is `orbit run show` for that run. `--json` is
+60-character cap, and `SHOW` is `orbit run show` for that run. `STEP` comes from
+the root's failure checkpoint or audit trail, with stored activity steps and
+the echo's recorded root-cause step as fallbacks. A job-level diagnostic names
+the pipeline, so it never supplies `STEP`; without step evidence, the cell is
+`-` (`null` in JSON). `--json` is
 `{"failures":[...]}`. It cannot be combined with `--incidents`. A parent whose waited-on
 children were all cancelled ends `cancelled`, not `failed`.
 
