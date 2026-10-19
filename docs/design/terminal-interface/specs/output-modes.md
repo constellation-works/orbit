@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-10-13
+last_validated: 2026-10-19
 ---
 
 # Spec: Output Modes and Sink Resolution

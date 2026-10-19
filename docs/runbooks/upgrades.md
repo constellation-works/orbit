@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-13
+last_validated: 2026-10-19
 ---
 
 # Upgrade Orbit Safely

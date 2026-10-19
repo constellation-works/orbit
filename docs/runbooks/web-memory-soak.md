@@ -5,7 +5,7 @@ tags: [operations, performance, dashboard]
 paths: ["crates/orbit-web/**", "scripts/web-memory-soak.py", "Makefile"]
 related_features: [orbit-web]
 related_artifacts: [ORB-14723]
-last_validated: 2026-10-13
+last_validated: 2026-10-19
 ---
 
 # Soak-Test Dashboard Memory
@@ -58,9 +58,10 @@ past the dashboard's 90 s memo TTL so every round recomputes), `--task-list-runs
 The fixture holds 4,000 tasks, 25,000 job runs, 300,000 audit rows in each audit table,
 5,000 invocations, 750 frictions, 11,000 routine fires and a 40,000-line process log.
 
-1. **Fresh-server growth.** A new server answers a warm-up request, then one
-   `/api/cost` request; a second new server does the same for `/api/routines`. The
-   delta is VmRSS two seconds after the request minus VmRSS before it.
+1. **Fresh-server growth.** A new server answers two warm-up requests (`/api/workspaces`
+   and the task-lock listing), then one `/api/cost` request; a second new server does the
+   same for `/api/routines`. The delta is VmRSS two seconds after the request minus VmRSS
+   two seconds after the warm-up.
 2. **Soak.** One server answers the whole dashboard GET mix concurrently each round.
    VmRSS, VmHWM, the thread count and the number of 64 MiB-aligned anonymous mappings
    (glibc arena heaps) are sampled two seconds after each round.
