@@ -1816,9 +1816,9 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
 /// update is the candidate's when the same job passes on the base tip. The
 /// landing stops for the one automatic repair, and the stop evidence carries
 /// the failed job, its signature and a log excerpt. A landing whose repair
-/// is already spent stops in review after that same one update. A tip that
-/// does not pass the job stays a review stop, and nothing here reruns the
-/// job or updates the branch a second time.
+/// is already spent stops for a backlog requeue after that same one update
+/// [ORB-16890]. A tip that does not pass the job stays a review stop, and
+/// nothing here reruns the job or updates the branch a second time.
 #[test]
 fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
     for (label, repair_spent, tip_passes, after, repairable, signature) in [
@@ -1889,11 +1889,12 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
             "{label}: no rerun"
         );
         assert!(forge.sent("pr.merge").is_empty(), "{label}: no merge");
-        assert_eq!(
-            forge.steps(),
-            vec![HandoffLandingStep::Stop { repairable }],
-            "{label}"
-        );
+        let step = if repair_spent && tip_passes {
+            HandoffLandingStep::StopForRequeue
+        } else {
+            HandoffLandingStep::Stop { repairable }
+        };
+        assert_eq!(forge.steps(), vec![step], "{label}");
         let reason = forge.stop_reason();
         assert!(
             reason.contains("CI / clippy")
@@ -1908,8 +1909,8 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
             );
         } else if repair_spent {
             assert!(
-                reason.contains("already is the one automatic repair")
-                    && reason.contains("stays in review"),
+                reason.contains("automatic repair is already spent")
+                    && reason.contains("returns the task to the backlog"),
                 "{label}: {reason}"
             );
         } else {
@@ -1926,15 +1927,16 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
 
 /// [ORB-15956] A check the candidate itself fails stops the landing for the
 /// one automatic repair, whose evidence carries the failed step's signature
-/// and log excerpt. The repair's own landing failing again stops in review,
-/// classified, instead of asking for a second repair. A base whose job query
-/// succeeds with no jobs ran nothing to fail, which is not a failed read.
+/// and log excerpt. The repair's own landing failing again stops, classified,
+/// for a backlog requeue instead of asking for a second repair [ORB-16890].
+/// A base whose job query succeeds with no jobs ran nothing to fail, which is
+/// not a failed read.
 #[test]
-fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
-    for (repair_spent, base_ran, repairable) in [
-        (false, true, true),
-        (true, true, false),
-        (false, false, true),
+fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
+    for (repair_spent, base_ran, step) in [
+        (false, true, HandoffLandingStep::Stop { repairable: true }),
+        (true, true, HandoffLandingStep::StopForRequeue),
+        (false, false, HandoffLandingStep::Stop { repairable: true }),
     ] {
         let sandbox = tempdir().unwrap();
         let mut forge = FakeForge::new(sandbox.path(), false);
@@ -1951,7 +1953,7 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
 
         assert_eq!(
             forge.steps(),
-            vec![HandoffLandingStep::Stop { repairable }],
+            vec![step],
             "repair spent: {repair_spent}, base ran: {base_ran}"
         );
         let reason = forge.stop_reason();
@@ -2257,7 +2259,7 @@ fn a_cached_branch_update_requires_a_fresh_landing_base() {
 /// [ORB-16185] A required aggregate check outside any workflow fails with
 /// source annotations while its job-backed checks pass or fail for their
 /// own reasons. Annotations naming only files the candidate changed earn the
-/// one repair (none once spent); annotations on a file it did not change are
+/// one repair (a backlog requeue once spent); annotations on a file it did not change are
 /// inconclusive, and they stop the landing even beside a transient job
 /// failure that alone would have been rerun.
 #[test]
@@ -2283,12 +2285,12 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         land_with(&forge, json!({"max_wait_seconds": 0}))
             .expect_err("a failed required aggregate stops the landing");
 
-        let repairable = case == "candidate";
-        assert_eq!(
-            forge.steps(),
-            vec![HandoffLandingStep::Stop { repairable }],
-            "{case}"
-        );
+        let step = match case {
+            "candidate" => HandoffLandingStep::Stop { repairable: true },
+            "spent" => HandoffLandingStep::StopForRequeue,
+            _ => HandoffLandingStep::Stop { repairable: false },
+        };
+        assert_eq!(forge.steps(), vec![step], "{case}");
         let reason = forge.stop_reason();
         let class = if case == "candidate" || case == "spent" {
             "classified `candidate`"

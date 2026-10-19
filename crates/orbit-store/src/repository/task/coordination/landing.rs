@@ -460,6 +460,14 @@ impl TaskCommitBoundary {
     /// a claim that already is that repair fails and blocks its task with
     /// both attempts' human reasons. The raw stop string, including an
     /// `owner_landing_refusal` diagnostic, stays on the landing attempt.
+    ///
+    /// A `requeue` stop — the candidate fails its own required check once
+    /// that one repair is spent [ORB-16890] — revokes the handoff's
+    /// authority too, and the claim ends: the task returns to the backlog
+    /// with the accepted candidate and the stop's human reason kept for its
+    /// next run, owner or follower, which repairs that candidate. Past
+    /// [`LANDING_REPAIR_BUDGET`] such returns the task blocks instead, with
+    /// every counted stop's reason, and the candidate is still kept.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn stop_landing_attempt(
         &self,
@@ -468,6 +476,7 @@ impl TaskCommitBoundary {
         handoff_id: &str,
         reason: &str,
         repairable: bool,
+        requeue: bool,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<LandingStop, OrbitError> {
@@ -492,6 +501,9 @@ impl TaskCommitBoundary {
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         params.status_note = Some(displayed.clone());
         params.status_event = Some("landing_stopped".into());
+        if requeue {
+            return self.requeue_landing_repair(auth, state, &displayed, params, effects);
+        }
         if !repairable {
             return Ok(LandingStop::Stopped);
         }
@@ -531,6 +543,128 @@ impl TaskCommitBoundary {
             }
         }
     }
+
+    /// [ORB-16890] End a claim whose candidate fails its own required check
+    /// once its automatic repair is spent: keep the accepted candidate with
+    /// the stop's human reason for the task's next run and return the task
+    /// to the backlog, or block it once the landing repair budget is spent.
+    fn requeue_landing_repair(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        displayed: &str,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<LandingStop, OrbitError> {
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        let candidate = &accepted.handoff.candidate;
+        let pull_request = match &candidate.delivery {
+            HandoffDelivery::PullRequest { number } => Some(number.to_string()),
+            _ => None,
+        };
+        let kept = Box::new(PreservedClaimCandidate {
+            candidate: ClaimCandidateRef {
+                branch: candidate.source_branch.clone(),
+                head_sha: candidate.candidate.commit.clone(),
+                // A pull request's head branch is on `origin`, so a run on
+                // any host can fetch the candidate from it.
+                published: pull_request.is_some(),
+                pull_request,
+                pull_request_head: None,
+                source_run_id: state.bound_run.as_ref().map(|run| run.run_id.clone()),
+                // The leaf delivered it: the candidate is complete.
+                failed_step_id: None,
+                durable_ref: None,
+                carry_failure: None,
+                interrupted_review: None,
+                landing_stop: Some(displayed.to_string()),
+            },
+            task_spec_digest: self.full_task(&auth.task_id)?.spec_digest(),
+            recorded_at: Utc::now().to_rfc3339(),
+        });
+        let events = self
+            .bundle_store
+            .read_bundle_lightweight(&auth.task_id)?
+            .events;
+        let spent = landing_repairs_spent(events.iter().map(|event| event.event_type.as_str()));
+        if spent >= LANDING_REPAIR_BUDGET {
+            self.revoke_handoff_authority(
+                auth,
+                &format!(
+                    "the candidate failed its own required check at landing again and the \
+                     task's landing repair budget is spent: {displayed}"
+                ),
+                params,
+                effects,
+            )?;
+            params.status = Some(TaskStatus::Blocked);
+            params.status_note = Some(format!(
+                "{displayed}; the landing repair budget ({LANDING_REPAIR_BUDGET} backlog returns) \
+                 is spent, so the task is blocked for an operator"
+            ));
+            let earlier = requeued_since_exhaustion(&events);
+            let comment =
+                repair_budget_comment(&earlier, &state.claim.claim_id, &accepted, displayed);
+            return Ok(LandingStop::RepairBudgetExhausted { comment, kept });
+        }
+        self.revoke_handoff_authority(
+            auth,
+            &format!(
+                "landing stopped on a required check the candidate fails; the task's next run \
+                 repairs this candidate: {displayed}"
+            ),
+            params,
+            effects,
+        )?;
+        params.status = Some(TaskStatus::Backlog);
+        params.status_note = Some(format!(
+            "{displayed}; the claim ends and the task returns to the backlog, where its next run \
+             repairs this candidate and publishes it again (landing repair {} of \
+             {LANDING_REPAIR_BUDGET})",
+            spent + 1
+        ));
+        Ok(LandingStop::Requeue(kept))
+    }
+}
+
+/// The notes of the landing repair requeues the budget counted, oldest first.
+fn requeued_since_exhaustion(events: &[orbit_types::task::TaskEventRowV2]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for event in events {
+        match event.event_type.as_str() {
+            LANDING_REPAIR_REQUEUED_EVENT => notes.push(format!(
+                "{}: {}",
+                event.at.to_rfc3339(),
+                event.note.as_deref().unwrap_or("no note recorded")
+            )),
+            LANDING_REPAIR_EXHAUSTED_EVENT => notes.clear(),
+            _ => {}
+        }
+    }
+    notes
+}
+
+/// The blocked task's comment once its landing repair budget is spent: this
+/// stop's candidate and reason, and every counted requeue's note.
+fn repair_budget_comment(
+    earlier: &[String],
+    claim_id: &str,
+    accepted: &AcceptedHandoff,
+    reason: &str,
+) -> String {
+    let mut comment = format!(
+        "Landing repair budget exhausted: the handed-off candidate failed its own required \
+         check at landing again after {} backlog returns, so the task is blocked for an \
+         operator. The candidate is kept for the run after the task is unblocked.\n\n\
+         This attempt (claim {claim_id}, handoff {}): {}\nStopped: {reason}\n\nEarlier stops:",
+        earlier.len(),
+        accepted.handoff_id,
+        describe_candidate(&accepted.handoff.candidate),
+    );
+    for note in earlier {
+        comment.push_str(&format!("\n- {note}"));
+    }
+    comment
 }
 
 /// Operator text for a landing stop.
@@ -568,6 +702,15 @@ pub(super) enum LandingStop {
     /// The automatic repair is spent: the claim fails and the task blocks with
     /// this comment.
     Blocked(String),
+    /// [ORB-16890] The claim ends and the task returns to the backlog; the
+    /// claim keeps this candidate for the task's next run.
+    Requeue(Box<PreservedClaimCandidate>),
+    /// [ORB-16890] The landing repair budget is spent: the claim fails, the
+    /// task blocks with this comment, and the claim keeps the candidate.
+    RepairBudgetExhausted {
+        comment: String,
+        kept: Box<PreservedClaimCandidate>,
+    },
 }
 
 /// The blocked task's comment: both attempts' candidates and the human

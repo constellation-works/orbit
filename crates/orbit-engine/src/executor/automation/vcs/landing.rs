@@ -29,7 +29,10 @@
 //!    and one that still fails there on a base tip where the same job passes
 //!    stops for the one automatic repair; a transient one is rerun once, and
 //!    one the candidate caused stops for the same single repair [ORB-15956]
-//!    [ORB-16322].
+//!    [ORB-16322]. Once that repair is spent, a candidate-caused failure
+//!    stops for a requeue: the owner store ends the claim and returns the
+//!    task to the backlog with the candidate and the failure evidence, so its
+//!    next run repairs that candidate [ORB-16890].
 //! 4. **Settle every run.** A provider transport failure (a TLS or request
 //!    timeout, a reset connection, a 5xx) that interrupts a pass before it
 //!    records a merge intent or requests a check recovery is retried
@@ -738,6 +741,15 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
                 }
+                CheckRecoveryStep::Requeue(evidence) => {
+                    return Err(refuse_pr(
+                        host,
+                        context,
+                        &diagnostic,
+                        HandoffLandingStep::StopForRequeue,
+                        &evidence,
+                    )?);
+                }
                 CheckRecoveryStep::Stop(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, false, &evidence)?);
                 }
@@ -1373,7 +1385,9 @@ fn record<H: RuntimeHost + ?Sized>(
             context.intent_open.set(true);
         }
         HandoffLandingStep::ResolveIntent { .. } => context.intent_open.set(false),
-        HandoffLandingStep::Complete | HandoffLandingStep::Stop { .. } => {
+        HandoffLandingStep::Complete
+        | HandoffLandingStep::Stop { .. }
+        | HandoffLandingStep::StopForRequeue => {
             context.settled.set(true);
         }
     }
@@ -1410,8 +1424,28 @@ fn stop_pr<H: RuntimeHost + ?Sized>(
     repairable: bool,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
+    refuse_pr(
+        host,
+        context,
+        observation,
+        HandoffLandingStep::Stop { repairable },
+        reason,
+    )
+}
+
+/// [`stop_pr`] recorded as `step`, a [`HandoffLandingStep::Stop`] or
+/// [`HandoffLandingStep::StopForRequeue`].
+fn refuse_pr<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    step: HandoffLandingStep,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    let requeue = matches!(step, HandoffLandingStep::StopForRequeue);
+    let repairable = requeue || matches!(step, HandoffLandingStep::Stop { repairable: true });
     let reason = diagnostics::reason(reason);
-    let evidence = json!({
+    let mut evidence = json!({
         "schema_version":1, "kind":"owner_landing_refusal",
         "reason":reason, "repairable":repairable,
         "accepted":{
@@ -1429,13 +1463,10 @@ fn stop_pr<H: RuntimeHost + ?Sized>(
         "workflow_prerequisites":{"state":"not_collected"},
         "emission_proof":{"state":"not_collected"},
     });
-    record(
-        host,
-        context,
-        HandoffLandingStep::Stop { repairable },
-        None,
-        &evidence,
-    )?;
+    if requeue {
+        evidence["requeue"] = json!(true);
+    }
+    record(host, context, step, None, &evidence)?;
     Ok(OrbitError::Execution(format!(
         "handoff_land: {}",
         reason["value"].as_str().unwrap_or_default()

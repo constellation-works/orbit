@@ -15,8 +15,8 @@
 //!   there after that one update, on a base tip where the same job passes,
 //!   is the candidate's: the landing stops for the one automatic repair,
 //!   with the failed job, its signature and a log excerpt, unless that
-//!   repair is already spent, in which case it stops in review. An unmoved
-//!   base that is still red stops in review without a repair.
+//!   repair is already spent, in which case it stops for a requeue (below).
+//!   An unmoved base that is still red stops in review without a repair.
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
@@ -24,6 +24,11 @@
 //!   jobs were read and do not explain it. The landing stops for the same
 //!   single automatic repair a conflicting base gets, with the failed step's
 //!   signature and log excerpt in the stop evidence the repair leaf reads.
+//!   [ORB-16890] Once that repair is spent — the claim is the repair, or the
+//!   task already returned to the backlog for one — it stops for a requeue
+//!   instead: the owner ends the claim and returns the task to the backlog,
+//!   keeping the candidate and this evidence for the task's next run, within
+//!   the task's landing repair budget.
 //! - **inconclusive**: the evidence for any of the above could not be read:
 //!   a job query or log read failed, a log read recovered no text, or a log
 //!   names no diagnostic, so its signature is only the failed step's name.
@@ -44,8 +49,9 @@
 //! replacement to register, but never hides a separately failed aggregate.
 //!
 //! The rerun, the branch update and the repair are each spent once. A
-//! failure past that budget, or one this module cannot classify, stops the
-//! landing in review, with the classification in the stop evidence. The
+//! failure past that budget, other than the candidate's own, or one this
+//! module cannot classify, stops the landing in review, with the
+//! classification in the stop evidence. The
 //! repair an inherited failure earns after its one update is that same
 //! single repair, not a second update or a second repair.
 //!
@@ -81,6 +87,10 @@ use log::job_log;
 
 /// Largest log excerpt a stop's evidence carries per failed job.
 const MAX_EXCERPT_BYTES: usize = 2 * 1024;
+
+/// What a candidate-caused failure does once the automatic repair is spent.
+const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the owner ends the claim \
+     and returns the task to the backlog, where its next run repairs this candidate";
 
 /// Lines a runner prints when the machine, not the code, gave out.
 const RUNNER_LOSS: &[&str] = &[
@@ -152,6 +162,10 @@ pub(super) enum CheckRecoveryStep {
     Wait,
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
+    /// [ORB-16890] That repair is spent: stop so the owner returns the task
+    /// to the backlog for its next run to repair the candidate, with this
+    /// evidence.
+    Requeue(String),
     /// Stop in review, with this evidence.
     Stop(String),
 }
@@ -344,9 +358,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             // candidate's. It takes the same single repair a candidate-class
             // failure does, and a spent repair stops in review.
             if context.automatic_repair_spent {
-                Ok(CheckRecoveryStep::Stop(evidence(
-                    "this candidate already is the one automatic repair, so it stays in review",
-                )))
+                Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
             } else {
                 Ok(CheckRecoveryStep::Repair(evidence(
                     "it failed again after one branch update onto a base where the same job \
@@ -408,9 +420,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             Ok(CheckRecoveryStep::Acted)
         }
         CheckFailureClass::Candidate if context.automatic_repair_spent => {
-            Ok(CheckRecoveryStep::Stop(evidence(
-                "this candidate already is the one automatic repair, so it stays in review",
-            )))
+            Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
         }
         CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
             "the candidate is handed to one automatic repair",

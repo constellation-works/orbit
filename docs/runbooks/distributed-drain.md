@@ -1405,7 +1405,7 @@ one. From then on:
     passes on the base tip, the failure is the candidate's: the landing
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
-    spent stops in `review` instead. A base that has not moved, and is still
+    spent returns the task to the backlog instead (below). A base that has not moved, and is still
     red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
     this same classification for that unmoved red base: it spends no repair
     attempt, waits out its completion deadline, and stops with a base-red
@@ -1424,6 +1424,19 @@ one. From then on:
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
+
+  A **candidate** failure once that repair is spent (the claim is the
+  repair, or the task already returned to the backlog for a landing repair)
+  does not leave the task in `review`. The owner ends the claim, keeps its
+  candidate with the stop's reason, and returns the task to the backlog
+  with history event `landing_repair_requeued`. The task's next run resumes
+  that candidate and repairs it with the failed check and its
+  signature in its prompt rather than implementing afresh. It opens its own
+  pull request, which closes the old one. A task returns to the backlog at
+  most twice this way. The next such stop blocks it (history event
+  `landing_repair_exhausted`), with a comment that carries that stop and
+  every counted earlier stop. The candidate is still kept for the run after
+  an operator unblocks the task, and that run starts with a fresh budget.
 
   A failed required check that no failed job answers, such as a provider
   app's aggregate beside passing analysis jobs, is classified too, so a job

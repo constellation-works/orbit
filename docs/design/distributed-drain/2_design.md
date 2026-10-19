@@ -1027,8 +1027,17 @@ same job passes on the moved landing tip) updates the pull request branch from t
 once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
 once; `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
 excerpt. An `inherited` failure that still fails after that one update, on a base tip where the same
-job passes, is the candidate's and takes that same repairable stop [ORB-16322]; when the automatic
-repair is already spent, it stops in `review`. An unmoved red base, an inconclusive read, and a
+job passes, is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic
+repair is already spent (a repair claim, or a task that already returned to the backlog for a landing
+repair), a `candidate` failure stops for a requeue instead of leaving the task in `review` [ORB-16890]:
+the stop revokes the handoff's authority, settles the claim `revoked` with a kept candidate that
+carries the stop's reason (`landing_stop`), returns the task to `backlog` and records
+`landing_repair_requeued`. The task's next claim resumes that candidate as a `landing` repair whose
+prompt names the failed check and its signature, publishes its own pull request rather than adopting
+the stopped one, and closes the stopped one once its own is open. After two requeues since the last
+`landing_repair_exhausted`, the next such stop settles the claim `failed`, still keeping the
+candidate, blocks the task with a comment carrying that stop and each counted requeue's note, and
+records `landing_repair_exhausted`. An unmoved red base, an inconclusive read, and a
 failure past the one-update or one-rerun budget stop in `review` with the classification and spend
 nothing further. A branch-updated head is merged only when it is a two-parent merge of the accepted
 candidate and a commit on the landing branch whose tree equals their clean `merge-tree`; the
@@ -1349,6 +1358,7 @@ Acceptance criteria, not reported as passing.
 | Handoff commits, response lost | Exactly one handoff and review transition |
 | Review-only handoff reaches the landing consumer | No merge without recorded authorization |
 | PR head/base changes or conflicts | Stop with evidence; fresh validated repair required. A base conflict or stale base gets one automatic repair claim that re-hands off; a second blocks with both attempts' evidence ([ORB-14261]) |
+| PR fails a required check the candidate caused after its automatic repair | Claim revoked, candidate kept with the stop, task back to `backlog` for a repairing run; the third such stop since the last block blocks the task with every counted stop's evidence ([ORB-16890]) |
 | Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
@@ -1432,5 +1442,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-15705] — pruned settled claims' mutation receipts 7 days after their last mutation, keeping claim and lifecycle rows as the namespace that refuses a late replay.
 - [ORB-15956] — classified a landing's failed pull request check as inherited, transient or candidate, each with a one-time recovery, and let a red base recorded green release without a hold.
 - [ORB-16322] — handed an inherited check that still fails after the one branch update, on a base tip where the same job passes, to that same one automatic repair.
+- [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

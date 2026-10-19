@@ -343,6 +343,13 @@ pub struct ClaimCandidateRef {
     /// and the findings its report held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupted_review: Option<InterruptedReview>,
+    /// [ORB-16890] Why the owner's landing of this handed-off candidate
+    /// stopped: a required check the candidate itself fails, with the
+    /// failed job, its signature and a log excerpt. The next run repairs the
+    /// candidate from it and publishes its own pull request, which replaces
+    /// `pull_request`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landing_stop: Option<String>,
 }
 
 /// [ORB-15314] A review a leaf was cancelled or interrupted inside, before
