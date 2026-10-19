@@ -5,6 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::task::canonical_artifact_path;
 use orbit_types::workflow::handoff::{AlreadyLandedEvidence, NoDiffEvidence};
+use orbit_types::workflow::is_reserved_review_artifact;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -42,6 +43,11 @@ fn prepare(
     for artifact in artifacts {
         let path = canonical_artifact_path(&artifact.path)
             .map_err(|error| refused(format!("{field} path '{}': {error}", artifact.path)))?;
+        if is_reserved_review_artifact(&path) {
+            return Err(refused(format!(
+                "{field} path '{path}' is in the reserved review- namespace, which only the review gate writes"
+            )));
+        }
         if !paths.insert(path.clone()) {
             return Err(refused(format!("{field} contains duplicate path '{path}'")));
         }
@@ -67,7 +73,9 @@ fn prepare(
 /// A sandboxed implementer returns scratch references, never owner paths.
 /// Validate both lists completely before attaching any bytes through the claim.
 /// Clean-tree evidence remains restricted to reports and their declared logs;
-/// ordinary task artifacts cannot overwrite those reserved names.
+/// ordinary task artifacts cannot overwrite those reserved names. Neither list
+/// may name the review gate's `review-` namespace, which the owner refuses
+/// only after earlier entries are already stored.
 pub(in crate::executor::automation::vcs) fn import_implementation_evidence<
     H: RuntimeHost + ?Sized,
 >(

@@ -113,6 +113,8 @@ fn claimed_artifact_refusals_name_path_and_attach_nothing() {
         "no-diff-extra",
         "handoff-report",
         "handoff-log",
+        "review",
+        "review-log",
     ] {
         let mut fixture = CleanLeaf::new(false, "done");
         task_artifact(&mut fixture, "ledger.json", b"{}");
@@ -192,6 +194,33 @@ fn claimed_artifact_refusals_name_path_and_attach_nothing() {
                     .remove("task_artifacts");
                 "ledger.json"
             }
+            "review" => {
+                // Ordinary ledger first: a refusal must still attach nothing.
+                let mut review = reference.clone();
+                review["path"] = json!("Review-x.json");
+                fixture.input["implementation"]["task_artifacts"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(review);
+                "Review-x.json"
+            }
+            "review-log" => {
+                let report_path = fixture.pair.follower_repo.join(".orbit/tmp/no-diff.json");
+                let mut report: Value =
+                    serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+                report["validation"].as_array_mut().unwrap().push(json!({
+                    "command": "git status --porcelain", "exit_code": 0, "log_artifact": "review-log.json",
+                }));
+                std::fs::write(&report_path, serde_json::to_vec(&report).unwrap()).unwrap();
+                fixture.write_evidence(
+                    "review-log.json",
+                    json!({
+                        "run_id": fixture.leaf, "tested_head": fixture.base,
+                        "command": "git status --porcelain", "exit_code": 0, "output": "",
+                    }),
+                );
+                "review-log.json"
+            }
             _ => unreachable!(),
         };
         let refused = engine_action(&fixture.bound, "git_commit", &fixture.input)
@@ -209,6 +238,7 @@ fn claimed_artifact_refusals_name_path_and_attach_nothing() {
             "duplicate" => "duplicate path",
             "invalid-path" => "must not contain '..'",
             "no-diff-extra" => "not a clean-tree report",
+            "review" | "review-log" => "reserved review- namespace",
             _ => unreachable!(),
         };
         assert!(refused.contains(reason), "{case}: {refused}");

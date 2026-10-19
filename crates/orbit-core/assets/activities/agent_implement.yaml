@@ -107,7 +107,8 @@ spec:
               type: string
       # Claimed mode: required task artifacts for diff and no-diff candidates.
       # Commit validates every bounded scratch file before attaching through
-      # the claim; names cannot collide with clean-tree reports or their logs.
+      # the claim; names cannot collide with clean-tree reports or their logs,
+      # and cannot use the reserved review- namespace.
       task_artifacts:
         type: array
         items:
@@ -257,7 +258,10 @@ spec:
       artifact paths, or paths colliding with a clean-tree report or its
       declared logs refuse the handoff; none are silently dropped. The engine's
       `no-diff-handoff/<claim>.json` and `validation/<claim>/` names are also
-      reserved for its own checkpoint and validation logs.
+      reserved for its own checkpoint and validation logs. Paths in the
+      reserved `review-` namespace (any ASCII case, such as
+      `review-sandbox-handoff.json`) are refused too, because only the review
+      gate writes there.
       The sandboxed implementer does not call owner artifact tools. Owner
       mode continues to use `orbit.task.artifact.put` as item 12 requires.
     - In claimed mode, for tasks without `no-diff-expected`, when the base
