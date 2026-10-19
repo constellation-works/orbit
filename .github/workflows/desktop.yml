@@ -1,8 +1,8 @@
 name: Desktop App
 
 # Builds the Tauri desktop shell in desktop/. It is its own Cargo workspace,
-# outside the main build, so it runs only when the shell or this workflow
-# changes; the main Check / Clippy / Test budget never pays for the webview
+# outside the main build, so shell, workflow and shared audit changes run here;
+# the main Check / Clippy / Test budget never pays for the webview
 # stacks. Manual runs also bundle unsigned macOS and Linux packages for
 # testing; signed release bundles come from release.yml.
 
@@ -12,10 +12,18 @@ on:
     paths:
       - "desktop/**"
       - ".github/workflows/desktop.yml"
+      - "deny.toml"
+      - "scripts/cargo-deny.sh"
+      - "scripts/ci-download-verified.sh"
+      - "scripts/test-desktop-advisories.py"
   pull_request:
     paths:
       - "desktop/**"
       - ".github/workflows/desktop.yml"
+      - "deny.toml"
+      - "scripts/cargo-deny.sh"
+      - "scripts/ci-download-verified.sh"
+      - "scripts/test-desktop-advisories.py"
   workflow_dispatch:
 
 # Superseded PR heads must not compete with their replacement. Every non-PR
@@ -32,6 +40,9 @@ env:
   # Keep in step with desktop/Cargo.toml's tauri dependency line and with
   # the build-desktop job in release.yml.
   TAURI_CLI_VERSION: 2.12.3
+  # Keep aligned with ci.yml; verify downloaded bytes before execution.
+  CARGO_DENY_VERSION: 0.19.9
+  CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
 
 jobs:
   # Read live state before allocating build runners; the PR event can be stale.
@@ -57,6 +68,41 @@ jobs:
             elif .state == "open" or .state == "closed" then "state=" + .state
             else error("Unexpected pull request state") end
           ' >> "$GITHUB_OUTPUT"
+
+  advisories:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Desktop advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install cargo-deny
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp "$cargo_bin"
+          download_dir="$(mktemp -d .orbit/tmp/desktop-deny.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          scripts/ci-download-verified.sh "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$CARGO_DENY_LINUX_SHA256" "$archive"
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+          cargo deny --version | awk -v expected="${CARGO_DENY_VERSION}" '{print} $1 == "cargo-deny" && $2 == expected {ok=1} END {exit !ok}'
+
+      - name: Advisory boundary regression
+        # PyYAML is required, as for the main workflow's YAML fixture checks.
+        run: python3 scripts/test-desktop-advisories.py
+
+      - name: Audit desktop lockfile
+        id: audit
+        run: scripts/cargo-deny.sh --manifest-path desktop/Cargo.toml --locked check advisories
 
   check:
     needs: pr-state

@@ -1,8 +1,10 @@
 # cargo-deny configuration — supply-chain CI gate (advisories + licenses).
 # [ORB-00416]
 #
-# Run locally with `make audit` (or `cargo deny check`). CI runs it on every PR
-# via scripts/ci-guardrails.sh with a pinned cargo-deny version. This file is
+# Run locally with `make audit` for the root graph and
+# `scripts/cargo-deny.sh --manifest-path desktop/Cargo.toml --locked check advisories`
+# for desktop. CI audits both workspaces in separate jobs with pinned cargo-deny.
+# The root runs via scripts/ci-guardrails.sh; desktop runs via desktop.yml. This file is
 # NOT consulted by `make ci-fast` (which stays no-compile).
 #
 # Adding an advisory exception or a new license requires review — see the
@@ -22,6 +24,16 @@ ignore = [
     # PKCS#1 v1.5 signatures with public keys; it does not decrypt or sign with
     # private keys. Re-review by 2027-01-04.
     { id = "RUSTSEC-2023-0071", reason = "rsa is used by orbit-common::security::release for PKCS#1 v1.5 public-key verification and by orbit-cmd update tests only to sign fixtures; production does not perform private-key decryption/signing, so Marvin timing concerns do not apply. Re-review 2027-01-04." },
+    # Desktop-only maintenance dispositions, reviewed 2026-10-19 against the
+    # committed desktop graph and published upstream manifests. No exploit or
+    # patched standalone release is reported by these advisories. The ignore
+    # mechanism is ID-wide: review any new occurrence outside these chains.
+    # Owner: Orbit desktop maintainers (dependency/CI PR reviewers). Remove
+    # each entry as soon as its upstream constraint is lifted; see DEVELOPMENT.md.
+    { id = "RUSTSEC-2024-0370", reason = "Desktop Linux: orbit-desktop -> tauri 2.12.4 -> gtk 0.18.2 -> gtk3-macros 0.18.2 and glib 0.18.5 -> glib-macros 0.18.5 -> proc-macro-error 1.0.4. Tauri still requires gtk ^0.18; gtk 0.19 is incompatible. This is a build-time macro diagnostic dependency; accept maintenance risk pending upstream migration, not a vulnerability waiver. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
+    { id = "RUSTSEC-2026-0371", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 (also via zbus_macros 5.19.0) -> zbus_names 4.3.5. Latest parents require zbus ^5 / ^5.9; maintained names moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
+    { id = "RUSTSEC-2026-0370", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 -> zvariant 5.15.1 (also through zbus_macros 5.19.0 / zbus_names 4.3.5). Latest parents require zbus ^5 / ^5.9; maintained wire format moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
+    { id = "RUSTSEC-2026-0372", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 -> zvariant 5.15.1 -> zvariant_derive 5.15.1. Latest parents require zbus ^5 / ^5.9; maintained derives moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
 ]
 
 [licenses]
