@@ -2,6 +2,10 @@
 //! (envelope plus history), the reservation history and the lock-conflict
 //! denials, reduced to the per-task facts the rankings slice by window.
 //!
+//! Lock waits are read from the same records: a task's audited denials say
+//! when it started waiting, and its next reservation grant (or its leaving
+//! the backlog) says when the wait ended.
+//!
 //! The scan reads every task bundle's history. A caller that serves repeated
 //! requests (the dashboard) caches the facts and slices every window,
 //! threshold and rollup from them; the CLI and the tool scan once per call.
@@ -169,6 +173,9 @@ pub(super) struct TaskFacts {
     pub(super) blocks: Vec<Block>,
     /// Distinct tasks whose `regression_from` relation targets this task.
     pub(super) regressed_by: BTreeSet<String>,
+    /// When the task entered a status other than `backlog`, ascending: each
+    /// ends any lock wait in progress, since only a backlog task is admitted.
+    pub(super) left_backlog: Vec<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +193,9 @@ pub(super) struct LockDenial {
     /// Who waited: each requested task, or the run (or invocation) when the
     /// request named no task. A retry loop repeats the same contender.
     pub(super) contenders: Vec<String>,
+    /// The tasks the request named; empty for a file-only request. Only a
+    /// task's wait has an admission to end it.
+    pub(super) task_ids: Vec<String>,
     /// The files the request conflicted on.
     pub(super) files: Vec<Anchor>,
 }
@@ -198,6 +208,8 @@ pub struct CodebaseFacts {
     pub(super) tasks: Vec<TaskFacts>,
     pub(super) reservations: Vec<ReservationFacts>,
     pub(super) lock_denials: Vec<LockDenial>,
+    /// When each task was granted a reservation, ascending: its admission.
+    pub(super) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
 }
 
 /// Scan the workspace once. A task whose history cannot be read keeps its
@@ -270,6 +282,12 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             .collect();
         footprint.sort();
         footprint.dedup();
+        let mut left_backlog: Vec<DateTime<Utc>> = history
+            .iter()
+            .filter(|entry| entry.to_status.is_some_and(|to| to != TaskStatus::Backlog))
+            .map(|entry| entry.at)
+            .collect();
+        left_backlog.sort();
         facts.push(TaskFacts {
             regressed_by: regressed_by.remove(&id).unwrap_or_default(),
             id,
@@ -283,9 +301,11 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             had_run,
             widenings,
             blocks,
+            left_backlog,
         });
     }
 
+    let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
     let reservations = runtime
         .list_task_reservation_history()?
         .into_iter()
@@ -293,6 +313,9 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             let at = DateTime::parse_from_rfc3339(&record.created_at)
                 .ok()?
                 .with_timezone(&Utc);
+            for task_id in &record.task_ids {
+                admissions.entry(task_id.clone()).or_default().push(at);
+            }
             Some(ReservationFacts {
                 at,
                 requesters: requester_identities(
@@ -324,11 +347,16 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
         .filter_map(lock_denial)
         .collect();
 
+    for grants in admissions.values_mut() {
+        grants.sort();
+    }
+
     Ok(CodebaseFacts {
         computed_at,
         tasks: facts,
         reservations,
         lock_denials,
+        admissions,
     })
 }
 
@@ -483,14 +511,16 @@ fn lock_denial(event: &AuditEvent) -> Option<LockDenial> {
         .filter(|run| !run.is_empty())
         .map(str::to_string)
         .or_else(|| event.job_run_id.clone());
+    let task_ids = strings("task_ids");
     let contenders = requester_identities(
-        strings("task_ids"),
+        task_ids.clone(),
         run,
         format!("invocation:{}", event.execution_id),
     );
     Some(LockDenial {
         at: event.timestamp,
         contenders,
+        task_ids,
         files,
     })
 }

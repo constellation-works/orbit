@@ -1,6 +1,7 @@
 //! One path's standing in every ranking, with what stands behind each
 //! numerator: the tasks for the four task rankings, the refused requesters
-//! for lock contention and the reserving requesters of each coupled pair.
+//! and their wait episodes for lock contention and the reserving requesters
+//! of each coupled pair.
 //!
 //! It reads the rows the rankings rank, so a count here is the count the
 //! ranking shows, and reports the path's place in each ranking's whole order
@@ -11,6 +12,7 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::facts::{CodebaseFacts, TaskFacts};
+use super::lock_waits::{WaitEpisode, wait_summary};
 use super::sections::{
     Params, blocked_rows, coupling_pairs, footprint_rows, lock_rows, lock_tally, merge, rank,
     rank_blocked, rate_fields, regression_rows, rejected_rows,
@@ -127,6 +129,8 @@ pub(super) fn path_detail(
                 "contenders": row.contenders,
                 "reservations": row.reservations,
                 "denials": row.denials,
+                "wait": wait_summary(&row.waits),
+                "waits": wait_entries(&row.waits),
             }),
         )
     });
@@ -188,6 +192,32 @@ fn standing<T>(key: &str, row: Option<Value>, ranked: &[(String, T)], min_suppor
         .as_u64()
         .is_some_and(|denominator| denominator < min_support as u64);
     merge(row, json!({ "rank": rank, "below_support": below_support }))
+}
+
+/// Wait episodes longest first, then by task and start.
+fn wait_entries(waits: &[WaitEpisode]) -> Vec<Value> {
+    let mut waits: Vec<&WaitEpisode> = waits.iter().collect();
+    waits.sort_by(|left, right| {
+        right
+            .wait_ms()
+            .cmp(&left.wait_ms())
+            .then_with(|| left.task_id.cmp(&right.task_id))
+            .then_with(|| left.started_at.cmp(&right.started_at))
+    });
+    let at = |time: DateTime<Utc>| time.to_rfc3339_opts(SecondsFormat::Millis, true);
+    waits
+        .into_iter()
+        .map(|wait| {
+            json!({
+                "task_id": wait.task_id,
+                "started_at": at(wait.started_at),
+                "ended_at": at(wait.ended_at),
+                "end": wait.end.as_str(),
+                "denials": wait.denials,
+                "wait_ms": wait.wait_ms(),
+            })
+        })
+        .collect()
 }
 
 /// Tasks newest first, each with the time that put it in the numerator.

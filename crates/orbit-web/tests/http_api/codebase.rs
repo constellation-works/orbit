@@ -416,6 +416,155 @@ fn codebase_scopes_production_lock_denials_and_support_but_audit_remains_global(
     );
 }
 
+#[test]
+fn codebase_lock_wait_spans_first_denial_to_admission_once_per_task() {
+    isolated(
+        "codebase::codebase_lock_wait_spans_first_denial_to_admission_once_per_task",
+        || {
+            let fixture = Fixture::new();
+            fs::create_dir_all(fixture.runtime.paths().repo_root.join("src")).unwrap();
+            fs::write(fixture.runtime.paths().repo_root.join("src/shared.rs"), "").unwrap();
+            let holder = add(&fixture, "holder", &["src/shared.rs"], vec![]);
+            let waiter = add(&fixture, "waiter", &["src/shared.rs"], vec![]);
+            let leaver = add(&fixture, "leaver", &["src/shared.rs"], vec![]);
+            let request = |task: &str| {
+                fixture
+                    .runtime
+                    .run_deterministic(
+                        "reserve_locks",
+                        &json!({}),
+                        &json!({"task_ids": [task], "ttl_seconds": 120}),
+                        Default::default(),
+                    )
+                    .unwrap()
+            };
+            let held = request(&holder);
+            assert_eq!(held["reserved"], true);
+            // The waiter retries for several passes; the leaver is refused
+            // once, then archived without ever being admitted.
+            for _ in 0..3 {
+                assert_eq!(request(&waiter)["reserved"], false);
+            }
+            assert_eq!(request(&leaver)["reserved"], false);
+            fixture
+                .runtime
+                .run_tool(
+                    "orbit.task.update",
+                    json!({"id": leaver, "status": "archived"}),
+                )
+                .unwrap();
+            fixture
+                .runtime
+                .run_deterministic(
+                    "release_locks",
+                    &json!({}),
+                    &json!({"reservation_id": held["reservation_id"]}),
+                    Default::default(),
+                )
+                .unwrap();
+            let admitted = request(&waiter);
+            assert_eq!(admitted["reserved"], true, "{admitted}");
+
+            let denied_at = |task: &str| -> Vec<DateTime<Utc>> {
+                let mut times: Vec<_> = fixture
+                    .runtime
+                    .list_audit_events(
+                        None,
+                        Some("orbit.task.locks.reserve".into()),
+                        Some(AuditEventStatus::Denied),
+                        None,
+                        100,
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .filter(|event| event.task_id.as_deref() == Some(task))
+                    .map(|event| event.timestamp)
+                    .collect();
+                times.sort();
+                times
+            };
+            let waiter_denials = denied_at(&waiter);
+            assert_eq!(waiter_denials.len(), 3);
+            let locks = fixture
+                .runtime
+                .run_tool("orbit.task.locks", json!({}))
+                .unwrap();
+            let granted_at = locks["by_reservation"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|reservation| reservation["reservation_id"] == admitted["reservation_id"])
+                .and_then(|reservation| reservation["created_at"].as_str())
+                .map(|at| {
+                    DateTime::parse_from_rfc3339(at)
+                        .unwrap()
+                        .with_timezone(&Utc)
+                })
+                .unwrap_or_else(|| panic!("the admission's reservation is listed: {locks}"));
+
+            let server = fixture.server(false);
+            let body = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=1"
+            )));
+            let section = &body["lock_contention"];
+            assert_eq!(section["wait_time_recorded"], true);
+            let lock = row(section, "src/shared.rs").unwrap_or_else(|| panic!("{section}"));
+            assert_eq!(lock["denials"], 4);
+            assert_eq!(
+                (&lock["wait"]["episodes"], &lock["wait"]["waiting"]),
+                (&json!(2), &json!(0)),
+                "three retries by the waiter are one episode beside the leaver's: {lock}"
+            );
+            assert_eq!(section["rows_by_wait"][0]["path"], "src/shared.rs");
+
+            let detail = fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.show",
+                    json!({ "path": "src/shared.rs", "window": "all", "min_support": 1 }),
+                )
+                .unwrap();
+            let waits = detail["rankings"]["lock_contention"]["waits"]
+                .as_array()
+                .unwrap()
+                .clone();
+            let episode = |task: &str| {
+                let found: Vec<&Value> = waits
+                    .iter()
+                    .filter(|wait| wait["task_id"] == task)
+                    .collect();
+                assert_eq!(found.len(), 1, "one episode for {task}: {waits:?}");
+                found[0].clone()
+            };
+            let millis =
+                |at: DateTime<Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let waited = episode(&waiter);
+            assert_eq!(waited["end"], "admitted");
+            assert_eq!(waited["denials"], 3);
+            assert_eq!(waited["started_at"], millis(waiter_denials[0]), "{waited}");
+            assert_eq!(waited["ended_at"], millis(granted_at), "{waited}");
+            let waiter_ms = (granted_at - waiter_denials[0]).num_milliseconds();
+            assert_eq!(waited["wait_ms"], waiter_ms);
+            let left = episode(&leaver);
+            assert_eq!(
+                left["end"], "left_backlog",
+                "archiving ends the wait: {left}"
+            );
+            assert_eq!(left["denials"], 1);
+            assert_eq!(left["started_at"], millis(denied_at(&leaver)[0]));
+            let leaver_ms = left["wait_ms"].as_i64().unwrap();
+            assert!(waits.iter().all(|wait| wait["task_id"] != holder.as_str()));
+            assert_eq!(
+                lock["wait"]["total_ms"],
+                waiter_ms + leaver_ms,
+                "the row sums its episodes: {lock}"
+            );
+            assert_eq!(lock["wait"]["max_ms"], waiter_ms.max(leaver_ms));
+            assert_eq!(lock["wait"]["median_ms"], (waiter_ms + leaver_ms) / 2);
+        },
+    );
+}
+
 fn row<'a>(section: &'a Value, path: &str) -> Option<&'a Value> {
     section["rows"]
         .as_array()

@@ -20,6 +20,7 @@ use super::facts::{
     ACTOR_KINDS, Anchor, Block, BlockCause, CodebaseFacts, INFRA_CAUSES, ReservationFacts,
     TaskFacts,
 };
+use super::lock_waits::{WaitEpisode, wait_episodes, wait_summary};
 
 /// Rows returned per ranking.
 pub(super) const ROW_LIMIT: usize = 25;
@@ -84,7 +85,10 @@ impl Rollup {
         }
     }
 
-    fn keys<'a>(self, anchors: impl IntoIterator<Item = &'a Anchor>) -> BTreeSet<String> {
+    pub(super) fn keys<'a>(
+        self,
+        anchors: impl IntoIterator<Item = &'a Anchor>,
+    ) -> BTreeSet<String> {
         anchors.into_iter().map(|anchor| self.key(anchor)).collect()
     }
 }
@@ -96,7 +100,7 @@ pub(super) struct Params {
 }
 
 impl Params {
-    fn within(&self, at: DateTime<Utc>) -> bool {
+    pub(super) fn within(&self, at: DateTime<Utc>) -> bool {
         self.since.is_none_or(|since| at >= since)
     }
 }
@@ -335,6 +339,12 @@ pub(super) struct LockRow {
     pub(super) requesters: BTreeSet<String>,
     pub(super) reservations: usize,
     pub(super) denials: usize,
+    /// The tasks' wait episodes on the path with a denial in the window.
+    pub(super) waits: Vec<WaitEpisode>,
+}
+
+fn total_wait_ms(row: &LockRow) -> i64 {
+    row.waits.iter().map(WaitEpisode::wait_ms).sum()
 }
 
 pub(super) struct LockRows {
@@ -347,7 +357,8 @@ pub(super) struct LockRows {
 /// distinct requesters that asked for it (reserved it or were refused it). A retry
 /// loop repeats the same contender and counts once. Reservation and denial
 /// counts are reported beside, not folded into, the contention figure, per
-/// path and as window totals.
+/// path and as window totals. Each task's wait episodes on the path are kept
+/// beside them.
 pub(super) fn lock_rows(facts: &CodebaseFacts, params: &Params) -> LockRows {
     let mut rows: BTreeMap<String, LockRow> = BTreeMap::new();
     let mut reservations = 0;
@@ -376,6 +387,9 @@ pub(super) fn lock_rows(facts: &CodebaseFacts, params: &Params) -> LockRows {
             row.requesters.extend(denial.contenders.iter().cloned());
         }
     }
+    for (key, wait) in wait_episodes(facts, params) {
+        rows.entry(key).or_default().waits.push(wait);
+    }
     LockRows {
         rows,
         reservations,
@@ -394,29 +408,46 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
         denials,
     } = lock_rows(facts, params);
     let (ranked, below_support) = rank(rows, params.min_support, lock_tally);
+    let row_json = |path: &str, row: &LockRow| {
+        merge(
+            rate_fields(row.contenders.len(), row.requesters.len()),
+            json!({
+                "path": path,
+                "contending_tasks": row.contenders.len(),
+                "reservations": row.reservations,
+                "denials": row.denials,
+                "wait": wait_summary(&row.waits),
+            }),
+        )
+    };
     let rows: Vec<Value> = ranked
+        .iter()
+        .take(ROW_LIMIT)
+        .map(|(path, row)| row_json(path, row))
+        .collect();
+    // The same supported rows, ranked by how long tasks waited on them, so a
+    // path that costs hours behind few denials is not cut by the rate order.
+    let mut by_wait: Vec<&(String, LockRow)> = ranked
+        .iter()
+        .filter(|(_, row)| !row.waits.is_empty())
+        .collect();
+    by_wait.sort_by(|(left_path, left), (right_path, right)| {
+        total_wait_ms(right)
+            .cmp(&total_wait_ms(left))
+            .then_with(|| left_path.cmp(right_path))
+    });
+    let rows_by_wait: Vec<Value> = by_wait
         .into_iter()
         .take(ROW_LIMIT)
-        .map(|(path, row)| {
-            merge(
-                rate_fields(row.contenders.len(), row.requesters.len()),
-                json!({
-                    "path": path,
-                    "contending_tasks": row.contenders.len(),
-                    "reservations": row.reservations,
-                    "denials": row.denials,
-                    // Lock waits are not persisted with a duration.
-                    "wait_ms": Value::Null,
-                }),
-            )
-        })
+        .map(|(path, row)| row_json(path, row))
         .collect();
     json!({
         "rows": rows,
+        "rows_by_wait": rows_by_wait,
         "below_support": below_support,
         "reservations": reservations,
         "denials": denials,
-        "wait_time_recorded": false,
+        "wait_time_recorded": true,
     })
 }
 

@@ -65,9 +65,10 @@ const ROLLUP_NOUNS = { file: "File", dir: "Directory", crate: "Crate" };
 
 let codebaseQuery = { ...DEFAULT_QUERY };
 // What the reader picked on the page: the tile, the row (`path:<path>` or
-// `pair:<left>\n<right>`), whether expected pairs are hidden, whether every
-// regressed task is listed, and which path was last copied.
-let view = { tile: "overlap", selected: null, hideExpected: false, allTasks: false, copied: null };
+// `pair:<left>\n<right>`), whether expected pairs are hidden, whether lock
+// contention is sorted by total wait, whether every regressed task is listed,
+// and which path was last copied.
+let view = { tile: "overlap", selected: null, hideExpected: false, lockByWait: false, allTasks: false, copied: null };
 let lastData = null;
 let requestHashChange = () => {};
 
@@ -212,6 +213,17 @@ function rowsOf(data, key) {
   return Array.isArray(section(data, key).rows) ? section(data, key).rows : [];
 }
 
+// A wait as the panel reads it: minutes under an hour, then hours and
+// minutes, then days.
+function waitDuration(ms) {
+  const minutes = Math.round((Number(ms) || 0) / 60000);
+  if (minutes < 1) return "<1 min";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours >= 48) return `${count(Math.round(minutes / 1440))} d`;
+  return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+}
+
 // A directory key ends in `/`; its base name keeps the slash.
 function splitPath(path) {
   const value = String(path ?? "");
@@ -271,7 +283,8 @@ function listEntries(model) {
   if (view.tile === "change_coupling") {
     return pairs.filter((pair) => !(view.hideExpected && pair.expected)).map((pair) => ({ key: pairKey(pair.row.paths), pair }));
   }
-  return rowsOf(data, view.tile).map((row) => ({ key: pathKey(row.path), path: row.path }));
+  const rows = view.tile === "lock_contention" ? lockRowsShown(data) : rowsOf(data, view.tile);
+  return rows.map((row) => ({ key: pathKey(row.path), path: row.path }));
 }
 
 function causeTotals(data) {
@@ -288,6 +301,24 @@ function causeTotals(data) {
 
 function maxRejected(data) {
   return rowsOf(data, "rejected").reduce((max, row) => Math.max(max, Number(row.numerator) || 0), 0);
+}
+
+// Whether the payload carries lock waits. An older one does not, and the
+// panel renders it as it always did.
+function lockWaitsRecorded(data) {
+  return section(data, "lock_contention").wait_time_recorded === true;
+}
+
+// The supported rows ranked by total wait; empty when the payload records no
+// waits or no task waited, which also hides the sort.
+function rowsByWait(data) {
+  const rows = section(data, "lock_contention").rows_by_wait;
+  return lockWaitsRecorded(data) && Array.isArray(rows) ? rows : [];
+}
+
+function lockRowsShown(data) {
+  const byWait = rowsByWait(data);
+  return view.lockByWait && byWait.length ? byWait : rowsOf(data, "lock_contention");
 }
 
 // Nothing to rank and nothing below support: no requester was ever refused.
@@ -642,10 +673,24 @@ function couplingContent(model) {
   return content;
 }
 
+// A row's waits: median and longest, total minutes and any still waiting.
+function waitChips(wait) {
+  if (!wait || typeof wait !== "object") return [];
+  const minutes = Math.round((Number(wait.total_ms) || 0) / 60000);
+  const chips = [el("span", {
+    class: "codebase-extra codebase-wait",
+    text: `wait median ${waitDuration(wait.median_ms)} · max ${waitDuration(wait.max_ms)} · ${count(minutes)} min total`,
+    title: `${plural(wait.episodes, "wait")} by tasks refused this lock`,
+  })];
+  if (Number(wait.waiting) > 0) chips.push(el("span", { class: "codebase-tag", text: `${count(wait.waiting)} still waiting` }));
+  return chips;
+}
+
 function lockContent(model) {
   const { data, selected } = model;
   const lock = section(data, "lock_contention");
-  const rows = rowsOf(data, "lock_contention");
+  const rows = lockRowsShown(data);
+  const recorded = lockWaitsRecorded(data);
   const content = [];
   if (lockIsQuiet(data)) {
     content.push(el("div", { class: "codebase-empty-state good" }, [
@@ -655,18 +700,25 @@ function lockContent(model) {
   } else if (rows.length === 0) {
     content.push(emptyRanking(data, "lock_contention"));
   } else {
-    content.push(rowList(rows.map((row, at) => rowButton(pathKey(row.path), selected, [
-      el("span", { class: "codebase-rank", text: String(at + 1) }),
-      el("span", { class: "codebase-pathcell" }, [
-        pathNode(row.path),
-        el("span", { class: "codebase-chips" }, [el("span", { class: "codebase-extra", text: `${plural(row.reservations, "reservation")} · ${plural(row.denials, "denial")}` })]),
-      ]),
-      metricNode(row.rate, row.numerator, row.denominator),
-    ]))));
+    content.push(rowList(rows.map((row, at) => {
+      const waits = recorded ? waitChips(row.wait) : [];
+      return rowButton(pathKey(row.path), selected, [
+        el("span", { class: "codebase-rank", text: String(at + 1) }),
+        el("span", { class: "codebase-pathcell" }, [
+          pathNode(row.path),
+          el("span", { class: "codebase-chips" }, [el("span", { class: "codebase-extra", text: `${plural(row.reservations, "reservation")} · ${plural(row.denials, "denial")}` })]),
+          waits.length ? el("span", { class: "codebase-chips" }, waits) : null,
+        ]),
+        metricNode(row.rate, row.numerator, row.denominator),
+      ]);
+    })));
   }
   const foot = [];
   if (Number(lock.below_support) > 0) foot.push(`${plural(lock.below_support, "path")} below minimum support ${count(data.min_support)} hidden.`);
-  if (lock.wait_time_recorded !== true) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
+  if (!recorded) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
+  else if (rowsByWait(data).length) {
+    foot.push("A wait runs from a task's first denial to its admission or its leaving the backlog; its retries add no wait. A wait still in progress is measured to now.");
+  }
   if (foot.length) content.push(listFoot([note(foot.join(" "))]));
   return content;
 }
@@ -696,6 +748,14 @@ function listNode(model) {
     toggle.setAttribute("aria-pressed", String(view.hideExpected));
     head.appendChild(toggle);
   }
+  if (tile === "lock_contention" && rowsByWait(data).length) {
+    const toggle = actionButton("Sort by total wait", () => {
+      view = { ...view, lockByWait: !view.lockByWait };
+      paint();
+    }, `small toggle${view.lockByWait ? " on" : ""}`);
+    toggle.setAttribute("aria-pressed", String(view.lockByWait));
+    head.appendChild(toggle);
+  }
   const content = tile === "overlap" ? overlapContent(model)
     : tile === "change_coupling" ? couplingContent(model)
       : tile === "lock_contention" ? lockContent(model)
@@ -712,7 +772,7 @@ function listNode(model) {
       const hit = model.index.get(row.path)?.[key];
       return hit ? [key, hit.row.rate] : null;
     })) : null;
-  return keyed(node, "list", { tile, selected: model.selected, hideExpected: view.hideExpected, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
+  return keyed(node, "list", { tile, selected: model.selected, hideExpected: view.hideExpected, lockByWait: view.lockByWait, min: data.min_support, rollup: data.rollup, limit: model.limit, hashed, chipRates });
 }
 
 // ---- detail -----------------------------------------------------------------
