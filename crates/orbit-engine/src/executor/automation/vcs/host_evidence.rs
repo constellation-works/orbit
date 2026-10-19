@@ -29,7 +29,7 @@ use crate::context::RuntimeHost;
 
 use super::baseline::in_detached_worktree;
 use super::build_output::bind_host_output;
-use super::required_command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
+use super::required::command::{VALIDATION_TIMEOUT_MS, capture, environment_record, missing_tool};
 use super::scratch_target::{ScratchHostTarget, lease_scratch_host_target};
 use super::worktree::scratch_checkout_path;
 

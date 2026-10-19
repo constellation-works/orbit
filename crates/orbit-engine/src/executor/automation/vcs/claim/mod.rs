@@ -31,7 +31,7 @@
 //!
 //! Commands run exactly as on the owner's own delivery path: the same shell,
 //! environment, timeout, output capture and failure text
-//! ([`super::required_command`]), the same network reruns and the same
+//! ([`super::required::command`]), the same network reruns and the same
 //! comparison of a failure with the base ([`super::baseline`]).
 
 mod already_resolved;

@@ -78,9 +78,9 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::base_claim::{failure_identities, normalize_output};
-use super::build_output::bind_host_output;
-pub(super) use super::required_capture::capture;
+use super::super::base::claim::{failure_identities, normalize_output};
+use super::super::build_output::bind_host_output;
+pub(in crate::executor::automation::vcs) use super::capture::capture;
 
 /// The file a required command may write its [`ValidationSummary`] to.
 pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
@@ -90,12 +90,15 @@ pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
-pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
+pub(in crate::executor::automation::vcs) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
 /// Diagnostic messages carry summaries and artifact references, never logs.
-pub(super) const MAX_VALIDATION_MESSAGE_BYTES: usize = 16 * 1024;
+pub(in crate::executor::automation::vcs) const MAX_VALIDATION_MESSAGE_BYTES: usize = 16 * 1024;
 
 /// Bound a diagnostic field on a UTF-8 boundary, leaving room for evidence.
-pub(super) fn bounded_validation_text(text: &str, limit: usize) -> String {
+pub(in crate::executor::automation::vcs) fn bounded_validation_text(
+    text: &str,
+    limit: usize,
+) -> String {
     if text.len() <= limit {
         return text.to_string();
     }
@@ -107,49 +110,50 @@ pub(super) fn bounded_validation_text(text: &str, limit: usize) -> String {
 
 /// The line a failed run's captured output ends with, naming the `PATH` it
 /// ran under so a missing tool can be diagnosed.
-pub(super) const VALIDATION_PATH_LINE: &str = "Required validation PATH=";
+pub(in crate::executor::automation::vcs) const VALIDATION_PATH_LINE: &str =
+    "Required validation PATH=";
 
 /// One required command's captured result on the candidate.
-pub(super) struct RequiredCommandRun {
-    pub(super) command: String,
-    pub(super) exit_code: i32,
-    pub(super) timed_out: bool,
-    pub(super) passed: bool,
-    pub(super) output: String,
+pub(in crate::executor::automation::vcs) struct RequiredCommandRun {
+    pub(in crate::executor::automation::vcs) command: String,
+    pub(in crate::executor::automation::vcs) exit_code: i32,
+    pub(in crate::executor::automation::vcs) timed_out: bool,
+    pub(in crate::executor::automation::vcs) passed: bool,
+    pub(in crate::executor::automation::vcs) output: String,
     /// Why the complete output cannot count as executed host coverage,
     /// independently of the exit status. Ordinary failed tests stay in
     /// `failures`; skips and sandbox refusals prevent known-red and flaky-test
     /// continuation.
-    pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
+    pub(in crate::executor::automation::vcs) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The first `DEFERRED:` or Seatbelt `SKIP: sandbox-exec cannot apply a
     /// profile:` line the run printed: a test returned without running its
     /// sandbox-confined path. A failed run keeps it too, so its failures are
     /// never read as known red over a path that never ran [ORB-15546].
-    pub(super) deferred_notice: Option<String>,
+    pub(in crate::executor::automation::vcs) deferred_notice: Option<String>,
     /// The environment the command ran in.
-    pub(super) environment: ValidationEnvironment,
+    pub(in crate::executor::automation::vcs) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
-    pub(super) missing_tool: Option<MissingTool>,
+    pub(in crate::executor::automation::vcs) missing_tool: Option<MissingTool>,
     /// The supervisor's reason for stopping before a conclusive test result.
-    pub(super) infrastructure_failure: Option<String>,
+    pub(in crate::executor::automation::vcs) infrastructure_failure: Option<String>,
     /// The first failure the complete output shows, for a run the supervisor
     /// stopped ([`first_failure_cause`]).
-    pub(super) first_failure: Option<String>,
+    pub(in crate::executor::automation::vcs) first_failure: Option<String>,
     /// Reruns after a network-inconclusive failure [ORB-14258].
-    pub(super) network_retries: u32,
+    pub(in crate::executor::automation::vcs) network_retries: u32,
     /// The line showing the failure was the network's, when it still was
     /// after every rerun.
-    pub(super) network_evidence: Option<String>,
+    pub(in crate::executor::automation::vcs) network_evidence: Option<String>,
     /// What the command reported it ran, when it reports that.
-    pub(super) summary: Option<ValidationSummary>,
+    pub(in crate::executor::automation::vcs) summary: Option<ValidationSummary>,
     /// The failures a failed run's complete output names
     /// ([`failure_identities`]), before capture bounded it [ORB-15375].
     /// Empty for a run that passed.
-    pub(super) failures: BTreeSet<String>,
+    pub(in crate::executor::automation::vcs) failures: BTreeSet<String>,
     /// The timeout allowance in milliseconds the command ran under [ORB-15350].
-    pub(super) timeout_ms: u64,
+    pub(in crate::executor::automation::vcs) timeout_ms: u64,
     /// Advisory elapsed and admission evidence; never used to judge a pass.
-    pub(super) timing: Value,
+    pub(in crate::executor::automation::vcs) timing: Value,
 }
 
 /// What a command reported about its own run in [`VALIDATION_SUMMARY_ENV`]:
@@ -211,7 +215,12 @@ impl RequiredCommandRun {
     /// pass, carrying a bounded summary. A missing tool is reported as the
     /// validation environment's failure, with the marker, full searched PATH
     /// and tool. PATH is not bounded: operators need every searched directory.
-    pub(super) fn failure(&self, candidate: &str, baseline: &str, logs: &str) -> OrbitError {
+    pub(in crate::executor::automation::vcs) fn failure(
+        &self,
+        candidate: &str,
+        baseline: &str,
+        logs: &str,
+    ) -> OrbitError {
         let summary = self.failure_summary(candidate, baseline, logs);
         if let Some(cause) = &self.infrastructure_failure {
             return OrbitError::Execution(format!(
@@ -251,7 +260,12 @@ impl RequiredCommandRun {
 
     /// Mandatory evidence first, with independently bounded fields so even
     /// oversized commands and test identities cannot displace the log paths.
-    pub(super) fn failure_summary(&self, candidate: &str, baseline: &str, logs: &str) -> String {
+    pub(in crate::executor::automation::vcs) fn failure_summary(
+        &self,
+        candidate: &str,
+        baseline: &str,
+        logs: &str,
+    ) -> String {
         let failures = BaselineRedFailures::new(self.failures.iter().cloned(), "")
             .describe()
             .unwrap_or_else(|| "no failing test named".to_string());
@@ -268,7 +282,7 @@ impl RequiredCommandRun {
     }
 
     /// Coverage refusals use the same evidence as nonzero exits.
-    pub(super) fn coverage_failure_with_evidence(
+    pub(in crate::executor::automation::vcs) fn coverage_failure_with_evidence(
         &self,
         candidate: &str,
         replay: bool,
@@ -297,7 +311,10 @@ impl RequiredCommandRun {
     /// other `SKIP:` and `skipping` lines are common in other tools' output
     /// and stay with the host judge. Typed as the validation environment's
     /// failure, which no recovery repairs: the candidate was not judged.
-    pub(super) fn deferral_failure(&self, candidate: &str) -> Option<OrbitError> {
+    pub(in crate::executor::automation::vcs) fn deferral_failure(
+        &self,
+        candidate: &str,
+    ) -> Option<OrbitError> {
         let notice = self.deferred_notice.as_ref().filter(|_| self.passed)?;
         Some(OrbitError::Execution(format!(
             "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' exited zero on candidate \
@@ -312,7 +329,10 @@ impl RequiredCommandRun {
     /// The refusal for a replayed deferral [ORB-15287] whose native run did
     /// not report executing a test, so it replayed nothing: the command is
     /// not an affected-test gate, or it selected nothing on this candidate.
-    pub(super) fn replay_failure(&self, candidate: &str) -> Option<OrbitError> {
+    pub(in crate::executor::automation::vcs) fn replay_failure(
+        &self,
+        candidate: &str,
+    ) -> Option<OrbitError> {
         let executed = self.summary.as_ref().and_then(|summary| summary.tests_run);
         (executed.unwrap_or(0) == 0).then(|| {
             OrbitError::PolicyDenied(format!(
@@ -333,7 +353,11 @@ impl RequiredCommandRun {
     /// continuation: a successful deferral, or a replay that executed nothing.
     /// Missing tools, supervisor stops and timeouts keep their ordinary
     /// failure handling; none can reach a known-red continuation.
-    pub(super) fn coverage_failure(&self, candidate: &str, replay: bool) -> Option<OrbitError> {
+    pub(in crate::executor::automation::vcs) fn coverage_failure(
+        &self,
+        candidate: &str,
+        replay: bool,
+    ) -> Option<OrbitError> {
         if self.missing_tool.is_some() || self.infrastructure_failure.is_some() || self.timed_out {
             return None;
         }
@@ -342,13 +366,13 @@ impl RequiredCommandRun {
     }
 
     /// How the environment was resolved, as recorded on logs and step output.
-    pub(super) fn environment_record(&self) -> Value {
+    pub(in crate::executor::automation::vcs) fn environment_record(&self) -> Value {
         environment_record(&self.environment)
     }
 
     /// `environment` when the command stopped, lacked a tool or deferred a path,
     /// `candidate` when it otherwise failed, `null` when it passed.
-    pub(super) fn failure_kind(&self) -> Value {
+    pub(in crate::executor::automation::vcs) fn failure_kind(&self) -> Value {
         if self.infrastructure_failure.is_some() {
             return json!("environment");
         }
@@ -360,14 +384,14 @@ impl RequiredCommandRun {
         }
     }
 
-    pub(super) fn missing_tool_name(&self) -> Option<&str> {
+    pub(in crate::executor::automation::vcs) fn missing_tool_name(&self) -> Option<&str> {
         self.missing_tool
             .as_ref()
             .and_then(|missing| missing.tool.as_deref())
     }
 
     /// The selection the command reported testing, for a base rerun.
-    pub(super) fn selection(&self) -> Option<&Value> {
+    pub(in crate::executor::automation::vcs) fn selection(&self) -> Option<&Value> {
         self.summary.as_ref().map(|summary| &summary.selection)
     }
 }
@@ -402,7 +426,7 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
 /// [`VALIDATION_TIMEOUT_MS`]).
 /// With configured output bindings, `workspace_path` must belong to a primary
 /// Git checkout for managed host output isolation.
-pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,
@@ -453,8 +477,8 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         .env
         .iter()
         .filter(|(key, _)| {
-            key != super::required_evidence::DIRECTORY_ENV
-                && key != super::required_evidence::INVOCATION_ENV
+            key != super::evidence::DIRECTORY_ENV
+                && key != super::evidence::INVOCATION_ENV
                 && key != VALIDATION_SUMMARY_ENV
                 && key != VALIDATION_SELECTION_ENV
                 && key != orbit_common::process::build_budget::WAIT_DIRECTORY_ENV
@@ -473,11 +497,11 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
     }
     env.push((
-        super::required_evidence::DIRECTORY_ENV.into(),
+        super::evidence::DIRECTORY_ENV.into(),
         evidence_dir.path().to_string_lossy().into_owned(),
     ));
     env.push((
-        super::required_evidence::INVOCATION_ENV.into(),
+        super::evidence::INVOCATION_ENV.into(),
         invocation.to_string(),
     ));
     let setup_ms = started.elapsed().as_millis();
@@ -510,8 +534,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             })
         });
     let evidence_started = Instant::now();
-    let command_evidence =
-        super::required_evidence::capture(&evidence_anchor, invocation, workspace_path);
+    let command_evidence = super::evidence::capture(&evidence_anchor, invocation, workspace_path);
     let evidence_capture_ms = evidence_started.elapsed().as_millis();
     let timing = json!({
         "elapsed_ms": started.elapsed().as_millis(),

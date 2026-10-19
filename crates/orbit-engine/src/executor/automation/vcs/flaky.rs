@@ -7,9 +7,9 @@ use orbit_types::workflow::{FlakyValidation, MAX_FLAKY_TESTS};
 
 use crate::context::RuntimeHost;
 
-use super::base_claim::failing_tests_selection;
+use super::base::claim::failing_tests_selection;
 use super::baseline::BaselineCheck;
-use super::required_command::{RequiredCommandRun, VALIDATION_TIMEOUT_MS, run_required_command};
+use super::required::command::{RequiredCommandRun, VALIDATION_TIMEOUT_MS, run_required_command};
 
 /// An attempted replay is retained even when it fails or cannot prove coverage.
 pub(super) struct CandidateRerun {

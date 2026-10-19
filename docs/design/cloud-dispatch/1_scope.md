@@ -13,8 +13,8 @@ Bearing: the workspace rule that gates read durable artifacts and task state, ne
 final message (root `AGENTS.md`, "Gates"). The cloud session is untrusted remote
 execution; GitHub is the only record Orbit believes.
 Precedents: the distributed-drain split where a follower opens the PR and the owner re-reads
-everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing.rs`);
-`pr_complete`'s blocking GitHub poll (`vcs/pr/complete.rs`).
+everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing/`);
+`pr_complete`'s blocking GitHub poll (`vcs/pr/complete/`).
 
 ## Problem
 
@@ -258,7 +258,7 @@ Retries are allowed only when no session can have been created:
 
 ### 4.2 Polling
 
-`cloud_await_pr` copies `pr_complete::drive_pr_to_merged` (`vcs/pr/complete.rs`): a blocking
+`cloud_await_pr` copies `pr_complete::drive_pr_to_merged` (`vcs/pr/complete/drive.rs`): a blocking
 loop with a sleep in the run's worker process and GitHub read-back only. Each poll runs:
 
 ```

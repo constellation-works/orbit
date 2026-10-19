@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_tools::github_cli::{SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
 use serde_json::{Value, json};
 
-use super::super::operations;
+use super::super::super::operations;
 use crate::context::RuntimeHost;
 
 /// One failed job's log. A read that recovered no text, which the log
@@ -52,7 +52,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
                 )
             });
     }
-    let step = super::failed_step(job);
+    let step = super::jobs::failed_step(job);
     if response["truncated"] == true && selected.is_none() {
         return Err(OrbitError::Execution(
             "the job log is truncated and has no complete failing command".to_string(),

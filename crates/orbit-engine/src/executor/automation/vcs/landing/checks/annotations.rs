@@ -18,9 +18,9 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::super::git::git_output;
-use super::super::operations;
-use super::super::pr::{RequiredChecks, read_required_checks_observed};
+use super::super::super::git::git_output;
+use super::super::super::operations;
+use super::super::super::pr::{RequiredChecks, read_required_checks_observed};
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 /// Annotations an evidence text lists before it summarizes the rest.
@@ -165,7 +165,7 @@ pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
             .filter(|message| !message.is_empty())
             .ok_or_else(|| format!("the failure annotation on '{path}' carries no message"))?;
         let title = annotation["title"].as_str().unwrap_or_default().trim();
-        if let Some(evidence) = super::transient_evidence(&format!("{title}\n{message}")) {
+        if let Some(evidence) = super::jobs::transient_evidence(&format!("{title}\n{message}")) {
             return Err(format!(
                 "the failure annotation on '{path}' shows `{evidence}`: the runner or the \
                  network failed, not the source"
@@ -229,14 +229,14 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
     pr: &str,
     head: &str,
     unanswered: &[&(Option<String>, String)],
-    recovery: &mut super::CheckRecovery,
-) -> Vec<super::FailedJob> {
+    recovery: &mut super::recovery::CheckRecovery,
+) -> Vec<super::recovery::FailedJob> {
     let workspace = &context.workspace_path;
-    let inconclusive = |label: String, why: String| super::FailedJob {
+    let inconclusive = |label: String, why: String| super::recovery::FailedJob {
         run_id: None,
         job_id: 0,
         label,
-        class: super::CheckFailureClass::Inconclusive,
+        class: super::recovery::CheckFailureClass::Inconclusive,
         signature: String::new(),
         why,
         excerpt: String::new(),
@@ -303,21 +303,21 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
         });
         let (class, why) = match changed {
             Err(error) => (
-                super::CheckFailureClass::Inconclusive,
+                super::recovery::CheckFailureClass::Inconclusive,
                 format!("the candidate's changed files could not be read: {error}"),
             ),
             Ok(changed) if found.paths.is_subset(changed) => (
-                super::CheckFailureClass::Candidate,
+                super::recovery::CheckFailureClass::Candidate,
                 "its source failure annotations name only files the candidate changed".into(),
             ),
             Ok(_) => (
-                super::CheckFailureClass::Inconclusive,
+                super::recovery::CheckFailureClass::Inconclusive,
                 "its source failure annotations name files the candidate did not change, so \
                  neither the candidate nor the base is proven at fault"
                     .into(),
             ),
         };
-        classified.push(super::FailedJob {
+        classified.push(super::recovery::FailedJob {
             run_id: None,
             job_id: found.check_run_id,
             label: found.label,

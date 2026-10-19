@@ -1,5 +1,5 @@
 use super::super::git::git_run;
-use super::super::required_command::RequiredCommandRun;
+use super::super::required::command::RequiredCommandRun;
 use super::super::worktree::scratch_checkout_path;
 use super::command::run_validation_command_until;
 use super::compare::{BaseCommandResult, BaselineCheck, not_comparable};
