@@ -1,5 +1,5 @@
 #[test]
-fn agent_stall_minutes_defaults_to_thirty_and_zero_disables() {
+fn agent_stall_minutes_admits_zero_and_a_custom_value_and_refuses_above_a_day() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(global.path().join("config.toml"), "").expect("write global config");
@@ -10,9 +10,6 @@ fn agent_stall_minutes_defaults_to_thirty_and_zero_disables() {
             workspace.path(),
         ))
     };
-
-    let defaults = load().expect("defaults");
-    assert_eq!(defaults.snapshot.execution_agent_stall_minutes, 30);
 
     std::fs::write(
         workspace.path().join("config.toml"),

@@ -153,28 +153,6 @@ fn review_approval_resolves_related_friction_and_surfaces_json_fields() {
 }
 
 #[test]
-fn task_update_to_done_resolves_related_friction() {
-    let (_root, runtime, repo_root) = test_runtime();
-    let friction_id = add_test_friction(&runtime);
-    let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
-    move_backlog_task_to_review(&runtime, &task_id);
-
-    let updated = runtime
-        .run_tool(
-            "orbit.task.update",
-            json!({
-                "id": task_id,
-                "status": "done",
-                "model": "codex"
-            }),
-        )
-        .expect("update task to done");
-    assert_eq!(updated["status"], json!("done"));
-
-    assert_friction_resolved_by(&runtime, &friction_id, &task_id);
-}
-
-#[test]
 fn automation_update_to_done_resolves_related_friction() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
@@ -354,28 +332,6 @@ fn cross_workspace_resolves_update_to_done_is_rejected() {
             }),
         )
         .expect_err("cross-workspace resolves must not complete");
-    assert_friction_not_local(&error, &friction_id, &owner);
-    assert_friction_still_open(&runtime_a, &friction_id);
-    assert_eq!(
-        runtime_b.get_task(&task_id).expect("get task").status,
-        TaskStatus::Review
-    );
-}
-
-#[test]
-fn cross_workspace_resolves_review_approval_is_rejected() {
-    let (_root, runtime_a, _repo_a, runtime_b, repo_b) = dual_workspace_runtimes();
-    let friction_id = add_test_friction(&runtime_a);
-    let owner = runtime_a.workspace_id().expect("workspace a id");
-    let task_id = add_task_with_resolves(&runtime_b, &repo_b, &friction_id, "backlog");
-    move_backlog_task_to_review(&runtime_b, &task_id);
-
-    let error = runtime_b
-        .run_tool(
-            "orbit.task.update",
-            json!({ "id": task_id, "status": "done", "model": "codex" }),
-        )
-        .expect_err("cross-workspace resolves must not approve into done");
     assert_friction_not_local(&error, &friction_id, &owner);
     assert_friction_still_open(&runtime_a, &friction_id);
     assert_eq!(

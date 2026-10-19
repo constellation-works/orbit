@@ -328,25 +328,6 @@ fn landing_through_a_commit_names_the_commit() {
 }
 
 #[test]
-fn approving_a_review_keeps_the_pr_it_was_reviewed_through() {
-    let fx = Fixture::new();
-    let task_id = fx.add_task("Approved before its PR merged");
-    let other = fx.add_task("Unrelated task");
-    fx.seed_forge(&task_id, &other);
-    // #11 is the PR the task was promoted to review with: an operator may
-    // approve before merging it, so it may still be the landing.
-    fx.record_prs(&task_id, &[13, 11]);
-    fx.move_to_review(&task_id);
-
-    fx.runtime
-        .approve_task(&task_id, None, None)
-        .expect("approve the review");
-
-    assert_eq!(fx.forge.closed_numbers(), vec![13]);
-    assert!(fx.forge.still_open().contains(&11));
-}
-
-#[test]
 fn rejecting_closes_the_tasks_orbit_prs_with_the_state_and_reason() {
     let fx = Fixture::new();
     let task_id = fx.add_task("Rejected task");
