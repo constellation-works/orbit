@@ -269,7 +269,8 @@ impl Execute for DoctorCommand {
             .collect::<Vec<_>>();
 
         let summary = format!("{failures} failure(s), {warnings} warning(s).");
-        let mut blocks = vec![Block::text(summary)];
+        eprintln!("{summary}");
+        let mut blocks = Vec::new();
 
         results.sort_by_key(|row| match row.status {
             WorkspaceDoctorStatus::Error => 0,
