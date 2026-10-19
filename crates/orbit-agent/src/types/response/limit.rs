@@ -12,7 +12,9 @@
 //!   limit · resets 3pm (America/Los_Angeles)`.
 //! - Antigravity: `Individual quota reached. … Resets in 1h37m37s.`
 //! - Gemini CLI: `TerminalQuotaError: You exceeded your current quota`.
-//! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`.
+//! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`; Grok
+//!   Build: `API error (status 402 Payment Required): Grok Build usage balance
+//!   exhausted`.
 
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta,
@@ -34,6 +36,8 @@ const PROVIDER_LIMIT_PHRASES: &[&str] = &[
     "exceeded your current quota",
     "too many requests (",
     "payment required (",
+    "payment required)",
+    "usage balance exhausted",
 ];
 
 /// Claude Code's openings, which say a limit only alongside the word.

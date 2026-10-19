@@ -224,3 +224,33 @@ fn antigravity_reports_the_print_timeout_it_put_in_argv() {
         );
     }
 }
+
+#[test]
+fn grok_failure_texts_are_classified_as_provider_usage_limits() {
+    let now = Utc.with_ymd_and_hms(2026, 10, 19, 14, 56, 0).unwrap();
+
+    // Grok Build current 402 error text
+    let grok_build_402 =
+        "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+    assert!(
+        provider_usage_limit(grok_build_402),
+        "should detect limit in Grok Build 402 text"
+    );
+    let details = provider_usage_limit_details(grok_build_402, now, utc());
+    assert_eq!(
+        details.resets_at, None,
+        "Grok Build 402 error specifies no reset time"
+    );
+
+    // Existing grok 1.0.46 texts
+    let older_429 = "Error: Too Many Requests (429): rate limit exceeded for this account";
+    assert!(
+        provider_usage_limit(older_429),
+        "should detect limit in grok 1.0.46 429 text"
+    );
+    let older_402 = "Error: Payment Required (402): account balance zero";
+    assert!(
+        provider_usage_limit(older_402),
+        "should detect limit in grok 1.0.46 402 text"
+    );
+}
