@@ -1033,5 +1033,109 @@
       "selected_workspace",
       "selected_workspace"
     ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/None": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 5267,
+          "title": "Workspace routing",
+          "state": "OPEN",
+          "draft": false,
+          "head_branch": "feature/workspace-routing",
+          "reported_head_sha": "2222222222222222222222222222222222222222",
+          "base_branch": "agent-main",
+          "url": "https://github.com/acme/orbit/pull/5267",
+          "updated_at": "2026-09-06T21:15:00Z"
+        }
+      ]
+    },
+    "calls": [
+      "pr list --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/None": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/None": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 5267,
+          "title": "Workspace routing",
+          "state": "OPEN",
+          "draft": false,
+          "head_branch": "feature/workspace-routing",
+          "reported_head_sha": "2222222222222222222222222222222222222222",
+          "base_branch": "agent-main",
+          "url": "https://github.com/acme/orbit/pull/5267",
+          "updated_at": "2026-09-06T21:15:00Z"
+        }
+      ]
+    },
+    "calls": [
+      "pr list --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/None": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
   }
 }

@@ -1530,5 +1530,145 @@
     },
     "max_bytes": 128,
     "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/None",
+    "input": {},
+    "view": {
+      "number": 5267,
+      "title": "Workspace routing",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feature/workspace-routing",
+      "headRefOid": "2222222222222222222222222222222222222222",
+      "baseRefName": "agent-main",
+      "url": "https://github.com/acme/orbit/pull/5267",
+      "updatedAt": "2026-09-06T21:15:00Z"
+    },
+    "selected": true,
+    "registered": true,
+    "tool": "github.pr.list",
+    "job_logs": {}
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/None",
+    "input": {},
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "selected": true,
+    "registered": true,
+    "tool": "github.run.list",
+    "job_logs": {}
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/None",
+    "input": {},
+    "view": {
+      "number": 5267,
+      "title": "Workspace routing",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feature/workspace-routing",
+      "headRefOid": "2222222222222222222222222222222222222222",
+      "baseRefName": "agent-main",
+      "url": "https://github.com/acme/orbit/pull/5267",
+      "updatedAt": "2026-09-06T21:15:00Z"
+    },
+    "selected": false,
+    "registered": true,
+    "tool": "github.pr.list",
+    "job_logs": {}
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/None",
+    "input": {},
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "selected": false,
+    "registered": true,
+    "tool": "github.run.list",
+    "job_logs": {}
   }
 ]
