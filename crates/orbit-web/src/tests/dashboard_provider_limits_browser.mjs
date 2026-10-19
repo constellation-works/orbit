@@ -215,33 +215,41 @@ try {
     //    carries the wait on its readiness dot in the Tasks list.
     await page.goto(`${origin}/#auto-drain`);
     await page.locator('#auto-drain-body .drain-provider-limit-note').waitFor({ state: 'visible' });
-    await page.locator('#tasks-body .ready-dot[data-pool]').first().waitFor({ state: 'attached' });
     await settled(page);
     const drain = await page.evaluate(() => {
       const card = document.getElementById('auto-drain-panel');
       const note = card.querySelector('.drain-provider-limit-note');
-      const dot = document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot');
       const box = card.getBoundingClientRect();
       return {
         note: note.textContent,
         noteColor: getComputedStyle(note).color,
         background: getComputedStyle(card).backgroundColor,
-        pool: dot?.dataset.pool,
-        label: dot?.getAttribute('aria-label'),
-        title: dot?.title,
         overflowing: [...card.querySelectorAll('*')]
           .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1)
           .map((node) => node.className || node.tagName),
       };
     });
-    log.drain = drain;
     assert(/^Provider limits: claude five_hour 93% ≥ 90% until .+: opus skipped\.$/.test(drain.note), `the note names the gated provider: ${drain.note}`);
     assert(!drain.note.includes('codex'), `a provider below its threshold holds nothing: ${drain.note}`);
-    assert(drain.pool === 'other' && drain.label.includes('provider limit'), `the waiting task's dot names its wait: ${JSON.stringify(drain)}`);
-    assert(drain.title.includes(DETAIL), `the waiting task's dot carries the detail: ${drain.title}`);
     assert(drain.overflowing.length === 0, `the Drain card content fits: ${JSON.stringify(drain.overflowing)}`);
     assert(contrast(drain.noteColor, drain.background) >= 4.5, `the note is legible: ${drain.noteColor} on ${drain.background}`);
     await page.screenshot({ path: path.join(evidence, `provider-limits-drain-${scheme}.png`), fullPage: true });
+
+    await page.goto(`${origin}/#tasks`);
+    await page.locator('#tasks-body .ready-dot[data-pool]').first().waitFor({ state: 'attached' });
+    await settled(page);
+    const tasks = await page.evaluate(() => {
+      const dot = document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot');
+      return {
+        pool: dot?.dataset.pool,
+        label: dot?.getAttribute('aria-label'),
+        title: dot?.title,
+      };
+    });
+    assert(tasks.pool === 'other' && tasks.label.includes('provider limit'), `the waiting task's dot names its wait: ${JSON.stringify(tasks)}`);
+    assert(tasks.title.includes(DETAIL), `the waiting task's dot carries the detail: ${tasks.title}`);
+    log.drain = { ...drain, ...tasks };
+    log.tasks = tasks;
 
     log.colorScheme = await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
     evidenceLog.schemes[scheme] = log;
@@ -261,14 +269,21 @@ try {
     const cells = await page.evaluate(() => [...document.querySelectorAll('.config-crew-limit')].map((cell) => cell.textContent));
     assert(cells.length === 3 && cells.every((text) => text === '—'), `without limits every crew shows the placeholder: ${JSON.stringify(cells)}`);
     await page.goto(`${origin}/#auto-drain`);
-    await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
+    await page.locator('#auto-drain-panel').waitFor({ state: 'visible' });
+    await settled(page);
     const legacyDrain = await page.evaluate(() => ({
       note: Boolean(document.querySelector('.drain-provider-limit-note')),
+    }));
+    assert(!legacyDrain.note, 'no provider-limit note without readings');
+
+    await page.goto(`${origin}/#tasks`);
+    await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
+    await settled(page);
+    const legacyTask = await page.evaluate(() => ({
       label: document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot').getAttribute('aria-label'),
     }));
-    evidenceLog.legacy = { cells, ...legacyDrain };
-    assert(!legacyDrain.note, 'no provider-limit note without readings');
-    assert(legacyDrain.label.includes('provider limit'), `a task with no detail names its wait: ${legacyDrain.label}`);
+    assert(legacyTask.label.includes('provider limit'), `a task with no detail names its wait: ${legacyTask.label}`);
+    evidenceLog.legacy = { cells, ...legacyDrain, ...legacyTask };
     await context.close();
   }
 
