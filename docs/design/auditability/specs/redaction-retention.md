@@ -43,6 +43,12 @@ Command audit rows:
 - Are queryable, exportable, and prunable through `orbit audit`.
 - Are also pruned past `retention.audit_days` by `orbit gc audit --apply`, host-wide, in the same batches as the run audit.
 - Should remain compact and should not embed transcript bodies.
+- Past the audit cutoff, Health > Events, Incidents, Denials, `orbit audit` and the
+  diagnostics friction view lose raw history by design, with no rollups. Lock contention
+  instead reads `task_lock_denials`: durable workspace-scoped requester identities,
+  conflicting paths and timestamps. A transactional migration backfills existing
+  denials once; subsequent inserts capture the same facts independently of audit GC.
+  Unscoped legacy rows are not attributed to a workspace.
 
 Activity/job and loop traces:
 
@@ -56,6 +62,15 @@ Run pipeline state:
 
 - Lives in `job_run_states`, beside the `job_runs` row.
 - Is dropped by `orbit gc runs --apply` for success, failed, timeout, cancelled and interrupted runs older than `retention.runs_days`, which also stamps `job_runs.archived_at`. Run rows, steps and summaries stay; held and non-terminal runs are never selected.
+- `retention.runs_days` and the command's `--older-than-days` override require at least
+  30 days. Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
+  shares still need `job_run_states` throughout their 30-day windows.
+- Commit decision and committed flag are projected onto `job_runs` on each checkpoint
+  write, in the same SQLite transaction, and backfilled once from existing state during
+  upgrade. The implement_one succeeded-candidate duration filter reads that retained
+  outcome and the retained successful step, so archival loses raw checkpoints without
+  changing duration analytics. State already pruned before upgrade cannot be backfilled.
+
 
 Per-minute resource history:
 
@@ -71,6 +86,16 @@ Admission reservations:
 
 - Live in the host-wide `admission_reservations` table (workspace, task id, work class, complexity and time; no payloads).
 - Are deleted by the next admission once older than five minutes.
+
+Applied task commit journal:
+
+- `retention.journal_days` (default 14) removes older applied rows only, preserving each
+  task's newest applied row plus all prepared, committed and aborted rows. Published
+  task history and recovery inputs stay; older raw transition diagnostics are lost.
+- `retention.store_warn_bytes` controls a warning only and deletes nothing.
+- Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
+  across audit, run and journal pruning. Auto-concurrency profiles and forecast accuracy
+  retain their supported 30-day resource/forecast window; older raw samples are lost.
 
 Invocation metrics:
 

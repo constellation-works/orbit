@@ -455,7 +455,7 @@ define_config_settings! {
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
-        description: "Days after a terminal run before orbit gc runs may drop its pipeline state.",
+        description: "Days after a terminal run before orbit gc runs may drop its pipeline state (minimum 30).",
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days", DEFAULT_RETENTION_DAYS),
     },

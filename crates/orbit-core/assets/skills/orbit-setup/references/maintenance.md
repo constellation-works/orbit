@@ -399,10 +399,10 @@ orbit gc audit --older-than-days 30   # one-off window instead of the configured
 ```
 
 `retention.audit_days` and `retention.runs_days` default to 60 days. On a large
-store, set `retention.runs_days` to 14 before enabling the sweep: that window
-reclaims much more terminal run state than 60 days (about 1.8 GiB versus about
-0.4 GiB on a store of about 6 GiB). Leave audit retention at 60 unless you
-have a reason to shorten it. `gc audit` prunes the host-wide command audit,
+store, consider `retention.runs_days = 30` before enabling the sweep. Values
+below 30, including the command override, are refused because Reliability
+Pipeline echo dedupe and forecast-accuracy limiter shares need 30 days of run
+state. Leave audit retention at 60 unless you have a reason to shorten it. `gc audit` prunes the host-wide command audit,
 this workspace's run audit, and run audit whose workspace id is no longer
 registered, then removes blobs that no remaining audit row, run step or
 pipeline state names. Another registered workspace keeps its own window. A blob
@@ -411,7 +411,14 @@ is always kept. `gc runs` never touches a held run or one still in flight, so
 `orbit run show`, run history and the Cost page keep working, and it reaches
 the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
-`host_resource_minutes`) older than 30 days, whatever the run window.
+`host_resource_minutes`) and admission forecasts older than 30 days, whatever the
+run window. Auto-concurrency profiles and forecast accuracy keep their supported
+30-day window. Durable lock-denial facts and commit outcomes preserve Lock
+contention and succeeded implement_one durations after pruning; upgrade backfills
+existing evidence before GC. Health Events, Incidents, Denials, `orbit audit` and
+the diagnostics friction view lose raw history past the audit cutoff with no
+rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
+working. See the retention runbook for each setting's history boundary.
 
 `gc journal` deletes applied task commit journal rows of this workspace, and of
 unregistered workspace ids, older than `retention.journal_days` (default 14).

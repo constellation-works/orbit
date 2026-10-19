@@ -422,13 +422,19 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0053".to_string(),
                 "forecast_attribution".to_string()
             ),
+            (
+                "migration.v0054".to_string(),
+                "retention_analytics".to_string()
+            ),
         ]
     );
 }
 
 #[test]
 fn breaking_newer_database_refuses_and_names_the_first_missing_migration() {
-    if !migration_freeze_isolated("ledger::breaking_newer_database_refuses_and_names_the_first_missing_migration") {
+    if !migration_freeze_isolated(
+        "ledger::breaking_newer_database_refuses_and_names_the_first_missing_migration",
+    ) {
         return;
     }
     let path = std::env::current_dir().unwrap().join("orbit.db");
@@ -467,7 +473,9 @@ fn breaking_newer_database_refuses_and_names_the_first_missing_migration() {
 
 #[test]
 fn concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once() {
-    if !migration_freeze_isolated("ledger::concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once") {
+    if !migration_freeze_isolated(
+        "ledger::concurrent_store_open_on_pre_ledger_fixture_applies_each_version_once",
+    ) {
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");

@@ -1,9 +1,9 @@
 //! Lock wait episodes: how long each task waited for a context lock on a path.
 //!
 //! No record stores a wait's duration. Every refused `orbit.task.locks.reserve`
-//! is audited with the tasks it named, every grant is in the reservation
-//! history, and every status change is in task history; a wait is read off
-//! those. It starts at a task's first denial on a path and ends at its
+//! is kept as a lock denial with the tasks it named, outside audit retention;
+//! every grant is in the reservation history, and every status change is in
+//! task history; a wait is read off those. It starts at a task's first denial on a path and ends at its
 //! admission (its next reservation grant) or at the end of its eligibility
 //! (its next status change away from `backlog`). Retries in between are the
 //! same wait.
