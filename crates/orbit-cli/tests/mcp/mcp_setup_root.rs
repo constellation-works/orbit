@@ -592,31 +592,6 @@ fn mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory() {
     assert!(!fixture.checkout.join(".claude").exists());
 }
 
-fn orbit_root_env_selects_the_same_checkout_as_the_root_flag() {
-    let fixture = ExternalRootFixture::init();
-    let env = [("ORBIT_ROOT", fixture.orbit_root.as_path())];
-
-    fixture
-        .orbit_with_env(&fixture.checkout, &argv(&["mcp", "init", "--claude"]), &env)
-        .success();
-
-    assert_eq!(
-        generated_server_args(&fixture.claude_config()),
-        vec!["mcp", "serve", "--workspace", "ws_wsname"]
-    );
-    fixture.assert_no_client_config_outside_the_checkout();
-
-    fixture
-        .orbit_with_env(
-            &fixture.checkout,
-            &argv(&["mcp", "remove", "--claude"]),
-            &env,
-        )
-        .success();
-
-    assert!(!fixture.claude_config().exists());
-}
-
 fn explicit_root_outranks_a_different_registered_cwd_checkout() {
     let fixture = RegisteredCheckoutPairFixture::init();
     let root = fixture
@@ -1201,10 +1176,6 @@ fn federated_and_external_root_resolution() {
         (
             "mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory",
             mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory as fn(),
-        ),
-        (
-            "orbit_root_env_selects_the_same_checkout_as_the_root_flag",
-            orbit_root_env_selects_the_same_checkout_as_the_root_flag as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

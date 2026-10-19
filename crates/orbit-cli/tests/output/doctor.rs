@@ -376,23 +376,6 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
             );
         }
     }
-}
-
-#[test]
-fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_with_a_failing_check_records_the_check_on_its_audit_row",
-    ) {
-        return;
-    }
-    let fixture = WorkCheckout::new();
-    assert_eq!(
-        row(&rows(&doctor(&fixture, &[])), "database")["status"],
-        "ok"
-    );
-    corrupt_unrelated_data_page(&fixture);
-    let deep = doctor(&fixture, &["--deep"]);
-    assert_eq!(deep.status.code(), Some(1), "{deep:?}");
 
     let listed = command(&fixture)
         .args(["audit", "list", "--limit", "50", "--json"])
@@ -418,6 +401,44 @@ fn doctor_with_a_failing_check_records_the_check_on_its_audit_row() {
         named_failures.split(", ").any(|name| name == "database"),
         "the audit row must name the failing check: {failed}"
     );
+
+    let table = command(&fixture)
+        .args(["doctor", "--deep", "--format", "table"])
+        .output()
+        .expect("table");
+    assert_eq!(table.status.code(), Some(1));
+    let stdout = String::from_utf8(table.stdout).expect("table UTF-8");
+    let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
+    // An `info` row is a fact about the setup, not a finding.
+    for diagnostic in deep_rows
+        .iter()
+        .filter(|diagnostic| diagnostic["status"] != "ok" && diagnostic["status"] != "info")
+    {
+        assert!(
+            findings.contains(diagnostic["check"].as_str().unwrap()),
+            "{findings}"
+        );
+        if let Some(fix) = diagnostic["remediation"].as_str() {
+            assert!(findings.contains(&format!("Fix: {fix}")), "{findings}");
+        }
+    }
+    let piped = command(&fixture)
+        .args(["doctor", "--deep"])
+        .output()
+        .expect("plain");
+    let explicit = command(&fixture)
+        .args(["doctor", "--deep", "--format", "plain"])
+        .output()
+        .expect("explicit plain");
+    let database_line = |output: Output| {
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with("database\t"))
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(database_line(piped), database_line(explicit));
 }
 
 #[cfg(unix)]
@@ -846,56 +867,6 @@ fn findings_leave_plain_and_json_documents_unchanged() {
     assert_eq!(json[2]["message"], ERROR_MESSAGE);
     assert_eq!(json[2]["remediation"], FIX);
     assert_eq!(json.as_array().unwrap().len(), 3);
-}
-
-#[test]
-fn doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values",
-    ) {
-        return;
-    }
-    let fixture = WorkCheckout::new();
-    doctor(&fixture, &[]);
-    corrupt_unrelated_data_page(&fixture);
-    let diagnostics = rows(&doctor(&fixture, &["--deep"]));
-    let table = command(&fixture)
-        .args(["doctor", "--deep", "--format", "table"])
-        .output()
-        .expect("table");
-    assert_eq!(table.status.code(), Some(1));
-    let stdout = String::from_utf8(table.stdout).expect("table UTF-8");
-    let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
-    // An `info` row is a fact about the setup, not a finding.
-    for row in diagnostics
-        .iter()
-        .filter(|row| row["status"] != "ok" && row["status"] != "info")
-    {
-        assert!(
-            findings.contains(row["check"].as_str().unwrap()),
-            "{findings}"
-        );
-        if let Some(fix) = row["remediation"].as_str() {
-            assert!(findings.contains(&format!("Fix: {fix}")), "{findings}");
-        }
-    }
-    let piped = command(&fixture)
-        .args(["doctor", "--deep"])
-        .output()
-        .expect("plain");
-    let explicit = command(&fixture)
-        .args(["doctor", "--deep", "--format", "plain"])
-        .output()
-        .expect("explicit plain");
-    let database_line = |output: Output| {
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .find(|line| line.starts_with("database\t"))
-            .unwrap()
-            .to_string()
-    };
-    assert_eq!(database_line(piped), database_line(explicit));
 }
 
 /// `orbit doctor` runs the scan a sandboxed leaf meets, so an operator learns

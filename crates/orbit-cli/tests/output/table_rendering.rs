@@ -7,9 +7,10 @@
 //! is exactly one line per record, carries no box-drawing glyphs, and puts its
 //! empty state on stderr.
 //!
-//! Both commands exercised here carry cell values far longer than a terminal
-//! line — tool descriptions and task titles — which is what used to wrap a
-//! single record across three or four lines.
+//! The task-list case carries titles far longer than a terminal line, which
+//! is what used to wrap a single record across three or four lines. Tool and
+//! skill lists share that renderer; their plain and JSON bytes stay pinned by
+//! the output goldens.
 //!
 //! `assert_cmd` captures stdout through a pipe, so the default form these
 //! subprocesses produce is the *plain* one: `auto` resolving against a
@@ -25,23 +26,6 @@ use serde_json::Value;
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
 
 const LONG_TITLE: &str = "Terminal tables are borderless with a one-line row invariant, and this title is deliberately far longer than any terminal is wide so that it has to be truncated rather than wrapped";
-
-#[test]
-fn tool_list_renders_one_line_per_tool() {
-    let workspace = workspace();
-
-    let json = workspace.run(&["tool", "list", "--all", "--json"], "tool list JSON");
-    let tools: Value = serde_json::from_slice(&json.stdout).expect("tool list JSON");
-    let expected = tools.as_array().expect("tool array").len();
-    assert!(expected > 1, "fixture needs several tools to be meaningful");
-
-    assert_both_forms(
-        &workspace,
-        &["tool", "list", "--all"],
-        expected,
-        "orbit tool list --all",
-    );
-}
 
 #[test]
 fn task_list_renders_one_line_per_task() {
@@ -216,24 +200,6 @@ fn job_show_json_contains_no_human_step_rows() {
     let human_stdout = String::from_utf8_lossy(&human.stdout);
     assert!(human_stdout.contains("Steps:"), "{human_stdout}");
     assert!(human_stdout.contains("ID:"), "{human_stdout}");
-}
-
-#[test]
-fn skill_list_renders_one_line_per_skill() {
-    let workspace = workspace();
-
-    let json = workspace.run(&["skill", "list", "--json"], "skill list JSON");
-    let skills: Value = serde_json::from_slice(&json.stdout).expect("skill list JSON");
-    let expected = skills.as_array().expect("skill array").len();
-    // Each shipped skill's references load on demand, so the catalog is
-    // deliberately small — the invariant under test is one line per record, not
-    // the record count.
-    assert!(
-        expected >= 1,
-        "a fresh workspace seeds the default skill catalog"
-    );
-
-    assert_both_forms(&workspace, &["skill", "list"], expected, "orbit skill list");
 }
 
 #[test]

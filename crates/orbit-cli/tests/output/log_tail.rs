@@ -183,25 +183,26 @@ fn follow_rotation_drains_archive_then_preserves_filters_and_partial_records() {
 
 #[test]
 fn follow_truncation_resets_offset_and_discards_the_previous_partial_record() {
-    for json in [true, false] {
-        let fixture = crate::git_repo::WorkCheckout::new();
-        let path = fixture.work.join("orbit.jsonl");
-        let ready = "r".repeat(1024);
-        fs::write(&path, format!("{}\n", event(&ready, "WARN", "orbit.test"))).unwrap();
-        let follower = Follower::start(&fixture, &path, json);
-        follower.expect_record(&ready, json);
-        append(&path, b"{\"old_partial\":");
-        follower.expect_no_record();
+    // The formatted follower stays covered by
+    // `follow_rotation_drains_archive_then_preserves_filters_and_partial_records`.
+    let json = true;
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let ready = "r".repeat(1024);
+    fs::write(&path, format!("{}\n", event(&ready, "WARN", "orbit.test"))).unwrap();
+    let follower = Follower::start(&fixture, &path, json);
+    follower.expect_record(&ready, json);
+    append(&path, b"{\"old_partial\":");
+    follower.expect_no_record();
 
-        let replacement = event("after-truncate", "ERROR", "orbit.test");
-        let split = replacement.len() / 2;
-        fs::write(&path, &replacement.as_bytes()[..split]).unwrap();
-        follower.expect_no_record();
-        append(&path, &replacement.as_bytes()[split..]);
-        append(&path, b"\n");
-        follower.expect_record("after-truncate", json);
-        follower.expect_no_record();
-    }
+    let replacement = event("after-truncate", "ERROR", "orbit.test");
+    let split = replacement.len() / 2;
+    fs::write(&path, &replacement.as_bytes()[..split]).unwrap();
+    follower.expect_no_record();
+    append(&path, &replacement.as_bytes()[split..]);
+    append(&path, b"\n");
+    follower.expect_record("after-truncate", json);
+    follower.expect_no_record();
 }
 
 fn one_shot_tail(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Output {

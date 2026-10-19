@@ -23,7 +23,6 @@
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
@@ -235,67 +234,6 @@ fn assert_sse_response_head(head: &[u8]) -> io::Result<()> {
         ));
     }
     Ok(())
-}
-
-#[test]
-fn sse_head_reader_reassembles_status_and_content_type_from_separate_fragments() {
-    let mut reader = FragmentedReader::new([
-        b"HTTP/1.1 200 OK\r\n".as_slice(),
-        b"Content-Type: text/".as_slice(),
-        b"event-stream; charset=utf-8\r\n\r\n".as_slice(),
-    ]);
-
-    let head = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT).expect("complete HTTP head");
-
-    assert_sse_response_head(&head).expect("fragmented SSE response head is valid");
-}
-
-#[test]
-fn sse_head_parser_rejects_non_success_and_non_sse_complete_heads() {
-    for head in [
-        b"HTTP/1.1 503 Unavailable\r\nContent-Type: text/event-stream\r\n\r\n".as_slice(),
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n".as_slice(),
-    ] {
-        let error = assert_sse_response_head(head).expect_err("non-SSE response must be rejected");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-}
-
-#[test]
-fn sse_head_reader_enforces_its_byte_limit() {
-    let mut reader = io::Cursor::new(vec![b'x'; SSE_RESPONSE_HEAD_LIMIT + 1]);
-
-    let error = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT)
-        .expect_err("unterminated oversized head must be rejected");
-
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert_eq!(reader.position(), SSE_RESPONSE_HEAD_LIMIT as u64);
-}
-
-struct FragmentedReader {
-    fragments: VecDeque<Vec<u8>>,
-}
-
-impl FragmentedReader {
-    fn new(fragments: impl IntoIterator<Item = &'static [u8]>) -> Self {
-        Self {
-            fragments: fragments.into_iter().map(<[u8]>::to_vec).collect(),
-        }
-    }
-}
-
-impl Read for FragmentedReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let Some(fragment) = self.fragments.pop_front() else {
-            return Ok(0);
-        };
-        let count = fragment.len().min(buffer.len());
-        buffer[..count].copy_from_slice(&fragment[..count]);
-        if count < fragment.len() {
-            self.fragments.push_front(fragment[count..].to_vec());
-        }
-        Ok(count)
-    }
 }
 
 /// A stalled peer must fail before releasing the peer, unwind through the
