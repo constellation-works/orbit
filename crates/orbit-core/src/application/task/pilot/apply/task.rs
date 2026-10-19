@@ -25,6 +25,7 @@ use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_task, task_operation_id, task_outcome,
 };
+use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
     PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, post_deploy,
@@ -302,6 +303,14 @@ fn assess(
         &scope,
         complexity,
         pilot_normalizations,
+    );
+    // The agent may still report screenshot attachment as infeasible. Drop
+    // only that claim once the host knows the implement lane can attach;
+    // promotion and the stored audit then agree.
+    validation_tools::drop_false_artifact_warnings(
+        &mut assessment,
+        &ImplementationLane::resolve(context.runtime),
+        &current.required_tools,
     );
     Ok(Assessed {
         assessment,

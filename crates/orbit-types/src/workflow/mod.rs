@@ -135,7 +135,7 @@ pub use run::{
     DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralLane, DeferralProbe,
     DeferredSandboxArtifact, DeferredSandboxValidation, DeliveryEvidenceGap,
     DeliveryEvidenceProvenance, DrainAdmissionForecast, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainPassCounters,
+    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding, DrainPassCounters,
     DrainPassObservation, DrainPassOutcome, DrainWaitingTask, DrainWindowExtension,
     DrainWorkerLimit, FLAKY_VALIDATION_EVENT, FORGE_UNAVAILABLE_ERROR_CODE,
     FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER, FailureActivityCheckpoint,

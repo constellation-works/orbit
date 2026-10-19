@@ -2253,6 +2253,7 @@ fn run_show_counts_local_deferred_tasks_once() {
                 reason: Some("context_lock_conflict".into()),
                 blocked_by: vec!["ORB-15183".into()],
                 detail: None,
+                findings: Vec::new(),
             })
             .collect(),
         deferred_total: 3,
@@ -2334,6 +2335,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
             reason: Some(reason.into()),
             blocked_by: blocked_by.iter().map(ToString::to_string).collect(),
             detail: detail.map(ToString::to_string),
+            findings: Vec::new(),
         };
     let mut state = orbit_types::workflow::PipelineState::new(
         id.into(),
@@ -2494,6 +2496,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
                 reason: Some("owner_hold".into()),
                 blocked_by: Vec::new(),
                 detail: Some("held by the owner".into()),
+                findings: Vec::new(),
             })
             .collect(),
         deferred_total: 25,
@@ -3272,6 +3275,224 @@ fn run_observation_contracts_5() {
         check();
         orbit_common::test_env::record_scenario_pass(name);
     }
+}
+
+/// A warnings hold names each finding's kind and first line where an operator
+/// looks: under `Approved:` in `orbit run show`, and as `findings` on
+/// `orbit run readiness --json`. The assessment's later lines stay in the
+/// audit.
+fn warnings_hold_findings_reach_run_show_and_readiness() {
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskStatus};
+
+    let fixture = Fixture::init();
+    fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
+    git_repo::run(&fixture.work, &["config", "user.name", "Orbit Test"]);
+    git_repo::run(
+        &fixture.work,
+        &["config", "user.email", "orbit-test@example.com"],
+    );
+    git_repo::run(&fixture.work, &["config", "commit.gpgsign", "false"]);
+    git_repo::run(&fixture.work, &["add", "README.md"]);
+    git_repo::run(&fixture.work, &["commit", "-m", "seed"]);
+
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Held proposal".into(),
+            description: "A proposed change with a pilot warning.".into(),
+            acceptance_criteria: vec!["The README change is observable.".into()],
+            plan: "Edit README.md.".into(),
+            status: Some(TaskStatus::Proposed),
+            complexity: TaskComplexity::Low,
+            context_files: vec!["file:README.md".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    let drain = "jrun-cli-warning-hold";
+    let pilot = "jrun-cli-warning-pilot";
+    let now = chrono::Utc::now();
+    let db = fixture.db();
+    for (run_id, job_id, input) in [
+        (
+            drain,
+            "workspace_auto_pipeline",
+            serde_json::json!({"approve_proposed": true}),
+        ),
+        (
+            pilot,
+            "task_pilot_pipeline",
+            serde_json::json!({"task_ids": [task.id]}),
+        ),
+    ] {
+        db.execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)",
+            params![
+                run_id,
+                fixture.workspace_id(),
+                job_id,
+                input.to_string(),
+                now.to_rfc3339(),
+                std::process::id()
+            ],
+        )
+        .unwrap();
+        runtime
+            .write_run_state(
+                run_id,
+                &orbit_types::workflow::PipelineState::new(
+                    run_id.into(),
+                    job_id.into(),
+                    serde_json::json!({}),
+                ),
+            )
+            .unwrap();
+    }
+    let mut state = runtime.read_run_state(drain).unwrap().unwrap();
+    state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+        pilot.into(),
+        "task_pilot_pipeline".into(),
+        "invoke_detached".into(),
+        false,
+        false,
+        now,
+    ));
+    runtime.write_run_state(drain, &state).unwrap();
+
+    let prepared = orbit_engine::RuntimeHost::run_deterministic(
+        &runtime,
+        "prepare_task_pilot",
+        &serde_json::json!({}),
+        &serde_json::json!({
+            "task_ids": [task.id],
+            "workspace_path": fixture.work,
+            "base_branch": "main",
+        }),
+        orbit_tools::ToolContext::default(),
+    )
+    .unwrap();
+    let first = "The operator should review the proposed approach.";
+    let rest = "This second line stays in the audit only.";
+    let surface = "The proposed change overlaps an open surface.";
+    let applied = orbit_engine::RuntimeHost::run_deterministic(
+        &runtime,
+        "apply_task_pilot_results",
+        &serde_json::json!({}),
+        &serde_json::json!({
+            "run_id": pilot,
+            "workspace_path": fixture.work,
+            "prepared": prepared,
+            "promotion_authorized": true,
+            "drain_promotion": {"run_id": drain},
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [task.id],
+                "tasks": [{
+                    "task_id": task.id,
+                    "context_files_before": ["file:README.md"],
+                    "context_files_after": ["file:README.md"],
+                    "disposition": "selectors",
+                    "recommended_crew": "fixture",
+                    "recommended_complexity": "low",
+                    "confidence": "high",
+                    "assessment_rationale": "README.md holds the change.",
+                    "validation_approach": "Inspect README.md.",
+                    "evidence_gaps": [],
+                    "reassessment_triggers": [],
+                    "blocked_by": [],
+                    "adr_conflicts": [],
+                    "utility_warnings": [format!("{first}\n{rest}")],
+                    "surface_warnings": [surface],
+                    "duplicate_of": null,
+                    "already_landed": null,
+                }],
+            }],
+        }),
+        orbit_tools::ToolContext::default(),
+    )
+    .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(
+        applied["drain_approval"][0]["classification"], "warnings",
+        "{applied}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::Proposed
+    );
+
+    let selected = orbit_engine::RuntimeHost::run_deterministic(
+        &runtime,
+        "select_proposed_approvals",
+        &serde_json::json!({}),
+        &serde_json::json!({"approve_proposed": true, "run_id": drain}),
+        orbit_tools::ToolContext::default(),
+    )
+    .unwrap();
+    assert_eq!(selected["held"][0]["reason"], "warnings", "{selected}");
+    assert_eq!(
+        selected["held"][0]["findings"],
+        serde_json::json!([
+            {"kind": "utility_warnings", "text": first},
+            {"kind": "surface_warnings", "text": surface},
+        ]),
+        "{selected}"
+    );
+
+    let shown = fixture
+        .orbit()
+        .args(["run", "show", drain, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("Approved:"), "{shown}");
+    assert!(
+        shown.contains(&format!("    utility_warnings: {first}")),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!("    surface_warnings: {surface}")),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains(rest),
+        "run show keeps only the first line of a finding: {shown}"
+    );
+
+    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let task_id = task.id.as_str();
+    let held = readiness["approvals"]["held"]
+        .as_array()
+        .and_then(|held| held.iter().find(|entry| entry["task_id"] == task_id))
+        .unwrap_or_else(|| panic!("held task missing: {readiness:#}"));
+    assert_eq!(held["reason"], "warnings", "{held}");
+    assert_eq!(
+        held["findings"],
+        serde_json::json!([
+            {"kind": "utility_warnings", "text": first},
+            {"kind": "surface_warnings", "text": surface},
+        ]),
+        "{held}"
+    );
+}
+
+#[test]
+fn run_observation_contracts_7() {
+    if !isolated_run_observation("run_observation::run_observation_contracts_7") {
+        return;
+    }
+    tracing::info!(
+        case = "warnings_hold_findings_reach_run_show_and_readiness",
+        "CLI contract row"
+    );
+    warnings_hold_findings_reach_run_show_and_readiness();
+    orbit_common::test_env::record_scenario_pass(
+        "warnings_hold_findings_reach_run_show_and_readiness",
+    );
 }
 
 #[test]

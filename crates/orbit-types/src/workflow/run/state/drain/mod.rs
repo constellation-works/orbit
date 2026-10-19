@@ -11,8 +11,8 @@ pub use admission::{
     GapFitHead, GapFitHeadMiss, GapFitHeadStall, GapFitSkip, ResourcePressure, ResourceThrottle,
 };
 pub use controls::{
-    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWindowExtension,
-    DrainWorkerLimit, TaskCancellationPolicy,
+    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding, DrainWaitingTask,
+    DrainWindowExtension, DrainWorkerLimit, TaskCancellationPolicy,
 };
 pub use pass_counters::{DrainPassCounters, DrainPassObservation, DrainPassOutcome};
 pub use pull::{

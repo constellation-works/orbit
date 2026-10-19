@@ -9,6 +9,7 @@
 
 use orbit_engine::DispatchError;
 use orbit_types::task::NO_AUTO_APPROVE_TAG;
+use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
 use super::VALIDATION_TOOL_WARNINGS;
@@ -79,6 +80,42 @@ pub(crate) fn promotion_findings<'a>(
         already_landed,
         warnings,
     })
+}
+
+/// The warning findings an approval hold can show: one entry per warning-field
+/// item, kind equal to the field and text equal to its first non-empty line.
+pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding> {
+    WARNING_FIELDS
+        .iter()
+        .flat_map(|field| {
+            assessment
+                .get(*field)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|value| {
+                    finding_text(value).map(|text| DrainHoldFinding {
+                        kind: (*field).to_string(),
+                        text,
+                    })
+                })
+        })
+        .collect()
+}
+
+/// First non-empty line of a warning item. Objects and other shapes use their
+/// compact JSON so a non-string finding is still named.
+fn finding_text(value: &Value) -> Option<String> {
+    let raw = match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let text = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
