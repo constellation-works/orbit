@@ -167,6 +167,12 @@ pub(super) fn resume(
             } else {
                 output
             };
+            let output = match &candidate.landing_stop {
+                Some(stop) => {
+                    format!("The owner's landing of this candidate stopped: {stop}\n\n{output}")
+                }
+                None => output,
+            };
             return Ok(Outcome::Repair(reviewed(json!({
                 "trigger": "conflict",
                 "conflicting_paths": paths,
@@ -192,6 +198,20 @@ pub(super) fn resume(
                  apply or a passing check does not make it complete.",
                 candidate.run_id, candidate.failed_step_id
             ),
+        })));
+    }
+    // [ORB-16890] The owner's landing stopped this handed-off candidate on
+    // a required check it fails: the implementer repairs what that check
+    // names, whoever runs it.
+    if let Some(stop) = &candidate.landing_stop {
+        return Ok(Outcome::Repair(json!({
+            "trigger": "landing",
+            "failed_step_id": candidate.failed_step_id,
+            "output": tail(&format!(
+                "The owner's landing of this candidate stopped: {stop}\n\nIt applied cleanly \
+                 onto the current base {base_sha}. Repair what the failing check names, keep the \
+                 rest of the candidate, and rerun that check."
+            )),
         })));
     }
     if interrupted.is_some() {

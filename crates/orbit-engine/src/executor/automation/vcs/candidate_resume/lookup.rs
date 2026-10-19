@@ -179,6 +179,12 @@ fn claimed_resume(
     resumed["prior_pull_request_head"] = json!(candidate.prior_pull_request_head());
     let adoption = match outcome {
         Outcome::Fresh(_) => Adoption::Refused("the candidate was not resumed".to_string()),
+        // [ORB-16890] The owner's landing stopped that pull request on a
+        // check the candidate fails, and may have updated its branch since:
+        // the repair publishes its own, whose `pr_open` closes it.
+        _ if candidate.landing_stop.is_some() => Adoption::Refused(format!(
+            "the owner's landing stopped pull request #{pull_request}; the repair opens its own"
+        )),
         _ if !candidate.published => Adoption::Refused(format!(
             "branch '{}' was not pushed at {}",
             candidate.branch, candidate.head_sha
@@ -240,6 +246,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
             .get("interrupted_review")
             .filter(|review| !review.is_null())
             .and_then(|review| serde_json::from_value(review.clone()).ok()),
+        landing_stop: input_string_field(preserved, "landing_stop"),
     })
 }
 
@@ -301,6 +308,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -362,6 +370,7 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
@@ -549,6 +558,7 @@ fn claim_repair_resume(
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
+        landing_stop: None,
     };
     let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {
         Applied::Refused(reason) => {

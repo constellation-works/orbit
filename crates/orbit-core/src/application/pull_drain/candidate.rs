@@ -116,6 +116,7 @@ pub(super) fn preserved_candidate(
         durable_ref: None,
         carry_failure: None,
         interrupted_review: kept_interrupted_review(state),
+        landing_stop: None,
     };
     let committed = text(step("commit"), "commit_sha");
     if run.job_id == CLAIMED_LOCAL_PIPELINE {

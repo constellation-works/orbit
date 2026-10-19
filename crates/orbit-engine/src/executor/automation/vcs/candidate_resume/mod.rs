@@ -204,6 +204,10 @@ struct Candidate {
     /// [ORB-15314] The review its leaf was stopped inside, whose reviewer's
     /// uncommitted repair was kept as a commit on top of `head_sha`.
     interrupted_review: Option<InterruptedReview>,
+    /// [ORB-16890] Why the owner's landing of this handed-off candidate
+    /// stopped: a required check it fails, with the job, signature and log
+    /// excerpt the repair starts from.
+    landing_stop: Option<String>,
 }
 
 impl Candidate {

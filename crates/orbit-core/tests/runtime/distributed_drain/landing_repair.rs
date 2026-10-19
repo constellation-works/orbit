@@ -297,6 +297,136 @@ fn an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic() {
     );
 }
 
+/// [ORB-16890] A handoff whose pull request fails a required check the
+/// candidate caused, once its one automatic repair is spent, does not sit in
+/// review: the owner ends the claim and returns the task to the backlog with
+/// the candidate and the stop. Its next run repairs that candidate, seeing the
+/// failed check's signature, and its own failure of that check returns the
+/// task again until the landing repair budget is spent, when the task blocks
+/// with every counted stop's evidence.
+fn a_spent_repair_whose_candidate_fails_its_check_returns_to_the_backlog_until_blocked() {
+    use orbit_engine::HandoffLandingStep;
+    const SIGNATURE: &str = "error[E0425]: cannot find value `delivered` in this scope";
+    let reason = |stop: usize| {
+        format!(
+            "required check `CI / clippy` failed on pull request #42, classified `candidate`: \
+             {SIGNATURE} (stop {stop})"
+        )
+    };
+    let spent = |owner: &OwnerLocal, task: &str| {
+        RuntimeHost::handoff_landing_context(
+            &owner.pair.wire.owner,
+            &owner.dispatched_handoff(task),
+        )
+        .expect("landing context")
+        .automatic_repair_spent
+    };
+    let requeues = |owner: &OwnerLocal, task: &str| {
+        owner.pair.owner_task(task)["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .filter(|event| event["event"] == "landing_repair_requeued")
+            .count()
+    };
+
+    let owner = OwnerLocal::new();
+    let first = owner.handed_off_leaf(|checkout, _| {
+        std::fs::write(checkout.join(FILE), FIRST).unwrap();
+        "Outcome: success\nImplemented the first change."
+    });
+    let task = owner.pair.claimed_task(&first);
+    assert!(!spent(&owner, &task), "the first landing has its repair");
+    owner.stop_with_refusal(&task, &owner_landing_refusal(&reason(1), "first-sentinel"));
+    let repair = owner.handed_off_leaf(|checkout, _| {
+        std::fs::write(checkout.join(FILE), REPAIRED).unwrap();
+        "Outcome: success\nRepaired the candidate's failing check."
+    });
+    assert!(spent(&owner, &task), "the repair claim spent the repair");
+
+    let mut stopped = owner.claim_of(&repair);
+    let mut leaves = 2;
+    for stop in 2..=3 {
+        let kept = owner.accepted_candidate(&stopped);
+        owner.stop_landing(
+            &task,
+            HandoffLandingStep::StopForRequeue,
+            &owner_landing_refusal(&reason(stop), "requeue-sentinel"),
+        );
+        assert_eq!(owner.claim_phase(&stopped), "revoked", "stop {stop}");
+        assert_eq!(
+            owner.pair.owner_status(&task),
+            "backlog",
+            "a spent repair's candidate failure returns the task: stop {stop}"
+        );
+        assert_eq!(requeues(&owner, &task), stop - 1, "stop {stop}");
+
+        let next = owner.handed_off_leaf(|checkout, resumed| {
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "landing", "{resumed}");
+            let output = resumed["repair"]["output"].as_str().unwrap_or("");
+            assert!(
+                output.contains(SIGNATURE) && !output.contains("requeue-sentinel"),
+                "the run sees the failed check and its signature: {output}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(checkout.join(FILE)).unwrap(),
+                REPAIRED,
+                "the run starts from the kept candidate, not afresh"
+            );
+            "Outcome: success\nRepaired the kept candidate's failing check."
+        });
+        leaves += 1;
+        assert_eq!(owner.pair.claimed_task(&next), task, "the same task");
+        let carried = &owner.leaf_input(&next)["resume_candidate"];
+        assert_eq!(carried["head_sha"], kept.as_str(), "{carried}");
+        assert!(
+            carried["landing_stop"]
+                .as_str()
+                .is_some_and(|stop| stop.contains(SIGNATURE)),
+            "the kept candidate carries the stop: {carried}"
+        );
+        assert!(spent(&owner, &task), "a requeued run has spent the repair");
+        stopped = owner.claim_of(&next);
+    }
+
+    owner.stop_landing(
+        &task,
+        HandoffLandingStep::StopForRequeue,
+        &owner_landing_refusal(&reason(4), "budget-sentinel"),
+    );
+    assert_eq!(owner.claim_phase(&stopped), "failed");
+    assert_eq!(owner.pair.owner_status(&task), "blocked");
+    let comments = comments_of(&owner.pair.owner_task(&task));
+    let reasons = [reason(2), reason(3), reason(4)];
+    let blocked_candidate = owner.accepted_candidate(&stopped);
+    for evidence in [stopped.as_str(), blocked_candidate.as_str()]
+        .into_iter()
+        .chain(reasons.iter().map(String::as_str))
+    {
+        assert!(
+            comments.contains(evidence),
+            "{evidence} in the blocked task's comments: {comments}"
+        );
+    }
+    assert!(
+        !comments.contains("sentinel"),
+        "the blocked comment carries no diagnostic: {comments}"
+    );
+    let pass = owner.pair.pass(&owner.drain);
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(
+        owner
+            .pair
+            .follower_jobs
+            .list_job_runs(LOCAL_LEAF_JOB)
+            .unwrap()
+            .len(),
+        leaves,
+        "a blocked task admits no further run: {pass}"
+    );
+}
+
 /// A repair claim is admitted only where the task could start: a `ui` task's
 /// pending repair waits, named, on a host whose kit is no longer verified and
 /// keeps its claim, and the next pass on a host with a verified kit takes it.
@@ -771,6 +901,36 @@ impl OwnerLocal {
     /// Record the diagnostic string an owner pull-request refusal stores,
     /// against the landing attempt acceptance dispatched.
     fn stop_with_refusal(&self, task: &str, evidence: &str) -> String {
+        self.stop_landing(
+            task,
+            orbit_engine::HandoffLandingStep::Stop { repairable: true },
+            evidence,
+        )
+    }
+
+    /// The handoff of `task`'s dispatched landing attempt.
+    fn dispatched_handoff(&self, task: &str) -> String {
+        self.pair
+            .wire
+            .owner
+            .landing_attempts()
+            .unwrap()
+            .into_iter()
+            .find(|attempt| {
+                attempt.task_id == task && attempt.state == LandingAttemptState::Dispatched
+            })
+            .unwrap_or_else(|| panic!("no landing dispatched for {task}"))
+            .handoff_id
+    }
+
+    /// Record `step` with `evidence` against the landing attempt acceptance
+    /// dispatched, as the owner's landing activity records it.
+    fn stop_landing(
+        &self,
+        task: &str,
+        step: orbit_engine::HandoffLandingStep,
+        evidence: &str,
+    ) -> String {
         let runtime = &self.pair.wire.owner;
         let attempt = runtime
             .landing_attempts()
@@ -786,7 +946,7 @@ impl OwnerLocal {
             runtime,
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: handoff_id.clone(),
-                step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
+                step,
                 observed: None,
                 evidence: evidence.to_string(),
             },
@@ -958,6 +1118,7 @@ crate::scenario_table!(
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task,
     a_second_base_stop_blocks_the_task_with_both_attempts_evidence,
     an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic,
+    a_spent_repair_whose_candidate_fails_its_check_returns_to_the_backlog_until_blocked,
     a_ui_repair_waits_for_a_verified_browser_kit
 );
 

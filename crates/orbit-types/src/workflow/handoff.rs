@@ -309,6 +309,30 @@ pub struct LandingAttempt {
     pub updated_at: DateTime<Utc>,
 }
 
+/// [ORB-16890] Times a task returns to the backlog because its handed-off
+/// candidate fails its own required check at landing, after its one
+/// automatic repair leaf, before the next such stop blocks it.
+pub const LANDING_REPAIR_BUDGET: usize = 2;
+
+/// History event of a landing stop that ended the claim and returned the
+/// task to the backlog, keeping its candidate for the next run's repair.
+pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
+
+/// History event of the landing stop that found the task's landing repair
+/// budget spent and blocked it. Requeues before it no longer count.
+pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";
+
+/// The landing repair requeues that count against a task's budget, from its
+/// history event names in order: those after its last exhaustion, which an
+/// operator answered by unblocking the task.
+pub fn landing_repairs_spent<'a>(events: impl IntoIterator<Item = &'a str>) -> usize {
+    events.into_iter().fold(0, |spent, event| match event {
+        LANDING_REPAIR_REQUEUED_EVENT => spent + 1,
+        LANDING_REPAIR_EXHAUSTED_EVENT => 0,
+        _ => spent,
+    })
+}
+
 /// An operator's compare-and-reserve request for the same immutable handoff.
 /// No pipeline input or replacement authority is accepted by this operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

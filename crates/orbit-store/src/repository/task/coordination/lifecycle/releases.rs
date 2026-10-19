@@ -83,6 +83,7 @@ impl TaskCommitBoundary {
                 durable_ref: carry.and_then(|carry| carry.durable_ref.clone()),
                 carry_failure: carry.and_then(|carry| carry.carry_failure.clone()),
                 interrupted_review: None,
+                landing_stop: None,
             })
         });
         let Some(mut candidate) = evidence
@@ -294,7 +295,10 @@ impl TaskCommitBoundary {
         self.candidate_offer(&self.full_task(task_id)?, machine_id)
     }
 
-    fn full_task(&self, task_id: &str) -> Result<orbit_types::task::Task, OrbitError> {
+    pub(in super::super) fn full_task(
+        &self,
+        task_id: &str,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
         crate::repository::task::v2::TaskV2Store::new(
             self.registry.clone(),
             self.workspace_id.clone(),
@@ -462,6 +466,7 @@ fn held_candidate_offer(
             durable_ref: held.durable_ref,
             carry_failure: held.carry_failure,
             interrupted_review: None,
+            landing_stop: None,
         },
         fresh,
     })

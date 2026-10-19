@@ -1894,6 +1894,7 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
                     durable_ref: None,
                     carry_failure: None,
                     interrupted_review: None,
+                    landing_stop: None,
                 },
                 fresh: None,
             };

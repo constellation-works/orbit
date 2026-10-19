@@ -394,12 +394,18 @@ pub enum ClaimMutation {
     /// A `repairable` stop — the candidate conflicts with, or is stale
     /// against, its base — instead moves an original claim to
     /// `repair_pending`, and blocks the task when the claim is already its
-    /// repair [ORB-14261].
+    /// repair [ORB-14261]. A `requeue` stop — the candidate fails its own
+    /// required check after that repair is spent — ends the claim and
+    /// returns the task to the backlog with the candidate and the stop
+    /// evidence kept for its next run, and blocks the task once its landing
+    /// repair budget is spent [ORB-16890].
     StopLanding {
         handoff_id: String,
         reason: String,
         #[serde(default)]
         repairable: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requeue: bool,
     },
 }
 

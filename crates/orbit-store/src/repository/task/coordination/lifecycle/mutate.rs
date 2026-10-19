@@ -842,29 +842,61 @@ impl TaskCommitBoundary {
                     handoff_id,
                     reason,
                     repairable,
+                    requeue,
                 } => {
-                    match self.stop_landing_attempt(
+                    state.last_event = "landing_stopped".into();
+                    let kept = match self.stop_landing_attempt(
                         auth,
                         &state,
                         handoff_id,
                         reason,
                         *repairable,
+                        *requeue,
                         &mut params,
                         &mut handoff_effects,
                     )? {
-                        LandingStop::Stopped => {}
+                        LandingStop::Stopped => None,
                         LandingStop::Repair => {
                             state.claim.phase = ExecutionClaimPhase::RepairPending;
                             state.landing_invalidated = true;
+                            None
                         }
                         LandingStop::Blocked(comment) => {
                             state.claim.phase = ExecutionClaimPhase::Failed;
                             state.landing_invalidated = true;
                             evidence.comment = Some(comment);
                             release = true;
+                            None
                         }
+                        // [ORB-16890] The claim ends like a release: the task's
+                        // next claim or owner run is offered the kept candidate.
+                        LandingStop::Requeue(kept) => {
+                            state.claim.phase = ExecutionClaimPhase::Revoked;
+                            state.landing_invalidated = true;
+                            release = true;
+                            state.last_event =
+                                orbit_types::workflow::handoff::LANDING_REPAIR_REQUEUED_EVENT
+                                    .into();
+                            Some(*kept)
+                        }
+                        LandingStop::RepairBudgetExhausted { comment, kept } => {
+                            state.claim.phase = ExecutionClaimPhase::Failed;
+                            state.landing_invalidated = true;
+                            evidence.comment = Some(comment);
+                            release = true;
+                            state.last_event =
+                                orbit_types::workflow::handoff::LANDING_REPAIR_EXHAUSTED_EVENT
+                                    .into();
+                            Some(*kept)
+                        }
+                    };
+                    if let Some(kept) = kept {
+                        state.preserved_candidate = Some(kept);
+                        params.append_history.extend(Self::kept_candidate_entry(
+                            &claim,
+                            state.preserved_candidate.as_ref(),
+                        ));
                     }
-                    state.last_event = "landing_stopped".into();
                 }
                 ClaimMutation::MergeIntent {
                     intent_id,

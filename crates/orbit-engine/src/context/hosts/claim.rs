@@ -50,8 +50,9 @@ pub struct HandoffLandingContext {
     /// once each has passed on the pinned head.
     pub owed_hosted_checks: Vec<String>,
     /// [ORB-15956] This claim already is the one automatic repair of an
-    /// earlier landing stop. A hosted check its candidate fails then stops
-    /// the landing in review instead of asking for another repair.
+    /// earlier landing stop, or [ORB-16890] the task already returned to
+    /// the backlog for a landing repair. A hosted check its candidate fails
+    /// then stops for that requeue instead of asking for another repair.
     pub automatic_repair_spent: bool,
 }
 
@@ -71,6 +72,13 @@ pub enum HandoffLandingStep {
     /// the candidate caused [ORB-15956]: the owner hands it to one automatic
     /// repair rather than leaving it in review.
     Stop { repairable: bool },
+    /// [ORB-16890] Durable evidence for a landing whose pull request fails a
+    /// required check the candidate itself caused, once its one automatic
+    /// repair is spent. The owner ends the claim and returns the task to the
+    /// backlog with the candidate and this evidence, so the task's next run
+    /// repairs that candidate, until its landing repair budget is spent and
+    /// the task blocks.
+    StopForRequeue,
 }
 
 /// A landing transition with the owner observation that justifies it.

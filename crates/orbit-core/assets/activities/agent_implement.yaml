@@ -347,10 +347,12 @@ spec:
       re-implement), `continuation` (an earlier claim committed it
       but did not deliver it — check it against the task and finish what is
       missing) or `landing` (a handed-off candidate whose landing stopped
-      because its base moved; it applied cleanly onto the current base, so
-      confirm it still builds and meets the acceptance criteria there and
-      adapt it to what the base changed). Then rerun the checks and say in
-      the summary that you repaired a resumed candidate.
+      because its base moved or a required check failed on it; it applied
+      cleanly onto the current base, so fix what `output` names, such as the
+      failed check and its signature, confirm it still builds and meets the
+      acceptance criteria there and adapt it to what the base changed). Then
+      rerun the checks and say in the summary that you repaired a resumed
+      candidate.
 
     Scope and implementation
 
