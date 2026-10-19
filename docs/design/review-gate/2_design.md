@@ -2,7 +2,7 @@
 title: Review Gate — Design
 owner: codex
 last_updated: 2026-10-19
-last_validated: 2026-10-15
+last_validated: 2026-10-19
 status: Accepted
 feature: review-gate
 doc_role: design
@@ -61,9 +61,11 @@ After-landing review is carried out by the workspace's shipped
 `delivery-code-review` delivery auto-task [ORB-13896], switched with
 `orbit auto-task toggle delivery-code-review on|off`. While enabled it freezes
 landed base-branch deliveries into batches and mints one review task per batch
-at its threshold or maximum wait. When `review_crew` is set it is the crew of
-every review task the consumer mints; unset, the definition's template crew
-(`system`) applies. Changing `review_crew` changes only future mints, never the
+at its threshold or maximum wait. When `review_crew` is set, each review task the
+consumer mints carries that crew; a pool draws one member per mint, preferring
+one that implemented none of the batch's deliveries. Unset, the shipped template
+names no crew, so each minted task is unassigned and draws from the complexity
+pool for its complexity. Changing `review_crew` changes only future mints, never the
 consumer's epoch or its retained debt. The consumer admits only on the machine
 that owns the workspace (see [delivery automation
 operations](../automation-triggers/5_operations.md)). After-landing review
@@ -536,7 +538,7 @@ validator cannot tell an unlisted policy check from an optional one, so that
 rule is contract text only. A report that still carries the `not_run`
 diagnostic after the correction settles `incomplete` with
 `validation_contradicted`; a denied diagnostic or a control that never ran
-stays an observation. When the reviewer step returns
+is a role contradiction as well, and the reviewer cannot correct it. When the reviewer step returns
 successfully, the engine asks the host (`RuntimeHost::review_report_correction`)
 to judge the attached report as settlement would, over the scope settlement
 would derive (the task selectors plus the implementation's paths and the
