@@ -1,7 +1,10 @@
 //! GitHub owns effective policy, workflow identities and source dependency reads.
 //! The engine receives verified generic evidence; no workflow is special-cased.
 use super::super::completion_deadline::Deadline;
-use super::{ci::ci_job_log, input::required_string, workflow_dependency::dependency};
+use super::{
+    MAX_WORKFLOW_SOURCE_BYTES, ci::ci_job_log, input::required_string,
+    workflow_dependency::dependency,
+};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{PrInfrastructureEvidence, RequiredGate};
 use serde_json::{Value, json};
@@ -427,7 +430,9 @@ pub(super) fn workflow(
             "workflow source",
         )?
         .stdout;
-    if source.len() > 64 * 1024 || contents["size"].as_u64() != Some(source.len() as u64) {
+    if source.len() > MAX_WORKFLOW_SOURCE_BYTES
+        || contents["size"].as_u64() != Some(source.len() as u64)
+    {
         return Err(unreadable("truncated workflow source"));
     }
     Ok((path, blob, source))

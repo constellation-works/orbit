@@ -335,6 +335,7 @@ fn prerequisite_dag_work_is_bounded_by_nodes_and_edges() {
                 "cycle",
                 "unresolved",
                 "oversized",
+                "source_between_limits",
                 "source_oversized",
             ] {
                 in_fresh_row(sandbox, |row| {
@@ -367,8 +368,19 @@ fn prerequisite_dag_work_is_bounded_by_nodes_and_edges() {
                         })
                         .sum();
                     let mut source = serde_yaml::to_string(&source).unwrap();
-                    if case == "source_oversized" {
-                        source.push_str(&format!("\n# {}\n", "x".repeat(65536)));
+                    match case {
+                        "source_between_limits" => {
+                            source.push_str(&format!("\n# {}\n", "x".repeat(70 * 1024)));
+                        }
+                        "source_oversized" => {
+                            source.push_str(&format!("\n# {}\n", "x".repeat(256 * 1024)));
+                        }
+                        _ => {}
+                    }
+                    if case == "source_between_limits" {
+                        assert!(source.len() > 64 * 1024 && source.len() < 256 * 1024);
+                    } else if case == "source_oversized" {
+                        assert!(source.len() > 256 * 1024);
                     }
                     let fx = fixture_with_source(row, &source);
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
@@ -405,7 +417,8 @@ fn prerequisite_dag_work_is_bounded_by_nodes_and_edges() {
                             )
                         },
                     );
-                    assert_eq!(result.is_ok(), case == "converging", "{case}: {result:?}");
+                    let allowed = matches!(case, "converging" | "source_between_limits");
+                    assert_eq!(result.is_ok(), allowed, "{case}: {result:?}");
                     if case == "converging" {
                         assert_eq!(
                             work.get(),
@@ -413,16 +426,12 @@ fn prerequisite_dag_work_is_bounded_by_nodes_and_edges() {
                             "each node and edge is visited once per cycle/selection traversal"
                         );
                     }
-                    assert_eq!(
-                        rerun_count(&fx),
-                        usize::from(case == "converging"),
-                        "{case}"
-                    );
+                    assert_eq!(rerun_count(&fx), usize::from(allowed), "{case}");
                     assert_eq!(
                         pr_infrastructure_reservations(&host.history(TASK_ID))
                             .unwrap()
                             .len(),
-                        usize::from(case == "converging"),
+                        usize::from(allowed),
                         "{case}"
                     );
                     assert!(fx.merge_requests().is_empty());

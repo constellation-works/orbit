@@ -8,11 +8,11 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::super::completion_deadline::Deadline;
-use super::input::required_string;
 use super::prerequisite::{
     api, complete_list, gate_passed, gate_present, number, same, snapshot, text, unreadable,
 };
 use super::workflow_dependency::job_names;
+use super::{MAX_WORKFLOW_SOURCE_BYTES, input::required_string};
 
 fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, OrbitError> {
     Ok(deadline
@@ -177,7 +177,9 @@ fn sources(
                 "workflow emission source",
             )?
             .stdout;
-        if source.len() > 64 * 1024 || contents["size"].as_u64() != Some(source.len() as u64) {
+        if source.len() > MAX_WORKFLOW_SOURCE_BYTES
+            || contents["size"].as_u64() != Some(source.len() as u64)
+        {
             return Err(unreadable("truncated workflow emission source"));
         }
         let names = emitted(&source, branch)?;

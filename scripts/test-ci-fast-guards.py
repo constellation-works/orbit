@@ -612,6 +612,25 @@ log("end {name}")
             "-- cargo +1.89 check --workspace --locked",
         ])
 
+    def test_static_rejects_workflow_above_three_quarters_source_cap(self):
+        """A workflow can reach the threshold but cannot cross it silently."""
+        self.prepare_ci()
+        workflow = self.root / ".github/workflows/oversized.yml"
+        cap = 256 * 1024
+        threshold = cap * 3 // 4
+        workflow.write_bytes(b"x" * threshold)
+        at_threshold = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertEqual(at_threshold.returncode, 0, at_threshold.stdout + at_threshold.stderr)
+
+        workflow.write_bytes(b"x" * (threshold + 1))
+        over_threshold = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertNotEqual(over_threshold.returncode, 0)
+        self.assertIn(".github/workflows/oversized.yml", over_threshold.stderr)
+        self.assertIn(str(threshold + 1), over_threshold.stderr)
+        self.assertIn(str(cap), over_threshold.stderr)
+        self.assertFalse(list(self.guard_calls.iterdir()),
+                         "the size guard rejects before running later guards")
+
     def test_static_runs_file_guards_and_rejects_public_ids_without_build_or_network(self):
         """Early handoff catches shipped IDs while retaining fast's file guards."""
         self.prepare_ci()
