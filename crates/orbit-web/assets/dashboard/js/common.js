@@ -304,6 +304,7 @@ export function syncWindowSelectors() {
   for (const [id, target] of [
     ["scoreboard-window-selector", selected],
     ["metrics-window-selector", selected],
+    ["orchestrators-window-selector", selected],
     ["reliability-window-selector", rel.window],
   ]) {
     const selector = document.getElementById(id);

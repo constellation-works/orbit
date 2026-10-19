@@ -1,6 +1,10 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
+use orbit_types::task::{
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
+    TASK_FIELDS_UPDATED_EVENT, task_fields_updated_note,
+};
 
 impl TaskV2Store {
     pub(crate) fn apply_atomic_task_mutation(
@@ -375,31 +379,51 @@ impl TaskV2Store {
                 );
             }
             let envelope_fields_changed = prior_unrecorded_envelope != bundle.envelope;
-            let documents_changed = fields
-                .description
-                .as_ref()
-                .is_some_and(|value| value != &original_description)
-                || fields
-                    .acceptance_criteria
-                    .as_ref()
-                    .is_some_and(|value| render_acceptance(value) != original_acceptance)
-                || fields
-                    .plan
-                    .as_ref()
-                    .is_some_and(|value| value != &original_plan)
-                || fields
-                    .execution_summary
-                    .as_ref()
-                    .is_some_and(|value| value != &original_execution_summary);
+            // The note names each changed document, so an edit to what the
+            // task asks reads apart from run bookkeeping.
+            let changed_documents: Vec<&str> = [
+                (
+                    DESCRIPTION_DOCUMENT,
+                    fields
+                        .description
+                        .as_ref()
+                        .is_some_and(|value| value != &original_description),
+                ),
+                (
+                    ACCEPTANCE_CRITERIA_DOCUMENT,
+                    fields
+                        .acceptance_criteria
+                        .as_ref()
+                        .is_some_and(|value| render_acceptance(value) != original_acceptance),
+                ),
+                (
+                    PLAN_DOCUMENT,
+                    fields
+                        .plan
+                        .as_ref()
+                        .is_some_and(|value| value != &original_plan),
+                ),
+                (
+                    EXECUTION_SUMMARY_DOCUMENT,
+                    fields
+                        .execution_summary
+                        .as_ref()
+                        .is_some_and(|value| value != &original_execution_summary),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(document, changed)| changed.then_some(document))
+            .collect();
             let context_creation_changed = !fields.context_creation.is_empty();
-            if envelope_fields_changed || documents_changed || context_creation_changed {
+            if envelope_fields_changed || !changed_documents.is_empty() || context_creation_changed
+            {
                 let event = TaskEventRowV2 {
                     schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                     event_id: next_event_id(&bundle.events),
                     at: Utc::now(),
                     by: fields.actor.clone(),
-                    event_type: "updated".to_string(),
-                    note: Some("task fields updated".to_string()),
+                    event_type: TASK_FIELDS_UPDATED_EVENT.to_string(),
+                    note: Some(task_fields_updated_note(&changed_documents)),
                     from_status: None,
                     to_status: None,
                     operation_id: None,

@@ -84,6 +84,7 @@
               <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
               <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
+              <button class="subtab" data-subtab="orchestrators" type="button">Orchestrators</button>
               <button class="subtab" data-subtab="resources" type="button">Resources</button>
               <button class="subtab" data-subtab="cost" type="button">Cost</button>
             </nav>
@@ -526,6 +527,39 @@
               <div class="skeleton skeleton-row" style="width: 80%"></div>
             </div>
           </div>
+        </section>
+      </main>
+      <!-- Analytics › Orchestrators: per-orchestrator throughput, proactivity,
+           spec defects and rework from recorded history, each count opening
+           the tasks behind it. Separate from Cost and /api/metrics/orchestrators. -->
+      <main id="analytics-orchestrators-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
+        <section class="panel" id="orchestrators-panel">
+          <header>
+            <span>Orchestrators</span>
+            <span class="count" id="orchestrators-count">—</span>
+          </header>
+          <div class="scoreboard-controls orch-controls" id="orchestrators-controls">
+            <p class="orch-purpose">How well each orchestrator files and supervises work: what landed, what it started on its own initiative, how often its specifications were defective and how much rework followed. Every count comes from task history, relations, review comments and pull request references; cost is not measured.</p>
+            <div class="scoreboard-control-group">
+              <span class="scoreboard-control-label">window</span>
+              <div class="scoreboard-window-selector" id="orchestrators-window-selector" role="tablist" aria-label="Orchestrator scorecard window">
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1">all</button>
+              </div>
+            </div>
+            <div class="scoreboard-control-group" role="group" aria-labelledby="orchestrators-rate-label">
+              <span class="scoreboard-control-label" id="orchestrators-rate-label">rate</span>
+              <div class="scoreboard-window-selector orch-rate" id="orchestrators-rate">
+                <button type="button" class="scoreboard-window-seg on" data-value="per_100_tasks" aria-pressed="true">Per 100 tasks</button>
+                <button type="button" class="scoreboard-window-seg" data-value="per_8_hours" aria-pressed="false">Per 8 active hours</button>
+              </div>
+            </div>
+            <span class="scoreboard-controls-meta orch-meta" id="orchestrators-meta"></span>
+          </div>
+          <div class="body orch-body" id="orchestrators-body" tabindex="0" role="region" aria-label="Orchestrator scorecard"></div>
         </section>
       </main>
       <!-- Analytics › Resources: this host's delivery resource profiles, the

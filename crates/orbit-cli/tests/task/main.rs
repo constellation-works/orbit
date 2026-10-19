@@ -34,6 +34,7 @@ mod delivery_remote_source;
 mod friction_lifecycle_cli;
 mod live_run_status;
 mod local_read_projections_cli;
+mod orchestrator_cli;
 mod pilot_comments;
 mod reconcile_review;
 mod rescue_close_cli;

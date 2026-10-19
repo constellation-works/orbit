@@ -122,6 +122,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/codebase.js"),
     ),
     (
+        "/static/js/orchestrators.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/orchestrators.js"),
+    ),
+    (
         "/static/js/scoreboard.js",
         JS,
         include_bytes!("../assets/dashboard/js/scoreboard.js"),

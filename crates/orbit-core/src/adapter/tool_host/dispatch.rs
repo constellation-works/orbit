@@ -93,6 +93,9 @@ pub(super) fn execute(
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Orchestrator(verb) => {
+            super::orchestrator_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::Drain(verb) => {
             super::drain_tools::dispatch(runtime, session_context, verb, input)

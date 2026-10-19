@@ -193,6 +193,17 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // coupling, blocked and rejected rates from one cached scan.
         .route("/codebase/analytics", get(codebase::codebase_analytics))
         .route("/codebase/related", get(codebase::codebase_related))
+        // Analytics › Orchestrators: per-orchestrator throughput, proactivity,
+        // spec defects and rework from one cached scan, and the tasks behind
+        // each count. Separate from `/metrics/orchestrators` and `/cost`.
+        .route(
+            "/orchestrators/scorecard",
+            get(orchestrators::orchestrator_scorecard),
+        )
+        .route(
+            "/orchestrators/detail",
+            get(orchestrators::orchestrator_detail),
+        )
         // `orbit doctor` for the selected workspace: read-only, on demand and
         // cached [ORB-14830]. GET only; repairs stay on the CLI.
         .route("/doctor", get(doctor::doctor))

@@ -47,7 +47,7 @@ const TABS = ["tasks", "jobs", "drain", "diagnostics", "analytics", "operations"
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
-const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "cost"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "orchestrators", "resources", "cost"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
@@ -63,6 +63,7 @@ const ANALYTICS_MAINS = {
   pipeline: "analytics-reliability-main",
   tools: "analytics-tools-main",
   codebase: "analytics-codebase-main",
+  orchestrators: "analytics-orchestrators-main",
   resources: "analytics-resources-main",
   cost: "analytics-cost-main",
 };
@@ -268,6 +269,7 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
   if (shown === "resources" && ctx.fetchResources) ctx.fetchResources();
+  if (shown === "orchestrators" && ctx.fetchOrchestrators) ctx.fetchOrchestrators();
 }
 
 function setOperationsSubtabImpl(ctx, name) {

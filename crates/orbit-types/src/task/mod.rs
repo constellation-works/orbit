@@ -6,6 +6,7 @@ mod context_widening;
 mod decision;
 mod epic;
 mod error;
+mod fields_updated;
 mod light_delivery;
 mod model;
 mod os_requirement;
@@ -30,6 +31,10 @@ pub use decision::{
     RecordedFinalRecovery, TaskDecision,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
+pub use fields_updated::{
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
+    TASK_FIELDS_UPDATED_EVENT, task_fields_updated_documents, task_fields_updated_note,
+};
 pub use light_delivery::{
     DEFAULT_LIGHT_DELIVERY_PATHS, LIGHT_DELIVERY_APPLIED_EVENT, LIGHT_DELIVERY_IGNORED_EVENT,
     LIGHT_DELIVERY_PATHS_KEY, LIGHT_DELIVERY_TAGS, LightDeliveryDecision, LightDeliveryJudgement,

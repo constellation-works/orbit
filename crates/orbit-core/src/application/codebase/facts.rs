@@ -69,7 +69,7 @@ const SETTLEMENT_MATCH_SECONDS: i64 = 300;
 /// A footprint entry: a workspace-relative path and whether it names a
 /// directory (`dir:` selector) rather than a file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Anchor {
+pub(in crate::application) struct Anchor {
     pub(super) path: String,
     pub(super) dir: bool,
 }
@@ -106,7 +106,7 @@ impl Anchor {
 
 /// Why a task entered `blocked`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum BlockCause {
+pub(in crate::application) enum BlockCause {
     /// An infrastructure failure the run failure classification names; never
     /// counted against the task's files.
     Infra(&'static str),
@@ -403,7 +403,7 @@ fn names_run(note: &str) -> bool {
 /// `claim_failed` note, or for an entry older than that note, from the
 /// claim's settlement record.
 #[derive(Debug, Clone)]
-pub(super) struct SettledFailure {
+pub(in crate::application) struct SettledFailure {
     /// Set when the settlement was matched by time rather than read off the
     /// entry; the entry it explains is the nearest.
     settled_at: Option<DateTime<Utc>>,
@@ -416,7 +416,9 @@ pub(super) struct SettledFailure {
 /// Every failed claim's settlement, by task, for `claim_failed` entries
 /// written before their note named the cause. An owner whose claims cannot
 /// be read classifies those entries as unclassified rather than failing.
-fn failed_claim_settlements(runtime: &OrbitRuntime) -> BTreeMap<String, Vec<SettledFailure>> {
+pub(in crate::application) fn failed_claim_settlements(
+    runtime: &OrbitRuntime,
+) -> BTreeMap<String, Vec<SettledFailure>> {
     let settlements = runtime
         .leaf_settlements(None, false)
         .unwrap_or_else(|error| {
@@ -474,7 +476,7 @@ fn settled_failure(
 /// Orbit automation (`system`, `system:*`), an unattributed write, or else a
 /// person (`human:<user>`, `operator`, an `ORBIT_ACTOR` label, or the
 /// machine of an operator's claim recovery).
-fn actor_kind(by: &str) -> &'static str {
+pub(in crate::application) fn actor_kind(by: &str) -> &'static str {
     let by = by.trim();
     if all_agent_families().contains(&by) {
         "agent"
@@ -563,7 +565,7 @@ fn requester_identities(
 /// fields and, where no typed field names the cause, its note. The note of a
 /// run failure carries the run's `error_code` and error text, which the run
 /// failure classification reads.
-pub(super) fn classify_block(
+pub(in crate::application) fn classify_block(
     entry: &TaskHistoryEntry,
     settlements: &[SettledFailure],
 ) -> BlockCause {

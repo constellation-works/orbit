@@ -7,6 +7,7 @@ import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
+import { fetchAndRenderOrchestrators, placeholdOrchestratorsAggregate, wireOrchestratorControls } from './js/orchestrators.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
@@ -260,6 +261,7 @@ function routerContext() {
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
+    fetchOrchestrators: () => fetchAndRenderOrchestrators().catch((e) => console.error("Failed to fetch the orchestrator scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
@@ -1419,6 +1421,13 @@ function activeRefreshJobs() {
       placeholdScoreboardAggregate();
       placeholdMetricsAggregate();
       placeholdResourcesAggregate();
+      placeholdOrchestratorsAggregate();
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "orchestrators") {
+      // The scorecard follows the shared window like Cost; one cached scan
+      // serves every window and drill-down.
+      add("Analytics › Orchestrators", fetchAndRenderOrchestrators());
       return jobs;
     }
     if (activeAnalyticsSubtab === "resources") {
@@ -1886,6 +1895,7 @@ wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 wireCodebaseControls(() => { window.location.hash = buildCodebaseHash(); });
+wireOrchestratorControls();
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
 wireReliabilityWindowSelector();

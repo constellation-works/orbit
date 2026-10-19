@@ -28,6 +28,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
+        | "orbit.orchestrator.scorecard"
+        | "orbit.orchestrator.show"
         | "orbit.search"
         | "orbit.task.artifact.get"
         | "orbit.task.eligible"

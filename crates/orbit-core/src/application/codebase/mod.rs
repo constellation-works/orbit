@@ -29,6 +29,9 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 
 pub use facts::CodebaseFacts;
+pub(in crate::application) use facts::{
+    BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements,
+};
 use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";

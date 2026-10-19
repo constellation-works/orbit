@@ -8,7 +8,8 @@
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/cost` (keyed by the canonical window), and the codebase
-//! analytics scan behind `/api/codebase/analytics`, which caches typed facts
+//! analytics scan behind `/api/codebase/analytics` and the orchestrator
+//! scorecard scan behind `/api/orchestrators/*`, which cache typed facts
 //! rather than a response body. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
 //! payload served from a memo reports its age in an `Age` header.
@@ -35,6 +36,11 @@ pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 /// bundle's history, and the rankings it feeds move over days, so the 30 s
 /// dashboard poll must not repeat it.
 pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
+
+/// Freshness bound for the orchestrator scorecard scan. A miss reads every
+/// attributed task's history and comments, and the scorecard moves over days,
+/// so neither the 30 s poll nor a drill-down repeats it.
+pub(crate) const ORCHESTRATOR_SCORECARD_TTL: Duration = Duration::from_secs(300);
 
 /// A memoized body and how long ago it was computed.
 pub(crate) struct Served<V> {
