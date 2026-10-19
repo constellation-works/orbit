@@ -1,4 +1,5 @@
 //! Local landed diffs, attributed only through host delivery evidence.
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
@@ -19,6 +20,7 @@ pub(super) struct Landed {
 pub(super) struct Scanner {
     repo: Option<git2::Repository>,
     paths: BTreeMap<String, Option<BTreeSet<String>>>,
+    repository: OnceCell<Option<String>>,
 }
 
 impl Scanner {
@@ -26,6 +28,7 @@ impl Scanner {
         Self {
             repo: git2::Repository::open(&runtime.paths().repo_root).ok(),
             paths: BTreeMap::new(),
+            repository: OnceCell::new(),
         }
     }
 
@@ -33,28 +36,16 @@ impl Scanner {
         &mut self,
         runtime: &OrbitRuntime,
         id: &str,
-        history: &[TaskHistoryEntry],
+        owner: Option<(String, DateTime<Utc>)>,
+        observe_delivery: bool,
     ) -> Option<Landed> {
-        // Owner landings have no local delivery run; their completion event is
-        // written only after the owner verifies the provider or target ref.
-        let owner = history.iter().rev().find_map(|entry| {
-            if entry.event != "landing_completed" {
+        let (commit, at) = owner.or_else(|| {
+            if !observe_delivery {
                 return None;
             }
-            let note: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
-            let commit = note
-                .pointer("/delivery/merge_commit")
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    (note["delivery"] == "local_candidate"
-                        || note["reconciled"] == "local_target_contains_candidate")
-                        .then(|| note["candidate"].as_str())
-                        .flatten()
-                })?;
-            Some((commit.to_string(), entry.at))
-        });
-        let (commit, at) = owner.or_else(|| {
-            let delivery = runtime.observe_task_delivery(id, None).ok()?;
+            let delivery = runtime
+                .observe_codebase_task_delivery(id, &self.repository)
+                .ok()?;
             if delivery.landing.status != LandingObservationStatus::Merged {
                 return None;
             }
@@ -75,6 +66,29 @@ impl Scanner {
             .clone()?;
         Some(Landed { at, commit, paths })
     }
+}
+
+/// The verified landing receipt in task history, without touching delivery runs
+/// or Git. Its timestamp also excludes old receipts from unavailable counts.
+pub(super) fn receipt(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<Utc>)> {
+    // Owner landings have no local delivery run; their completion event is
+    // written only after the owner verifies the provider or target ref.
+    history.iter().rev().find_map(|entry| {
+        if entry.event != "landing_completed" {
+            return None;
+        }
+        let note: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+        let commit = note
+            .pointer("/delivery/merge_commit")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                (note["delivery"] == "local_candidate"
+                    || note["reconciled"] == "local_target_contains_candidate")
+                    .then(|| note["candidate"].as_str())
+                    .flatten()
+            })?;
+        Some((commit.to_string(), entry.at))
+    })
 }
 
 fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<String>> {

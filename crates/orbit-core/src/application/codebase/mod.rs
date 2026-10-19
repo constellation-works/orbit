@@ -9,7 +9,10 @@
 //! and the task-pilot ranking grades each pilot's selectors against them.
 //! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once;
 //! [`codebase_analytics`] and [`codebase_path_detail`] only slice those facts
-//! by window, minimum support and rollup, so a caller that keeps the facts
+//! by window, minimum support and rollup. Analytics uses verified landing
+//! receipts in task history, without observing delivery runs. Related queries
+//! use [`OrbitRuntime::codebase_related_scan`] for window-scoped delivery
+//! fallback. A caller that keeps the history-only facts
 //! (the dashboard) answers another selection without rescanning.
 
 mod detail;
@@ -115,9 +118,20 @@ impl CodebaseQuery {
 
 impl OrbitRuntime {
     /// Scan the workspace's tasks, reservations and lock denials once. A task
-    /// whose history cannot be read keeps its envelope facts.
+    /// whose history cannot be read keeps its envelope facts. Landed paths and
+    /// pilot grading use task-history receipts only, without delivery observation.
     pub fn codebase_scan(&self) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self)
+        facts::scan(self, None, true)
+    }
+
+    /// Scan facts for related-file queries in this window. Delivery fallback
+    /// is restricted to done tasks in the window; cache separately from the
+    /// history-only analytics scan and from other windows.
+    pub fn codebase_related_scan(
+        &self,
+        query: &CodebaseQuery,
+    ) -> Result<CodebaseFacts, OrbitError> {
+        facts::scan(self, Some(&query.params()), true)
     }
 
     /// Scan, then rank for `query`. For callers that keep no scan, so the
@@ -136,7 +150,7 @@ impl OrbitRuntime {
         query: &CodebaseQuery,
         path: &str,
     ) -> Result<Value, OrbitError> {
-        codebase_path_detail(&self.codebase_scan()?, query, path)
+        codebase_path_detail(&facts::scan(self, None, false)?, query, path)
     }
 }
 
@@ -172,7 +186,9 @@ pub fn codebase_path_detail(
 }
 
 /// Rank files that changed alongside `path` in landed tasks. Related queries
-/// always use file paths, independently of the analytics rollup.
+/// always use file paths, independently of the analytics rollup. Use facts
+/// from [`OrbitRuntime::codebase_related_scan`] for the same window to include
+/// delivery-run evidence; [`OrbitRuntime::codebase_scan`] contains receipts only.
 pub fn codebase_related(
     facts: &CodebaseFacts,
     query: &CodebaseQuery,
@@ -192,6 +208,6 @@ impl OrbitRuntime {
         path: &str,
         top: usize,
     ) -> Result<Value, OrbitError> {
-        codebase_related(&self.codebase_scan()?, query, path, top)
+        codebase_related(&self.codebase_related_scan(query)?, query, path, top)
     }
 }

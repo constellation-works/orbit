@@ -3,9 +3,9 @@
 //!
 //! The scan and rankings are the core codebase analytics service, shared with
 //! `orbit codebase` and the `orbit.codebase.*` tools. One scan per workspace
-//! runtime is cached for [`CODEBASE_ANALYTICS_TTL`]; the window, minimum
-//! support and rollup only slice the cached facts, so changing them or
-//! polling inside the cache period never rescans task bundles.
+//! runtime is cached for [`CODEBASE_ANALYTICS_TTL`]. Analytics uses history
+//! receipts only; related-file scans have a separate cache entry per window
+//! so delivery fallback never observes tasks outside the requested window.
 
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ pub(super) async fn codebase_analytics(
     let scan_runtime = Arc::clone(&runtime);
     let facts = match state
         .codebase_memo()
-        .get_or_compute(&runtime, (), CODEBASE_ANALYTICS_TTL, move || {
+        .get_or_compute(&runtime, None, CODEBASE_ANALYTICS_TTL, move || {
             scan_runtime.codebase_scan()
         })
         .await
@@ -87,10 +87,11 @@ pub(super) async fn codebase_related(
         return bad_request("path is required".into());
     };
     let scan_runtime = Arc::clone(&runtime);
+    let window = query.window.unwrap_or_else(|| "30d".into());
     let facts = match state
         .codebase_memo()
-        .get_or_compute(&runtime, (), CODEBASE_ANALYTICS_TTL, move || {
-            scan_runtime.codebase_scan()
+        .get_or_compute(&runtime, Some(window), CODEBASE_ANALYTICS_TTL, move || {
+            scan_runtime.codebase_related_scan(&selection)
         })
         .await
     {

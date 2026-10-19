@@ -70,8 +70,8 @@ pub(super) struct StateInner {
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
     /// Per-server cache of the codebase analytics scan, one per workspace
-    /// runtime. Holds typed facts; every window and rollup slices them.
-    codebase: RuntimeMemo<(), orbit_core::application::codebase::CodebaseFacts>,
+    /// runtime: history-only analytics or related delivery facts per window.
+    codebase: RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts>,
     /// Per-server cache of the orchestrator scorecard scan, one per workspace
     /// runtime. Holds typed facts; every window and drill-down slices them.
     orchestrators: RuntimeMemo<(), orbit_core::application::orchestrators::OrchestratorFacts>,
@@ -529,7 +529,7 @@ impl DashboardState {
     /// Process-local codebase analytics scan cache for this server instance.
     pub(crate) fn codebase_memo(
         &self,
-    ) -> &RuntimeMemo<(), orbit_core::application::codebase::CodebaseFacts> {
+    ) -> &RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts> {
         &self.inner.codebase
     }
 

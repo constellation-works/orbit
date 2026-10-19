@@ -116,6 +116,15 @@ impl OrbitRuntime {
         run_id: &str,
         task_id: &str,
     ) -> Result<RunDeliveryObservation, OrbitError> {
+        self.observe_run_delivery_with_repository(run_id, task_id, || self.delivery_repository())
+    }
+
+    fn observe_run_delivery_with_repository(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        repository: impl FnOnce() -> Option<String>,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = bounded_id(run_id, "run_id")?;
         let task_id = bounded_id(task_id, "task_id")?;
         let run = self.show_job_run_observed(run_id)?;
@@ -125,7 +134,7 @@ impl OrbitRuntime {
                 "run '{run_id}' did not deliver task '{task_id}' in this workspace"
             )));
         }
-        self.project_stored_delivery(&run, &task.id)
+        self.project_stored_delivery(&run, &task.id, repository)
     }
 
     /// [ORB-14661] Observe what a claimed leaf run committed and landed for
@@ -147,7 +156,7 @@ impl OrbitRuntime {
                 "run '{run_id}' did not deliver its claimed task"
             )));
         }
-        self.project_stored_delivery(&run, task_id)
+        self.project_stored_delivery(&run, task_id, || self.delivery_repository())
     }
 
     /// The observation of `run` for `task_id`, whose ownership the caller
@@ -156,14 +165,12 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
         task_id: &str,
+        repository: impl FnOnce() -> Option<String>,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = run.run_id.as_str();
         let shape = self.delivery_shape(run)?;
         let state = self.read_run_state(run_id)?;
-        let repository =
-            crate::application::automation::source::Source::new(&self.paths().repo_root)
-                .repository()
-                .ok();
+        let repository = repository();
         let executed = shape
             .as_ref()
             .map(|shape| self.delivery_execution_records(run, shape));
@@ -347,6 +354,30 @@ impl OrbitRuntime {
         let task = self.get_task(task_id)?;
         let run_id = self.latest_delivery_run_id(&task.id)?;
         self.observe_run_delivery(&run_id, &task.id)
+    }
+
+    /// Keep repository identity resolution bounded across a codebase scan,
+    /// including failed resolutions, without weakening delivery ownership checks.
+    pub(crate) fn observe_codebase_task_delivery(
+        &self,
+        task_id: &str,
+        repository: &std::cell::OnceCell<Option<String>>,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        tracing::debug!(task_id, codebase_delivery_observation = true);
+        let task_id = bounded_id(task_id, "task_id")?;
+        let task = self.get_task(task_id)?;
+        let run_id = self.latest_delivery_run_id(&task.id)?;
+        self.observe_run_delivery_with_repository(&run_id, &task.id, || {
+            repository
+                .get_or_init(|| self.delivery_repository())
+                .clone()
+        })
+    }
+
+    fn delivery_repository(&self) -> Option<String> {
+        crate::application::automation::source::Source::new(&self.paths().repo_root)
+            .repository()
+            .ok()
     }
 
     fn latest_delivery_run_id(&self, task_id: &str) -> Result<String, OrbitError> {
