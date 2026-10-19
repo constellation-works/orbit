@@ -55,9 +55,13 @@ unscoped task edits remain refused during the claim. Automation and agent
 comments are not steering.
 
 The run carries outstanding operator comments, oldest first, in its next safe
-task-context prompt. Each comment is delivered at most once per run. Confirm
-delivery in the task history's `steering_delivered` event and the agent's
-`steering-ack` in its execution summary.
+task-context prompt. Each comment is delivered at most once per run. Verify
+delivery with `orbit task show <task-id>`: find the `steering_delivered` event
+for the run and step, then confirm the comment is listed under `delivered`. A
+comment under `truncated` was not carried in full. The host maintains the
+delivery watermark as internal pipeline state; the event is the operator-facing
+receipt. Agent narrative in the execution summary may help diagnose a run, but
+is not required to confirm delivery.
 
 When steering is enabled, `task_pr_pipeline` and `task_local_pipeline`, plus
 `task_claimed_pr_pipeline` and `task_claimed_local_pipeline`, check for

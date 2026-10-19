@@ -16,8 +16,12 @@ remain refused. The leaf reads the owner's comment log.
 
 The comment appears in the run's next task-context prompt, oldest first, and is
 delivered at most once in that run. It does not interrupt the current step.
-Check `orbit task show <task-id>` for the `steering_delivered` history event,
-then check the agent's execution summary for its `steering-ack`.
+Verify delivery in `orbit task show <task-id>` by finding the
+`steering_delivered` history event for the run and step and checking that the
+comment appears under `delivered`. A comment under `truncated` was not carried
+in full. The delivery watermark is internal host state; the history event is
+the operator-facing receipt. Agent narrative in the execution summary can
+provide diagnostic context, but is not required to confirm delivery.
 
 Before `commit`, the owner PR and local pipelines and their claimed variants
 gate on undelivered comments. A gate refusal spends a steering round and sends
