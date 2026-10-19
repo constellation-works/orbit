@@ -84,10 +84,28 @@ const withoutLimits = () => ({
   readiness: (({ provider_limits: _limits, ...rest }) => ({ ...rest, tasks: [{ task_id: 'ORB-101', status: 'backlog', eligible: false, reason: 'provider_limit' }] }))(READINESS),
 });
 
+// One-shot hold on the next readiness response: `arrived` resolves once the
+// request is in, `release()` lets the response go out.
+let readinessHold = null;
+const holdReadiness = () => {
+  const hold = {};
+  hold.arrived = new Promise((resolve) => { hold.signal = resolve; });
+  hold.released = new Promise((resolve) => { hold.release = resolve; });
+  readinessHold = hold;
+  return hold;
+};
+
 let routeLog = [];
 function api(req, rest, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   if (req.method !== 'GET') return json({ ok: true });
+  if (rest === 'workflows/auto/readiness' && readinessHold) {
+    const hold = readinessHold;
+    readinessHold = null;
+    hold.signal();
+    hold.released.then(() => json(legacy ? withoutLimits().readiness : READINESS));
+    return;
+  }
   if (rest === 'workspaces') return json(WORKSPACES);
   if (rest === 'tasks') return json({ items: TASKS, total: TASKS.length, limit: 50, offset: 0, next_cursor: null });
   if (rest === 'tasks/all') return json({ items: [], total: 0 });
@@ -145,6 +163,18 @@ const settled = (page) => page.waitForFunction(() => [...document.querySelectorA
 let browser;
 const pageErrors = [];
 const evidenceLog = { schemes: {} };
+
+// The Drain card has rendered a readiness response: the phase is stamped on the
+// card, the body is no longer busy, and neither the static "Loading…" skeleton
+// nor an error note is showing. Page-side source, run by `evaluate` and
+// `waitForFunction`.
+const DRAIN_RENDERED = `(() => {
+  const card = document.getElementById('auto-drain-panel');
+  const body = document.getElementById('auto-drain-body');
+  const rendered = Boolean(card?.dataset.drainState) && body?.getAttribute('aria-busy') !== 'true'
+    && !body.querySelector('.skeleton-state, .action-error');
+  return { rendered, body: body?.textContent ?? '' };
+})()`;
 
 // The contrast ratio of two `rgb(...)` colours, by WCAG relative luminance.
 const contrast = (fg, bg) => {
@@ -268,13 +298,27 @@ try {
     await page.locator('[data-key="crews.opus"] .config-crew-limit').waitFor({ state: 'visible' });
     const cells = await page.evaluate(() => [...document.querySelectorAll('.config-crew-limit')].map((cell) => cell.textContent));
     assert(cells.length === 3 && cells.every((text) => text === '—'), `without limits every crew shows the placeholder: ${JSON.stringify(cells)}`);
-    await page.goto(`${origin}/#auto-drain`);
-    await page.locator('#auto-drain-panel').waitFor({ state: 'visible' });
-    await settled(page);
-    const legacyDrain = await page.evaluate(() => ({
+    // The card starts as a static "Loading…" placeholder, so absence of the
+    // note only means something once the readiness response has rendered. Hold
+    // that response on a fresh page: the card must read as not rendered while
+    // it is pending, and only the released legacy response completes it.
+    const drainPage = await context.newPage();
+    drainPage.on('pageerror', (error) => pageErrors.push(`legacy drain: ${error.message}`));
+    const hold = holdReadiness();
+    await drainPage.goto(`${origin}/#auto-drain`);
+    await hold.arrived;
+    const pending = await drainPage.evaluate(DRAIN_RENDERED);
+    assert(!pending.rendered && pending.body.includes('Loading…'), `a held readiness response leaves the Drain card loading: ${JSON.stringify(pending)}`);
+    hold.release();
+    await drainPage.waitForFunction(`${DRAIN_RENDERED}.rendered`);
+    await settled(drainPage);
+    const legacyDrain = await drainPage.evaluate(() => ({
       note: Boolean(document.querySelector('.drain-provider-limit-note')),
+      ...(document.getElementById('auto-drain-body').textContent.includes('Loading…') ? { loading: true } : {}),
     }));
+    assert(!legacyDrain.loading, 'the legacy readiness card finished loading before the absence check');
     assert(!legacyDrain.note, 'no provider-limit note without readings');
+    await drainPage.close();
 
     await page.goto(`${origin}/#tasks`);
     await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
