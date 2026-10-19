@@ -4,6 +4,7 @@ pub mod codebase;
 pub mod drain;
 pub mod friction;
 pub mod operation;
+pub mod orchestrator;
 pub mod search;
 pub mod task;
 pub mod workflow;

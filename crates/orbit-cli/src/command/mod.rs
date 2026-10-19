@@ -16,6 +16,7 @@ pub mod log;
 pub mod mcp;
 pub mod migrate;
 pub mod operation;
+pub mod orchestrator;
 pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
@@ -100,6 +101,7 @@ Operate:
 Observe:
   audit       Query the audit event log
   codebase    Rank the repository paths that are risky for agents to change
+  orchestrator Score orchestrators by the work they file and supervise
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
@@ -166,6 +168,7 @@ pub enum Commands {
     // ── Observe ──
     Audit(audit::AuditCommand),
     Codebase(codebase::CodebaseCommand),
+    Orchestrator(orchestrator::OrchestratorCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 

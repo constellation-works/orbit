@@ -440,6 +440,10 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
+            // The orchestrator scorecard is registry-driven like codebase.
+            Commands::Orchestrator(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Orchestrator))
+            }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),

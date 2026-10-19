@@ -52,6 +52,27 @@ fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
     );
 }
 
+/// Analytics › Orchestrators renders its definition tiles, components before
+/// the composite, greys below-support rows, toggles per 100 tasks and per 8
+/// active hours, and opens a count's tasks from the cached detail.
+#[test]
+fn orchestrators_view_executes_rate_toggle_sorting_and_drill_down() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_orchestrators.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard orchestrators fixture");
+    assert!(
+        result.status.success(),
+        "dashboard orchestrators view behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[test]
 fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
     let result = std::process::Command::new("node")

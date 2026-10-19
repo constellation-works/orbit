@@ -5,6 +5,7 @@ pub mod command;
 mod domain_control;
 pub mod drain;
 pub mod operation;
+mod orchestrator;
 pub mod pipeline;
 pub mod search;
 pub mod task;

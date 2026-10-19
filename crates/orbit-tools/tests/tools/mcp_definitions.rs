@@ -68,6 +68,8 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.command.exec",
             "orbit.friction.add",
             "orbit.friction.update",
+            "orbit.orchestrator.scorecard",
+            "orbit.orchestrator.show",
             "orbit.pipeline.invoke",
             "orbit.routine.control",
             "orbit.search",

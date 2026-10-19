@@ -622,6 +622,85 @@
     }
   },
   {
+    "name": "orbit_orchestrator_scorecard",
+    "description": "Score each orchestrator named by tasks' orchestrator attribution over the tasks it owns that were created in the window: throughput (owned, landed, complexity-weighted landed), proactivity from the typed origin (landed and dropped orchestrator_initiative tasks, unknown origin separately), spec defects (criteria or description edits after the first run, criteria blocks and escalations, incomplete or spec_ambiguous regressions) and rework (review rejects, blocked or unmerged PRs, repeat runs, operator requeues, by cause). Each count is normalized per 100 owned tasks and per 8 active hours, with support counts, then a composite whose weights are in `definitions`. The same payload the dashboard's Orchestrators view reads.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "window": {
+          "type": "string",
+          "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "orbit_orchestrator_show",
+    "description": "One orchestrator's scorecard row and, for every component, the task IDs behind its count with the history records that make it (when, what, and the attributed cause for rework). Use it to follow a count from `orbit_orchestrator_scorecard` to its tasks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "orchestrator": {
+          "type": "string",
+          "description": "The orchestrator name a task's orchestrator attribution records."
+        },
+        "window": {
+          "type": "string",
+          "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "orchestrator"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_pipeline_invoke",
     "description": "Submit a durable pipeline run and return immediately with its run ID. Public submissions require an operator; managed runs may invoke only a host-authorized child pipeline admission.",
     "inputSchema": {
