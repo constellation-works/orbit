@@ -71,14 +71,14 @@ const SETTLEMENT_MATCH_SECONDS: i64 = 300;
 /// directory (`dir:` selector) rather than a file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(in crate::application) struct Anchor {
-    pub(super) path: String,
-    pub(super) dir: bool,
+    pub(in crate::application) path: String,
+    pub(in crate::application) dir: bool,
 }
 
 impl Anchor {
     /// Parse a context selector (`file:`, `dir:`, `symbol:`) or a bare
     /// reservation path. Module and command selectors carry no path.
-    pub(super) fn parse(raw: &str) -> Option<Self> {
+    pub(in crate::application) fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         if raw.is_empty() {
             return None;
@@ -204,8 +204,9 @@ pub(super) struct TaskFacts {
     /// Landing receipt time, else done time: admits delivery fallback and
     /// places unavailable deliveries in the same window.
     pub(super) delivery_at: Option<DateTime<Utc>>,
-    /// For a landed task, what its task-pilot receipts predicted.
-    pub(super) pilot: Option<super::pilot::PilotFacts>,
+    /// For a landed task, what its task-pilot receipts record; attributed to
+    /// a pilot run only when the pilots scorecard reads it.
+    pub(super) pilot: Option<super::pilot::PilotInputs>,
     /// Tagged `no-diff-expected`: the task was not meant to change files.
     pub(super) no_diff: bool,
     pub(super) id: String,
@@ -296,6 +297,9 @@ pub(super) struct LockDenial {
     pub(super) task_ids: Vec<String>,
     /// The files the request conflicted on.
     pub(super) files: Vec<Anchor>,
+    /// Each conflicting file and a task holding it: the task whose context
+    /// lock held it, or each task the holding reservation named.
+    pub(super) holders: Vec<(Anchor, String)>,
 }
 
 /// One workspace scan: the per-task facts every ranking slices by window,
@@ -439,7 +443,6 @@ pub(super) fn scan(
     let mut stored = super::stored::StoredFacts::load(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
     let mut landed_scan = include_landed.then(|| super::landed::Scanner::new(runtime));
-    let mut pilot_runs = None;
     for task in tasks {
         let id = task.id.to_string();
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
@@ -489,13 +492,11 @@ pub(super) fn scan(
             .then(|| {
                 // A delivery-observed landing has no receipt, so its pilot
                 // receipts were not read with its stored facts.
-                let inputs = if entry.facts.receipt.is_some() {
+                if entry.facts.receipt.is_some() {
                     entry.facts.pilot.clone()
                 } else {
                     super::pilot::inputs(runtime, &id).ok().flatten()
-                }?;
-                let runs = pilot_runs.get_or_insert_with(|| super::pilot::PilotRuns::load(runtime));
-                Some(super::pilot::attribute(runtime, runs, inputs, computed_at))
+                }
             })
             .flatten();
         stored.keep(&id, &entry);
@@ -528,6 +529,7 @@ pub(super) fn scan(
     attach_regressions(&mut facts, pending_links);
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
+    let mut reservation_tasks: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let reservations = runtime
         .list_task_reservation_history()?
         .into_iter()
@@ -538,6 +540,7 @@ pub(super) fn scan(
             for task_id in &record.task_ids {
                 admissions.entry(task_id.clone()).or_default().push(at);
             }
+            reservation_tasks.insert(record.reservation_id.clone(), record.task_ids.clone());
             Some(ReservationFacts {
                 at,
                 requesters: requester_identities(
@@ -560,7 +563,7 @@ pub(super) fn scan(
         .sqlite_store()?
         .list_task_lock_denials(&runtime.workspace_id()?)?
         .iter()
-        .filter_map(lock_denial)
+        .filter_map(|event| lock_denial(event, &reservation_tasks))
         .collect();
 
     for grants in admissions.values_mut() {
@@ -779,7 +782,11 @@ pub(in crate::application) fn actor_kind(by: &str) -> &'static str {
 
 /// A lock-conflict denial from `orbit.task.locks.reserve`. Capability
 /// refusals and denials without a conflict are not contention.
-fn lock_denial(event: &TaskLockDenialRecord) -> Option<LockDenial> {
+/// `reservation_tasks` names the tasks of each recorded reservation, by id.
+fn lock_denial(
+    event: &TaskLockDenialRecord,
+    reservation_tasks: &BTreeMap<String, Vec<String>>,
+) -> Option<LockDenial> {
     let arguments: Value = serde_json::from_str(&event.arguments_json).ok()?;
     let strings = |key: &str| -> Vec<String> {
         arguments
@@ -809,6 +816,22 @@ fn lock_denial(event: &TaskLockDenialRecord) -> Option<LockDenial> {
     }
     files.sort();
     files.dedup();
+    let mut holders: Vec<(Anchor, String)> = conflicts
+        .iter()
+        .filter_map(|conflict| {
+            let file = Anchor::parse(conflict.get("file")?.as_str()?)?;
+            let id = conflict.get("held_by_id")?.as_str()?;
+            let tasks = match conflict.get("held_by")?.as_str()? {
+                "task" => vec![id.to_string()],
+                "reservation" => reservation_tasks.get(id).cloned().unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            Some(tasks.into_iter().map(move |task| (file.clone(), task)))
+        })
+        .flatten()
+        .collect();
+    holders.sort();
+    holders.dedup();
     let run = arguments
         .get("owner_run_id")
         .and_then(Value::as_str)
@@ -826,6 +849,7 @@ fn lock_denial(event: &TaskLockDenialRecord) -> Option<LockDenial> {
         contenders,
         task_ids,
         files,
+        holders,
     })
 }
 

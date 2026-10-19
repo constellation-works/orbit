@@ -6,9 +6,10 @@
 //! task history; a wait is read off those. It starts at a task's first denial on a path and ends at its
 //! admission (its next reservation grant) or at the end of its eligibility
 //! (its next status change away from `backlog`). Retries in between are the
-//! same wait.
+//! same wait. Each denial names the tasks holding the conflicting files, so
+//! an episode also knows whom it waited on.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -49,6 +50,8 @@ pub(super) struct WaitEpisode {
     pub(super) ended_at: DateTime<Utc>,
     pub(super) end: WaitEnd,
     pub(super) denials: usize,
+    /// The tasks holding the path at any of the episode's denials.
+    pub(super) holders: BTreeSet<String>,
 }
 
 impl WaitEpisode {
@@ -112,10 +115,19 @@ pub(super) fn wait_episodes(facts: &CodebaseFacts, params: &Params) -> Vec<(Stri
         let within = params.within(denial.at);
         for task_id in &denial.task_ids {
             for key in params.rollup.keys(&denial.files) {
+                let holders = denial
+                    .holders
+                    .iter()
+                    .filter(|(file, holder)| {
+                        holder != task_id && params.rollup.keys([file]).contains(&key)
+                    })
+                    .map(|(_, holder)| holder.clone())
+                    .collect::<Vec<_>>();
                 if let Some(&index) = open.get(&(task_id.as_str(), key.clone())) {
                     let (_, episode, in_window) = &mut episodes[index];
                     if episode.end == WaitEnd::Waiting || denial.at < episode.ended_at {
                         episode.denials += 1;
+                        episode.holders.extend(holders);
                         *in_window |= within;
                         continue;
                     }
@@ -139,6 +151,7 @@ pub(super) fn wait_episodes(facts: &CodebaseFacts, params: &Params) -> Vec<(Stri
                         ended_at,
                         end,
                         denials: 1,
+                        holders: holders.into_iter().collect(),
                     },
                     within,
                 ));

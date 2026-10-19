@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Target design for the Agents dashboard destination; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts.rs", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -18,11 +18,11 @@ related_artifacts: []
 
 This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators, Implementers and Reviewers roles (§5.1–5.3), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
+The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents).
 
 ## 1. Destination and Layout
 
-**Current**, except the Pilots panel and the move of the Task pilot ranking, which arrive with the pilots role.
+**Current**.
 
 **Agents** is a top-level Observe destination beside Health and Analytics. Its secondary tabs are its roles: **Orchestrators** (`#agents/orchestrators`, the default), **Implementers** (`#agents/implementers`), **Reviewers** (`#agents/reviewers`) and **Pilots** (`#agents/pilots`). Each tab shows its count of ranked rows. Navigation changes:
 
@@ -53,7 +53,7 @@ A row is a **crew and model**: the `resolved_crew` and `crew_model` of the job r
 
 ## 3. Attribution: Each Problem Has One Owner
 
-**Current** for every problem in §3.1 except the two pilot problems, which track F adds to the scan.
+**Current** for every problem in §3.1.
 
 Every problem counts against exactly one role, or against none (**Not scored**). Credit is separate: when one role's problem is caught or fixed by another, the catcher may earn credit (a reviewer's held finding), but the problem still counts once. The rule is recorded as [Each problem counts against exactly one role](./4_decisions.md#each-problem-counts-against-exactly-one-role).
 
@@ -77,7 +77,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Reviewer fix that failed owner revalidation | gate escalation | Reviewer | the review run that made the fix |
 | Finding filed as a task by a review job and REJECTED by finding verification | `finding_verified` history | Reviewer | the review job run that filed it |
 | Review verdict `incomplete` | review report | Reviewer | the review run; Not scored (`infrastructure`) when run failure classification names the block that followed as infrastructure |
-| Landed file outside every selector that caused a footprint block or lock conflict | codebase facts | Pilot | the pilot run behind the newest pilot receipt |
+| Landed file outside every pilot selector that a base-conflict block or a refused lock request of the task named | codebase facts | Pilot | the pilot run behind the newest pilot receipt |
 | Lock wait on a path the holder reserved through a selector that covered none of its landed files | lock-wait episodes, pilot receipt | Pilot | the holder task's pilot run |
 | Rework with cause `infrastructure` or `other` | history | Not scored | — |
 
@@ -93,7 +93,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 - **Implementation run**: the activity job run that produced the candidate. A problem recorded on a task is charged to the implementation run whose span (the run's start to the next status change, as `run_spans` computes it today) contains the problem's timestamp. If none does, it goes to the most recent run before it.
 - **Final implementation run**: the run whose candidate landed. Landed credit, first-pass accepts, and `no_test` regressions go to it.
 - **Review run**: the review gate's settlement comment for the attempt. Its reviewer line names the row's crew and model. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
-- **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched the way `codebase/pilot.rs` matches them today.
+- **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot.rs`).
 
 ### 3.3 The attribution strip
 
@@ -259,24 +259,28 @@ The role panel, **How verdicts turned out**, splits each reviewer's settled revi
 
 ### 5.4 Pilots
 
-Unit: **assessed tasks**, meaning done tasks whose newest task-pilot receipt was written in the window. Bulk tasks (more than 12 landed files) and `no-diff-expected` tasks are left out, as today. Recall, precision, F1 and the mirrored-file and generated-file coverage rules stay those of `codebase/pilot.rs`.
+**Current.**
+
+Unit: **assessed tasks**, meaning done tasks with a landed commit whose newest task-pilot receipt was written in the window. Bulk tasks (more than 12 landed files) and `no-diff-expected` tasks are left out. A row is the crew and model of the pilot run the newest receipt names (`pilot_run_id`); an older receipt without that field is matched to the one task-pilot run active when it was written, or among several, the one whose step outputs carry its operation id. A receipt whose run is not found is ranked as `crew unknown`.
+
+The pilot's selectors are the newest receipt's `context_files_after`; the filer's are the oldest receipt's `context_files_before`. Both are graded against the files the landed commit changed. Recall is landed files a selector covers ÷ landed files; precision is selectors that cover a landed file ÷ selectors; F1 is their harmonic mean. A `dir:` selector covers the files beneath it and a wildcard selector the files it matches. A mirrored or generated output counts as covered when a selector covers its source: `plugin/skills/**` through `crates/orbit-core/assets/skills/**`, the CLI help, output and MCP snapshot goldens through any CLI, MCP, tools or governance source, and `docs/INDEX.md` through any `docs/` file. These rules live in `application/agents/roles/pilots.rs`; Analytics › Codebase no longer grades pilots.
 
 | Term | Weight | Definition |
 |---|---|---|
-| F1 lift | +1 | F1 points gained over the filer's own selectors from before any pilot ran. |
-| Tier calibration | +0.25 | Percent of tasks whose assessed complexity matches their observed tier. |
-| Costly misses | −1 | Landed files no pilot selector covered that caused a footprint block or a lock conflict. |
+| F1 lift | +1 | F1 points gained over the filer's own selectors from before any pilot ran, per task. A task's lift can be negative. |
+| Tier calibration | +0.25 | Tasks whose assessed complexity matches their observed tier, so per 100 tasks the percent on the tier. |
+| Costly misses | −1 | Landed files no pilot selector covered that a base-conflict block of the task, or a refused lock request of the task, named. |
 | Lock-wait hours | −1 | Hours other tasks waited, in lock-wait episodes, on paths the holder reserved through a pilot selector that covered none of the holder's landed files. |
 
-The **observed tier** ranks the window's assessed tasks by total implementation cost and cuts the ranking into tiers in the same proportions the pilots assigned. Calibration therefore measures whether a pilot orders work correctly, not whether it guesses absolute cost (§11).
+A lock-wait episode (Analytics › Codebase's lock contention) knows its holders: each refused request records which task or reservation held each conflicting path, and a reservation resolves to the tasks it named. A wait is charged to a holder's pilot when at least one of the holder's pilot selectors reserves the path and none of those selectors covered a landed file. A wait on a path that a useful selector reserved is not charged, and neither is a wait on a holder no pilot assessed. Both pilot problems count against the pilot run of the holder's newest receipt, in the window that receipt falls in.
 
-Shown, not scored:
-- cost and median time per assessment;
-- selectors per task;
-- recall and precision;
-- the share of tasks assessed within one tier.
+The **observed tier** ranks the window's assessed tasks that have an assessed tier (low, medium, hard or xhard) and a total implementation cost (every attempt's run priced) by that cost, cheapest first, and cuts the ranking into tiers in the same proportions the pilots assigned. The observed column totals therefore equal the assessed row totals. Calibration measures whether a pilot orders work correctly, not whether it guesses absolute cost (§11). Tasks without a tier or a priced implementation are not placed. Cost decides only the observed tier and is never a term.
 
-The role panel is the assessed-by-observed tier matrix for every pilot, with counts of work called too easy and too hard.
+Shown, not scored (`stats`): recall, precision and F1 pooled over the row's tasks, the filer's F1, landed files no pilot selector covered, unused selectors, selectors per task, the share of placed tasks assessed within one tier, cost per assessment (null when a pilot run is missing or unpriced), median pilot run duration, and `tier_matrix`.
+
+`tier_matrix` is `{tiers, rows, placed, not_placed, on_tier, too_easy, too_hard}`: `tiers` lists the tiers present in the window, cheapest first; each of `rows` is `{assessed, observed}` with one count per tier in `tiers`. Too easy counts tasks assessed below their observed tier and too hard those assessed above it.
+
+The role panel (`js/agents-pilots.js`) is that assessed-by-observed tier matrix for every pilot, the diagonal highlighted, with on-tier, too-easy, too-hard and not-placed counts. The detail column leaves structured stats to the panel.
 
 A landed file outside the declared context on a task no pilot assessed is not charged to anyone in v1 (§11).
 
@@ -329,7 +333,7 @@ Each of those scans once per call and reports `cache_ttl_seconds: 0`. The defini
 
 ## 8. Scan, Cache and Budget
 
-**Current**, except the pilot inputs, which track F adds.
+**Current.**
 
 One `AgentFacts` scan per workspace serves all four roles and the attribution strip. It reads:
 - every task created or updated in the last 90 days, with its history and comments;
@@ -337,7 +341,7 @@ One `AgentFacts` scan per workspace serves all four roles and the attribution st
 - the review gate's settlement and escalation comments, and, for each judged `reject`, the cited paths' blobs in the rejected and next reviewed candidates, read from the workspace repository without fetching;
 - the `finding_verified` history of review findings filed as tasks;
 - the `regression_from` links and failed claim settlements;
-- task-pilot receipts and the codebase facts the pilot terms need (landed files, footprint blocks, lock-wait episodes), once track F lands.
+- task-pilot receipts and the codebase facts the pilot terms need (landed files, base-conflict blocks, lock denials with their holders, lock-wait episodes), from the incremental Analytics › Codebase scan (`codebase_scan`), whose stored per-task facts keep the pilot receipts. A failed codebase scan leaves the pilots role without rows and logs a warning rather than failing the other roles.
 
 It reads at most 90 days back. `all` is served as 90 days, so the scan stays bounded however old the workspace gets.
 
@@ -372,7 +376,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | C | Dashboard shell: Agents destination, `#agents/<role>` routing and redirect, the generic renderer; removes Analytics › Orchestrators and the `/api/orchestrators/*` routes. Landed. | B | `assets/dashboard/js/agents.js`, `js/agents-orchestrators.js`, `css/agents.css`, `index.html`, `app.js`, removal of `js/orchestrators.js` and `api/orchestrators.rs` |
 | D | Implementers role and its panel | C | `application/agents/roles/implementers.rs`, `js/agents-implementers.js` |
 | E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel. Landed. | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
-| F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
+| F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase. Landed. | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
 | G | CLI and MCP (`orbit agents`, `orbit.agents.*`, aliases); moves `orbit orchestrator` and `orbit.orchestrator.*` onto the new scorecard and removes `application/orchestrators/`. Landed. | C | `orbit-cli` and `orbit-tools` command and tool files, goldens |
 
 ```
@@ -404,7 +408,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
 - ORB-16954 — track D: the Implementers role and cost/tier panel (current).
 - ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
-- ORB-16956 — track F: the Pilots role (planned).
+- ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
 - ORB-16957 — track G: CLI and MCP (planned).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

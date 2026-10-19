@@ -4,10 +4,10 @@
 // `#agents/orchestrators`, the role tabs and their counts, row selection
 // driving the detail column, the disclosure surviving a refresh, the
 // Implementers cost frontier and tier table, the Reviewers provisional
-// banner, `accepts often` tag and verdict-outcome bars, the not_computed and
-// empty states, and the 375px layout (ranking scrolling in its own box, detail
-// stacked below, 44px touch targets). Screenshots of each role tab at 1440 and
-// 375 go to the evidence directory.
+// banner, `accepts often` tag and verdict-outcome bars, the Pilots
+// tier-calibration matrices, the empty state, and the 375px layout (ranking
+// scrolling in its own box, detail stacked below, 44px touch targets).
+// Screenshots of each role tab at 1440 and 375 go to the evidence directory.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -15,6 +15,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 import { implementerCard, implementerDetail } from './agents_implementers_fixture.mjs';
+import { pilotCard, pilotDetail } from './agents_pilots_fixture.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -44,10 +45,6 @@ const TERMS = {
     ['failed_fixes', 'Failed fixes', -1, 'problem', 'Reviewer fixes that failed owner revalidation and were escalated.'],
     ['missed_regressions', 'Missed regressions', -4, 'problem', 'Regressions with escape review_missed against tasks the row accepted, whenever filed.'],
     ['incomplete_reviews', 'Incomplete reviews', -0.5, 'problem', 'incomplete verdicts not caused by infrastructure.'],
-  ],
-  pilots: [
-    ['f1_lift', 'F1 lift', 1, 'credit', 'F1 points gained over the filer\'s own selectors.'],
-    ['costly_misses', 'Costly misses', -1, 'problem', 'Landed files no pilot selector covered that caused a block.'],
   ],
 };
 const terms = role => TERMS[role].map(([key, label, weight, group, definition]) => ({ key, label, weight, group, definition }));
@@ -109,7 +106,7 @@ function header(role, url) {
   return {
     role, window: requested === 'all' ? '90d' : requested, requested_window: requested,
     since: '2026-09-19T08:00:00Z', min_support: 10, computed_at: computedAt, cache_ttl_seconds: 300, tasks_scanned: 6450,
-    status: ['orchestrators', 'implementers', 'reviewers'].includes(role) ? 'ok' : 'not_computed', unit: UNITS[role], terms: terms(role),
+    status: 'ok', unit: UNITS[role], terms: TERMS[role] ? terms(role) : [],
   };
 }
 function scorecard(role, url) {
@@ -119,6 +116,7 @@ function scorecard(role, url) {
     const rows = url.searchParams.get('window') === '1h' ? [] : REVIEWER_ROWS;
     return { ...head, fleet_average: rows.length ? REVIEWER_FLEET : null, provisional: rows.reduce((sum, row) => sum + row.provisional, 0), rows };
   }
+  if (role === 'pilots') return { ...pilotCard(), computed_at: computedAt };
   if (role !== 'orchestrators') return { ...head, fleet_average: null, rows: [] };
   const rows = url.searchParams.get('window') === '1h' ? [] : orchestratorRows;
   return { ...head, fleet_average: rows.length ? 192.13 : null, rows };
@@ -136,6 +134,7 @@ const REVIEWER_TASKS = {
 };
 function detail(role, url) {
   if (role === 'implementers') return implementerDetail(url.searchParams.get('crew'), url.searchParams.get('model'));
+  if (role === 'pilots') return { ...pilotDetail(url.searchParams.get('crew'), url.searchParams.get('model')), computed_at: computedAt };
   const crew = url.searchParams.get('crew');
   if (role === 'reviewers') {
     const row = REVIEWER_ROWS.find(entry => entry.crew === crew);
@@ -239,11 +238,10 @@ try {
   pass('legacy route opens Agents');
 
   // Role tabs and their counts; the strip; the default selection.
-  await page.waitForFunction(() => document.getElementById('agents-count-pilots').textContent === '—');
-  await page.locator('#agents-roles .agents-role-count').allTextContents();
   await page.waitForFunction(() => document.getElementById('agents-count-reviewers').textContent === '2');
+  await page.waitForFunction(() => document.getElementById('agents-count-pilots').textContent === '2');
   const counts = await page.locator('#agents-roles .agents-role-count').allTextContents();
-  assert.deepEqual(counts, ['3', '5', '2', '—'], 'three ranked orchestrators, five implementers and two reviewers; pilots is not computed');
+  assert.deepEqual(counts, ['3', '5', '2', '2'], 'three ranked orchestrators, five implementers, two reviewers and two pilots');
   assert.match(await body.locator('.agents-strip').textContent(), /131 problems in 30d/);
   assert.equal(await body.locator('.agents-strip-seg.is-current.agents-owner-orchestrators').count(), 1);
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'claude-orchestrator');
@@ -316,18 +314,6 @@ try {
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-1440');
 
-  // The other role tabs are not computed yet.
-  for (const role of ['pilots']) {
-    await page.locator(`#agents-roles [data-view="${role}"]`).click();
-    await body.locator('.agents-state-not-computed').waitFor();
-    assert.equal(new URL(page.url()).hash, `#agents/${role}?window=30d`);
-    assert.match(await body.locator('.agents-state').textContent(), /not computed yet/);
-    assert.equal(await body.locator('.agents-ranking').count(), 0);
-    assert.equal(await body.locator('.agents-strip li.is-current').getAttribute('data-owner'), role);
-    await shot(`agents-${role}-dark-1440`);
-  }
-  pass('not computed roles');
-
   // Implementers uses the shared ranking/detail and its own cost/tier panel.
   await page.locator('#agents-roles [data-view="implementers"]').click();
   await body.locator('.agents-cost-point').first().waitFor();
@@ -361,6 +347,42 @@ try {
   await shot('agents-implementers-tiers-dark-375');
   await page.setViewportSize({ width: 1440, height: 1100 });
   pass('implementers ranking, detail, frontier and tier comparison at desktop and phone widths');
+
+  // Pilots: the shared ranking and detail, then one tier matrix per row with
+  // its diagonal and its too-easy and too-hard counts, at both widths.
+  await page.locator('#agents-roles [data-view="pilots"]').click();
+  await body.locator('.agents-tier-card').first().waitFor();
+  await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(new URL(page.url()).hash, '#agents/pilots?window=30d');
+  assert.equal(await body.locator('.agents-row').count(), 3);
+  assert.equal(await body.locator('#agents-detail h3').textContent(), 'luna');
+  assert.equal(await body.locator('.agents-penalty').getAttribute('data-term'), 'lock_wait_hours');
+  assert.doesNotMatch(await body.locator('.agents-stats').textContent(), /object Object/, 'the matrix is not a detail stat');
+  assert.equal(await body.locator('.agents-tier-card').count(), 3);
+  assert.equal(await body.locator('.agents-tier-matrix').count(), 2, 'a row with nothing placed has no matrix');
+  assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-cell.is-on').allTextContents(), ['3', '4', '2']);
+  assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-counts dd').allTextContents(), ['9', '2', '2', '1']);
+  await shot('agents-pilots-dark-1440');
+  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.evaluate(() => window.scrollBy(0, -80));
+  await shot('agents-pilots-panel-dark-1440');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(100);
+  const pilotsPhone = await page.evaluate(() => ({
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    cardsInside: [...document.querySelectorAll('.agents-tier-card')].every(card => {
+      const box = card.getBoundingClientRect();
+      return box.left >= 0 && box.right <= window.innerWidth;
+    }),
+  }));
+  assert.deepEqual(pilotsPhone, { pageOverflow: false, cardsInside: true }, 'pilots fit 375px');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shot('agents-pilots-dark-375');
+  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.evaluate(() => window.scrollBy(0, -80));
+  await shot('agents-pilots-panel-dark-375');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  pass('pilots ranking, detail and tier matrices at desktop and phone widths', pilotsPhone);
 
   // An empty window says so.
   await page.locator('#agents-roles [data-view="orchestrators"]').click();
@@ -427,14 +449,6 @@ try {
   await shot('agents-reviewers-ranking-dark-375');
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-375');
-  for (const role of ['pilots']) {
-    await page.locator(`#agents-roles [data-view="${role}"]`).click();
-    await body.locator('.agents-state-not-computed').waitFor();
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `${role} fits 375px`);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await shot(`agents-${role}-dark-375`);
-  }
-  pass('phone role tabs');
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));
   console.log(JSON.stringify({ ok: true, checks: results.map(result => result.name) }));

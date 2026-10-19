@@ -1,6 +1,6 @@
-//! The six path rankings of the codebase view and the task-pilot ranking
-//! ([`super::pilot`]), computed from scan facts for one window, minimum
-//! support and rollup, and the paths several of them share.
+//! The six path rankings of the codebase view, computed from scan facts for
+//! one window, minimum support and rollup, and the paths several of them
+//! share.
 //!
 //! Every ranking is a rate over distinct tasks (or requesting identities for
 //! contention, reservations for coupling) with its numerator and denominator,
@@ -192,7 +192,6 @@ pub(super) fn all_sections(facts: &CodebaseFacts, params: &Params) -> Value {
         "change_coupling": change_coupling(facts, params),
         "blocked": blocked(facts, params),
         "rejected": rejected(facts, params),
-        "task_pilot": super::pilot::task_pilot(facts, params),
     });
     sections["overlap"] = overlap(&sections);
     sections

@@ -2,9 +2,10 @@
 //! activity in the last 90 days (envelope, history and comments), the
 //! implementation job runs that name those tasks, the review gate's
 //! settlement comments, the finding-verification verdicts on review-filed
-//! findings and the typed `regression_from` links. The scan keeps the
-//! records; [`super::attribution`] decides who each problem counts against,
-//! and the roles only slice the result by window.
+//! findings, the typed `regression_from` links and, from the codebase scan,
+//! each pilot assessment of a done task graded against its landed diff. The
+//! scan keeps the records; [`super::attribution`] decides who each problem
+//! counts against, and the roles only slice the result by window.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -24,8 +25,9 @@ use super::records::{
     Cause, block_cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed,
     landing_pr, restart_cause, run_spans, spec_blocker_kind, spec_documents,
 };
+use super::roles::pilots::{Graded, grade_all};
 use crate::OrbitRuntime;
-use crate::application::codebase::failed_claim_settlements;
+use crate::application::codebase::{PilotEvidence, failed_claim_settlements, pilot_evidence};
 use crate::application::task::{
     FindingSeverity, FindingVerdict, is_review_finding, latest_verification,
 };
@@ -95,6 +97,12 @@ pub enum Problem {
     RejectedFinding,
     /// A review gate settlement with verdict `incomplete`.
     IncompleteReview,
+    /// A landed file no pilot selector covered that a base-conflict block or
+    /// a refused lock request of the task named.
+    CostlyMiss,
+    /// Another task's lock wait on a path the task held only through pilot
+    /// selectors that covered none of its landed files.
+    LockWait,
 }
 
 impl Problem {
@@ -116,6 +124,8 @@ impl Problem {
             Problem::FalseReject => "false_reject",
             Problem::RejectedFinding => "rejected_finding",
             Problem::IncompleteReview => "incomplete_review",
+            Problem::CostlyMiss => "costly_miss",
+            Problem::LockWait => "lock_wait",
         }
     }
 
@@ -328,6 +338,8 @@ pub struct AgentFacts {
     pub(super) charges: Vec<Charge>,
     pub(super) run_costs: BTreeMap<String, Option<f64>>,
     pub(super) credits: Vec<Credit>,
+    /// Each pilot assessment of a scanned done task, graded.
+    pub(super) pilots: Vec<Graded>,
 }
 
 impl AgentFacts {
@@ -407,7 +419,10 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
         facts.push(task_facts);
     }
 
-    let (charges, credits) = attribution::attribute(&facts, &regressions);
+    let scanned: BTreeSet<&str> = facts.iter().map(|task| task.id.as_str()).collect();
+    let mut pilots = grade_all(pilot_scan(runtime));
+    pilots.retain(|graded| scanned.contains(graded.task_id.as_str()));
+    let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     Ok(AgentFacts {
         computed_at,
         tasks_scanned,
@@ -415,7 +430,21 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
         charges,
         run_costs,
         credits,
+        pilots,
     })
+}
+
+/// The pilot evidence of the codebase scan, which keeps each task's landed
+/// diff and receipts between scans. A scan that fails leaves the pilots
+/// unscored rather than failing every scorecard.
+fn pilot_scan(runtime: &OrbitRuntime) -> PilotEvidence {
+    match runtime.codebase_scan() {
+        Ok(codebase) => pilot_evidence(runtime, &codebase),
+        Err(error) => {
+            tracing::warn!(%error, "agent scorecards: codebase scan failed; pilots unscored");
+            PilotEvidence::default()
+        }
+    }
 }
 
 /// The same provider/derived telemetry as Cost, grouped by workspace-local
