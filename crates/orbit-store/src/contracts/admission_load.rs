@@ -108,8 +108,10 @@ pub trait AdmissionLoadStoreBackend: Send + Sync {
     /// Under the host lock, an `IMMEDIATE` transaction on this database:
     /// delete expired reservations, read the load fresh, call `decide`, write
     /// one reservation stamped `query.now` per entry it returns, and commit.
-    /// Returns the reservations written. An error from `decide` writes
-    /// nothing.
+    /// A task holds one reservation: those written replace any earlier ones
+    /// for the same `(workspace, task)`, while entries of one call for the
+    /// same task (a pending pull's alternatives) are all kept. Returns the
+    /// reservations written. An error from `decide` writes nothing.
     ///
     /// `decide` runs while the database is locked for writing: it must only
     /// compute, and must not call this store, the network or a subprocess.

@@ -668,6 +668,63 @@ fn the_baseline_never_subtracts_more_than_the_runs_used() {
     );
 }
 
+/// A task holds one reservation: a second decision for it within the TTL
+/// replaces the first, so the forecast counts its profile once, while the
+/// alternatives of one pending pull written together are all kept. A
+/// reservation is priced at its age since it was written, `1, 3, 2` cores
+/// from minute zero when new and `3, 2` once a minute old.
+fn a_task_holds_one_reservation_priced_at_its_age() {
+    let fixture = Fixture::new();
+    fixture.finished_delivery("ORB-p", "small", &[1.0, 3.0, 2.0], &[GIB; 3]);
+    fixture.finished_delivery("ORB-q", "large", &[4.0, 4.0, 4.0], &[GIB; 3]);
+    let now = Utc::now();
+    fixture.reserve_at(now, "ORB-r", "small");
+    let later = now + Duration::seconds(30);
+    fixture.reserve_at(later, "ORB-r", "small");
+
+    let forecast = fixture.forecast_at(later);
+    assert_eq!(reserved(&forecast), ["ORB-r"]);
+    assert_eq!(
+        forecast.reservations[0].reserved_at.timestamp(),
+        later.timestamp()
+    );
+    assert_series(
+        &forecast.cpu.minutes,
+        &[&[1.0, 3.0, 2.0][..], &[0.0; 8]].concat(),
+        "cpu counts the task once",
+    );
+
+    let forecast = fixture.forecast_at(later + Duration::seconds(61));
+    assert_series(
+        &forecast.cpu.minutes,
+        &[&[3.0, 2.0][..], &[0.0; 9]].concat(),
+        "cpu of a reservation a minute old",
+    );
+
+    // Alternatives written by one decision share a key and all stay.
+    let pending = "pending:request-1";
+    fixture
+        .runtime
+        .admit_against_forecast_at(later, |_| {
+            Ok(ForecastDecision {
+                outcome: (),
+                admitted: vec![
+                    fixture.request(pending, "small"),
+                    fixture.request(pending, "large"),
+                ],
+            })
+        })
+        .unwrap();
+    let forecast = fixture.forecast_at(later);
+    assert_eq!(reserved(&forecast), ["ORB-r", pending, pending]);
+    // The pending pull counts the heavier alternative once: 4 cores, not 5.
+    assert_series(
+        &forecast.cpu.minutes,
+        &[&[5.0, 7.0, 6.0][..], &[0.0; 8]].concat(),
+        "cpu",
+    );
+}
+
 /// A reservation stops counting once a delivery run naming its task is
 /// created in its workspace after it, or five minutes after it was written.
 fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
@@ -695,9 +752,10 @@ fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
     );
     let forecast = fixture.forecast_at(now + Duration::minutes(1));
     assert_eq!(reserved(&forecast), ["ORB-dispatched", "ORB-failed"]);
+    // A minute old, each is priced from its second profile minute, the last.
     assert_series(
         &forecast.cpu.minutes,
-        &[&[2.0, 2.0][..], &[0.0; 9]].concat(),
+        &[&[2.0][..], &[0.0; 10]].concat(),
         "cpu",
     );
 
@@ -935,6 +993,7 @@ crate::scenario_table!(
     a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does,
     a_delivery_without_a_minute_is_counted_once,
     the_baseline_never_subtracts_more_than_the_runs_used,
+    a_task_holds_one_reservation_priced_at_its_age,
     a_reservation_ends_when_its_run_exists_or_after_five_minutes,
     every_call_reads_running_reservations_and_baseline_fresh
 );

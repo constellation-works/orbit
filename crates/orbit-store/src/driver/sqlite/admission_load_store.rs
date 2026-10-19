@@ -5,7 +5,7 @@
 //! SQLite walk the per-workspace state and recency indexes instead of
 //! scanning the table.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
@@ -63,7 +63,22 @@ impl AdmissionLoadStoreBackend for Store {
                 run_minutes,
             };
             let mut written = Vec::new();
-            for reservation in decide(&load)? {
+            let decided = decide(&load)?;
+            // A task holds one reservation: this decision's rows replace the
+            // ones an earlier decision wrote for the same task, while the
+            // rows it writes together (a pending pull's alternatives) stay.
+            let mut replaced = BTreeSet::new();
+            for reservation in &decided {
+                if replaced.insert((&reservation.workspace_id, &reservation.task_id)) {
+                    conn.execute(
+                        "DELETE FROM admission_reservations
+                         WHERE workspace_id = ?1 AND task_id = ?2",
+                        params![reservation.workspace_id, reservation.task_id],
+                    )
+                    .map_err(sqlite_store_error)?;
+                }
+            }
+            for reservation in decided {
                 conn.execute(
                     "INSERT INTO admission_reservations (
                         workspace_id, task_id, work_class, complexity, base_class, reserved_at

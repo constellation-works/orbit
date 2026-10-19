@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! F(t) = B + Σ running i: P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)
-//!          + Σ reservations r: P_r(t) · alive_r(t)
+//!          + Σ reservations r: P_r(a_r + t) · alive_r(a_r + t) / alive_r(a_r)
 //! ```
 //!
 //! For memory the sum over profiled deliveries is not a sum of their 90th
@@ -16,9 +16,12 @@
 //!   delivery older than its profile's last minute, or with no profile,
 //!   contributes its current measured use, held flat.
 //! - **Reservations** are admissions decided under the lock whose run does
-//!   not exist yet. One stops counting once a delivery run naming its task is
-//!   created in its workspace, or [`RESERVATION_TTL_MINUTES`] after it was
-//!   written, when dispatch failed.
+//!   not exist yet. A task holds one: a later decision for the same task
+//!   replaces it, and a pass releases those its admission section refused.
+//!   `a_r` is the whole minutes since it was written, so it is priced like a
+//!   running delivery of that age. One stops counting once a delivery run
+//!   naming its task is created in its workspace, or
+//!   [`RESERVATION_TTL_MINUTES`] after it was written, when dispatch failed.
 //! - **Baseline `B`** is the host's load that is not from deliveries, held
 //!   flat. It is measured over the newest recorded host minute whose
 //!   overlapping run minutes are all recorded, minus what those runs used in

@@ -14,7 +14,8 @@ use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadFor
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    AdmissionForecastPoint, FrictionListFilter, ResourceUsageStoreBackend, RunResourceMinute,
+    AdmissionForecastPoint, AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase,
+    ExecutionLocation, FrictionListFilter, ResourceUsageStoreBackend, RunResourceMinute,
 };
 use orbit_store::friction_store::FrictionStore;
 use orbit_tools::ToolContext;
@@ -442,6 +443,74 @@ fn candidates_admitted_in_one_pass_count_each_other() {
     let mut expected = vec![first, second];
     expected.sort();
     assert_eq!(reserved, expected);
+}
+
+/// A candidate gap fit admits and the owner-wave section then refuses, for a
+/// live claim on its file, starts no run: the pass leaves no reservation for
+/// it, however many passes repeat, so its profile never stacks onto the
+/// forecast. A candidate the section admits keeps its one reservation.
+fn a_candidate_the_section_refuses_leaves_no_reservation() {
+    let fixture = Fixture::new("enforce", "");
+    fixture.finished_delivery("low", &[1.0, 1.0]);
+    let refused = fixture.task("refused", TaskPriority::High, TaskComplexity::Low);
+    let claim = ExecutionClaim {
+        claim_id: "fixture-claim".into(),
+        task_id: "ORB-claim-holder".into(),
+        request_id: "fixture-request".into(),
+        executed_on: ExecutionLocation {
+            machine_id: "fixture-machine".into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: "fixture-run".into(),
+            job_name: "fixture".into(),
+            machine_name: None,
+        },
+        footprint: vec!["file:refused.txt".into()],
+        reservation_id: "reservation-fixture".into(),
+        reservation_expires_at: (Utc::now() + Duration::minutes(30)).to_rfc3339(),
+        phase: ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    rusqlite::Connection::open(fixture.global.join("orbit.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                fixture.workspace_id(),
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+    let drain = fixture.drain();
+
+    for pass in 1..=3 {
+        let output = classify(&fixture.runtime, &drain, 5);
+        assert!(
+            admitted(&output).is_empty(),
+            "pass {pass}: the section refuses the claimed file: {output:#}"
+        );
+        assert_eq!(
+            fixture.reserved(&fixture.runtime),
+            Vec::<String>::new(),
+            "pass {pass}: no reservation for the refused {refused}"
+        );
+    }
+
+    // The same pass reserves a candidate the section admits, once.
+    let admitted_task = fixture.task("admitted", TaskPriority::Medium, TaskComplexity::Low);
+    for pass in 1..=2 {
+        let output = classify(&fixture.runtime, &drain, 5);
+        assert_eq!(admitted(&output), vec![admitted_task.clone()], "{output:#}");
+        assert_eq!(
+            fixture.reserved(&fixture.runtime),
+            vec![admitted_task.clone()],
+            "pass {pass}: the admitted task holds one reservation"
+        );
+    }
 }
 
 /// Memory fits by a high quantile of the deliveries' summed memory, not the
@@ -1419,6 +1488,7 @@ crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
     candidates_admitted_in_one_pass_count_each_other,
+    a_candidate_the_section_refuses_leaves_no_reservation,
     memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s,
     shadow_admits_as_off_and_records_what_enforce_would_do,
     per_run_mode_overrides_the_host_and_survives_reopen,
