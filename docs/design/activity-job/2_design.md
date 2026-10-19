@@ -823,8 +823,15 @@ The seeded agent loops (`agent_explore`, `agent_implement`, `agent_invoke`,
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
 `review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
 `verify_finding`) declare `tool_disallow_list`. They refuse registered
-control-plane mutations and `orbit.agent.invoke`; the read-only
-`agent_invoke` and `task_pilot` also refuse task and friction writes. Their
+control-plane mutations. Every seeded loop except `agent_implement` and
+`agent_review_repair` also refuses `orbit.agent.invoke`; those two keep it so
+they can delegate read-only exploration. Task writes (`orbit.task.add`,
+`orbit.task.update` and `orbit.task.artifact.put`) are refused by
+`agent_explore`, `agent_invoke`, `final_recovery`,
+`review_reconciliation_review`, `task_pilot` and `verify_finding`. Friction
+writes (`orbit.friction.add` and `orbit.friction.update`) are refused by
+`agent_explore`, `agent_invoke`, `review_reconciliation_review`, `task_pilot`
+and `verify_finding`; `final_recovery` does not refuse them. Their
 `proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
 no tool for run cancellation, plugin administration, config mutation, or
 crew/workspace mutation; those operations retain their separate governance.
