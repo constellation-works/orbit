@@ -45,16 +45,10 @@ fn installed_systemd_unit_has_recovery_settings_that_pass_inspection() {
 fn systemd_install_accepts_healthy_in_flight_and_finite_timers() {
     let service = "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n";
 
-    let cases = [
-        ("healthy in-flight service", "infinity", Some(service)),
-        ("healthy finite timer", "1000000", Some(service)),
-        (
-            "finite timer with failed service",
-            "1000000",
-            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
-        ),
-        ("finite timer with unreadable service", "1000000", None),
-    ];
+    // `systemd_enable_accepts_healthy_in_flight_and_finite_timers` keeps the
+    // full matrix. Install and enable both call `systemd_schedulability_with_health`;
+    // this row only proves install still reaches that decision.
+    let cases = [("healthy finite timer", "1000000", Some(service))];
 
     for (case, next_elapse, observed_service) in cases {
         let root = tempdir().unwrap();
@@ -88,29 +82,13 @@ fn systemd_install_accepts_healthy_in_flight_and_finite_timers() {
 
 #[test]
 fn systemd_install_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger() {
-    let cases = [
-        ("missing service", None),
-        (
-            "inactive service",
-            Some("ActiveState=inactive\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
-        ),
-        (
-            "failed service",
-            Some("ActiveState=failed\nResult=exit-code\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
-        ),
-        (
-            "unhealthy service",
-            Some(
-                "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=timeout\nTimeoutStartUSec=10min\nKillMode=mixed\n",
-            ),
-        ),
-        (
-            "unsafe recovery settings",
-            Some(
-                "ActiveState=activating\nExecMainStartTimestampMonotonic=0\nResult=success\nTimeoutStartUSec=infinity\nKillMode=process\n",
-            ),
-        ),
-    ];
+    // The reject matrix lives on the enable twin, which calls the same
+    // `systemd_schedulability_with_health` helper. This row proves install
+    // still surfaces that refusal.
+    let cases = [(
+        "inactive service",
+        Some("ActiveState=inactive\nResult=success\nTimeoutStartUSec=10min\nKillMode=mixed\n"),
+    )];
 
     for (case, service) in cases {
         let root = tempdir().unwrap();

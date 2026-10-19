@@ -1,8 +1,9 @@
 #![allow(missing_docs)]
 // [ORB-10946] Deterministic end-to-end coverage for the Copilot executor. A
 // fake agent stands in for the real `copilot` CLI so every case below — argv
-// shape, prompt transport, exit codes, timeouts, malformed output — is exact
-// and needs no network, credentials, or Copilot entitlement.
+// shape, prompt transport, and malformed output — is exact and needs no
+// network, credentials, or Copilot entitlement. Generic timeout and non-zero
+// exit behaviour is covered once on the Muse lane.
 #![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -183,7 +184,11 @@ exit 0"#
 
 #[test]
 fn command_construction_matches_the_shipped_unattended_contract() {
-    let harness = Harness::new(&success_body());
+    let body = format!(
+        "printf 'edited by copilot\\n' > '{{EDIT_PATH}}'\n{}",
+        success_body()
+    );
+    let harness = Harness::new(&body);
     let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 60));
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
@@ -214,65 +219,21 @@ fn command_construction_matches_the_shipped_unattended_contract() {
             "{widening} must not be passed; it widens beyond the Orbit sandbox",
         );
     }
-}
-
-#[test]
-fn explicit_model_is_propagated_and_never_inferred_from_the_vendor() {
-    for model in ["claude-sonnet-4.5", "gpt-5.4", "gemini-3.7-flash"] {
-        let harness = Harness::new(&success_body());
-        let outcome = dispatch(&harness, spec(Some(model), 60));
-        assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-
-        let argv = harness.argv();
-        let flag = argv
-            .iter()
-            .position(|arg| arg == "--model")
-            .expect("--model must be passed");
-        assert_eq!(argv[flag + 1], model);
-
-        let invocation = outcome.invocation.as_ref().expect("invocation trace");
-        // The provider identity stays `copilot` no matter which vendor
-        // supplies the model.
-        assert_eq!(invocation.provider, "copilot");
-        assert_eq!(invocation.model.as_deref(), Some(model));
-    }
-}
-
-#[test]
-fn prompt_is_delivered_on_stdin_and_the_secret_never_reaches_argv() {
-    let harness = Harness::new(&success_body());
-    let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 60));
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
     let stdin = harness.stdin();
     assert!(stdin.contains(PROMPT_SECRET), "prompt must arrive on stdin");
     assert!(stdin.contains("Execution envelope:"));
-
-    for arg in harness.argv() {
+    for arg in &argv {
         assert!(
             !arg.contains(PROMPT_SECRET),
             "prompt content leaked into argv: {arg}",
         );
     }
-    // The audit-visible preview must not carry it either.
     let rendered = serde_json::to_string(&outcome.output).expect("serialize outcome output");
     assert!(
         !rendered.contains(PROMPT_SECRET),
         "prompt secret leaked into the dispatch output",
     );
-}
-
-#[test]
-fn successful_run_persists_agent_edits_and_reports_success() {
-    let body = format!(
-        "printf 'edited by copilot\\n' > '{{EDIT_PATH}}'\n{}",
-        success_body()
-    );
-    let harness = Harness::new(&body);
-    let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 60));
-
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-    // The envelope's `result` reaches the workflow output.
     assert_eq!(outcome.output["edited"], serde_json::Value::Bool(true));
     assert_eq!(
         std::fs::read_to_string(&harness.edit_path).expect("agent edit must persist"),
@@ -281,33 +242,24 @@ fn successful_run_persists_agent_edits_and_reports_success() {
 }
 
 #[test]
-fn non_zero_exit_fails_even_with_a_success_envelope_on_stdout() {
-    let body = format!(
-        r#"printf '%s\n' '{{"type":"assistant.message","data":{{"content":"{SUCCESS_ENVELOPE}"}}}}'
-exit 3"#
-    );
-    let harness = Harness::new(&body);
-    let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 60));
+fn explicit_model_is_propagated_and_never_inferred_from_the_vendor() {
+    // One vendor-prefixed model keeps the guarantee that the provider identity
+    // stays `copilot`. The other vendor strings were the same assertion.
+    let model = "claude-sonnet-4.5";
+    let harness = Harness::new(&success_body());
+    let outcome = dispatch(&harness, spec(Some(model), 60));
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
-    assert!(
-        !outcome.success,
-        "a non-zero exit must fail the step regardless of stdout",
-    );
-}
+    let argv = harness.argv();
+    let flag = argv
+        .iter()
+        .position(|arg| arg == "--model")
+        .expect("--model must be passed");
+    assert_eq!(argv[flag + 1], model);
 
-#[test]
-fn auth_failure_shape_reports_no_completion_evidence() {
-    // The real capture: session control-plane frames only, error on stderr.
-    let body = r#"printf '%s\n' '{"type":"session.warning","data":{"message":"Third-party MCP servers are disabled by your organization'"'"'s Copilot policy.","warningType":"policy"},"ephemeral":true}'
-printf '%s\n' 'Error: Authentication failed' >&2
-exit 1"#;
-    let harness = Harness::new(body);
-    let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 60));
-
-    assert!(
-        !outcome.success,
-        "an unauthenticated launch must not succeed"
-    );
+    let invocation = outcome.invocation.as_ref().expect("invocation trace");
+    assert_eq!(invocation.provider, "copilot");
+    assert_eq!(invocation.model.as_deref(), Some(model));
 }
 
 #[test]
@@ -337,18 +289,5 @@ exit 0"#;
     assert!(
         !outcome.success,
         "malformed output must not read as success"
-    );
-}
-
-#[test]
-fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
-    let harness = Harness::new("sleep 30\nexit 0");
-    let outcome = dispatch(&harness, spec(Some("claude-sonnet-4.5"), 1));
-
-    assert!(!outcome.success, "a timed-out agent must not succeed");
-    let message = outcome.message.unwrap_or_default();
-    assert!(
-        message.contains("timeout") || message.contains("wall-clock"),
-        "timeout should be named in the failure message, got: {message}",
     );
 }

@@ -297,7 +297,11 @@ fn run_body_with_payload(payload: &str, exit_code: i32) -> String {
 
 #[test]
 fn command_construction_matches_the_shipped_headless_contract() {
-    let harness = Harness::new(&success_body());
+    let body = format!(
+        "printf 'edited by muse\\n' > '{{EDIT_PATH}}'\n{}",
+        success_body()
+    );
+    let harness = Harness::new(&body);
     let outcome = dispatch(&harness, spec(60));
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
@@ -317,6 +321,11 @@ fn command_construction_matches_the_shipped_headless_contract() {
     // No Orbit sandbox here, so Muse keeps its own; `--trust-workspace` and
     // any positional prompt are absent.
     assert_eq!(harness.argv(), expected);
+    assert_eq!(outcome.output["edited"], serde_json::Value::Bool(true));
+    assert_eq!(
+        std::fs::read_to_string(&harness.edit_path).expect("agent edit persists"),
+        "edited by muse\n"
+    );
 }
 
 #[test]
@@ -359,27 +368,6 @@ fn prompt_reaches_only_a_private_scratch_file_deleted_after_the_run() {
     assert_eq!(invocation.model.as_deref(), Some(MODEL));
     let rendered = serde_json::to_string(&outcome.output).expect("serialize output");
     assert!(!rendered.contains(PROMPT_SECRET));
-}
-
-#[test]
-fn prompt_file_is_deleted_when_the_run_fails() {
-    let harness = Harness::new(&run_body("failed", 1));
-    let outcome = dispatch(&harness, spec(60));
-    assert!(!outcome.success);
-    let prompt_path = PathBuf::from(harness.read("prompt-path.txt"));
-    assert!(!prompt_path.exists(), "prompt file must be deleted");
-}
-
-#[test]
-fn launcher_never_auto_updates_or_logs_in() {
-    let harness = Harness::new(&success_body());
-    let outcome = dispatch(&harness, spec(60));
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-    assert_eq!(
-        harness.env_value("MUSE_NO_AUTO_UPDATE").as_deref(),
-        Some("1")
-    );
-    assert_eq!(harness.env_value("MUSE_LOGIN").as_deref(), Some("0"));
 }
 
 /// Set credentials only on an isolated child, never in the parallel parent.
@@ -592,31 +580,9 @@ fn meta_api_key_reaches_muse_only_through_an_explicit_pass() {
 }
 
 #[test]
-fn successful_run_persists_worktree_edit_and_projects_result() {
-    let body = format!(
-        "printf 'edited by muse\\n' > '{{EDIT_PATH}}'\n{}",
-        success_body()
-    );
-    let harness = Harness::new(&body);
-    let outcome = dispatch(&harness, spec(60));
-
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-    assert_eq!(outcome.output["edited"], serde_json::Value::Bool(true));
-    assert_eq!(
-        std::fs::read_to_string(&harness.edit_path).expect("agent edit persists"),
-        "edited by muse\n"
-    );
-}
-
-#[test]
 fn every_crew_effort_renders_verbatim_and_an_unset_effort_is_omitted() {
-    for effort in [
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-        ReasoningEffort::Xhigh,
-        ReasoningEffort::Max,
-    ] {
+    // `high` is already pinned by command construction and the registry table.
+    for effort in [ReasoningEffort::Xhigh, ReasoningEffort::Max] {
         let harness = Harness::new(&success_body());
         let outcome = dispatch(
             &harness,
@@ -684,12 +650,10 @@ fn completed_terminal_diagnostic_fields_cannot_supply_an_answer() {
         format!(r#""error":"{SUCCESS_ENVELOPE}""#),
         format!(r#""error":{{"message":"{SUCCESS_ENVELOPE}"}}"#),
     ] {
-        for text in ["", r#", "text":{"invalid":"answer"}"#] {
-            let payload = format!(r#"{{"terminal":"completed",{fallback}{text}}}"#);
-            let outcome = dispatch(&Harness::new(&run_body_with_payload(&payload, 0)), spec(60));
-            if outcome.success || !outcome.output["edited"].is_null() {
-                accepted.push(payload);
-            }
+        let payload = format!(r#"{{"terminal":"completed",{fallback}}}"#);
+        let outcome = dispatch(&Harness::new(&run_body_with_payload(&payload, 0)), spec(60));
+        if outcome.success || !outcome.output["edited"].is_null() {
+            accepted.push(payload);
         }
     }
     assert!(

@@ -360,10 +360,18 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                                 "{} effort mapped incorrectly: {args:?}",
                                 case.provider
                             );
-                        } else {
+                        } else if case.provider == "codex" {
+                            // `--config` also carries non-effort settings, so the
+                            // unset-effort guarantee is the effort value, not the flag.
                             assert!(
                                 !args.iter().any(|arg| arg == value),
                                 "{} emitted unconfigured effort",
+                                case.provider
+                            );
+                        } else {
+                            assert!(
+                                !args.iter().any(|arg| arg == flag),
+                                "{} emitted an effort flag when effort was unset",
                                 case.provider
                             );
                         }

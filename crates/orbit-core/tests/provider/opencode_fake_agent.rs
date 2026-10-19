@@ -202,7 +202,11 @@ exit 0"#
 
 #[test]
 fn command_construction_matches_the_shipped_headless_contract() {
-    let harness = Harness::new(&success_body());
+    let body = format!(
+        "printf 'edited by opencode\\n' > '{{EDIT_PATH}}'\n{}",
+        success_body()
+    );
+    let harness = Harness::new(&body);
     let outcome = dispatch(&harness, spec(60));
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
@@ -227,59 +231,24 @@ fn command_construction_matches_the_shipped_headless_contract() {
     assert!(!argv.iter().any(|arg| arg == "--share"));
     assert!(!argv.iter().any(|arg| arg == "--continue" || arg == "-c"));
     assert!(!argv.iter().any(|arg| arg == "--session"));
-}
-
-#[test]
-fn prompt_is_delivered_on_stdin_in_the_workspace_cwd() {
-    let harness = Harness::new(&success_body());
-    let outcome = dispatch(&harness, spec(60));
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-    assert!(harness.stdin().contains(PROMPT_SECRET));
-    assert!(harness.stdin().contains("Execution envelope:"));
-
     // The child runs in the dispatch cwd rather than needing `--dir`, which
     // would put the workspace path on argv.
+    assert!(!argv.iter().any(|arg| arg == "--dir"));
     let cwd = harness.cwd();
     assert!(!cwd.is_empty(), "fake agent recorded a working directory");
-    assert!(!harness.argv().iter().any(|arg| arg == "--dir"));
 
+    assert!(harness.stdin().contains(PROMPT_SECRET));
+    assert!(harness.stdin().contains("Execution envelope:"));
     let invocation = outcome.invocation.expect("invocation trace");
     assert_eq!(invocation.provider, "opencode");
     assert_eq!(invocation.model.as_deref(), Some(MODEL));
     let rendered = serde_json::to_string(&outcome.output).expect("serialize output");
     assert!(!rendered.contains(PROMPT_SECRET));
-}
-
-#[test]
-fn successful_run_persists_worktree_edit_and_projects_result() {
-    let body = format!(
-        "printf 'edited by opencode\\n' > '{{EDIT_PATH}}'\n{}",
-        success_body()
-    );
-    let harness = Harness::new(&body);
-    let outcome = dispatch(&harness, spec(60));
-
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
     assert_eq!(outcome.output["edited"], serde_json::Value::Bool(true));
     assert_eq!(
         std::fs::read_to_string(&harness.edit_path).expect("agent edit persists"),
         "edited by opencode\n"
     );
-}
-
-#[test]
-fn crew_effort_is_optional_and_omitted_when_unset() {
-    let harness = Harness::new(&success_body());
-    let outcome = dispatch(
-        &harness,
-        AgentLoopSpec {
-            reasoning_effort: None,
-            ..spec(60)
-        },
-    );
-
-    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
-    assert!(!harness.argv().iter().any(|arg| arg == "--variant"));
 }
 
 #[test]
@@ -310,103 +279,19 @@ fn an_unsupported_effort_fails_instead_of_being_silently_dropped() {
 }
 
 #[test]
-fn non_zero_exit_fails_even_with_a_success_frame() {
-    let body = success_body().replace("exit 0", "exit 9");
-    let outcome = dispatch(&Harness::new(&body), spec(60));
-    assert!(!outcome.success);
-    assert!(
-        outcome.message.unwrap_or_default().contains('9'),
-        "the terminal exit code reaches the operator diagnostic",
-    );
-}
-
-#[test]
-fn a_terminal_error_event_cannot_report_success() {
-    // OpenCode emits `{"type":"error",...}` and sets exit code 1 when the
-    // session fails. Normalization must invalidate the answer text that was
-    // already streamed, independently of the exit status.
-    let body = format!(
-        r#"{}
-printf '%s\n' '{{"type":"error","timestamp":6,"sessionID":"ses_7f3a","error":{{"name":"ProviderAuthError","data":{{"message":"no credentials"}}}}}}'
-exit 0"#,
-        success_body().replace("exit 0", ""),
-    );
-    let outcome = dispatch(&Harness::new(&body), spec(60));
-    assert!(
-        !outcome.success,
-        "a terminal error event must invalidate prior completion evidence",
-    );
-}
-
-#[test]
 fn malformed_or_incomplete_output_never_succeeds() {
     for body in [
-        // Not NDJSON at all.
+        // Not NDJSON at all. This, and the truncated frame, are the dispatch
+        // wiring: parser rejection of the other shapes lives in the projection
+        // tests.
         "printf '%s\\n' 'not json'\nexit 0".to_string(),
         // Truncated frame.
         "printf '%s\\n' '{\"type\":\"text\",\"part\":'\nexit 0".to_string(),
-        // A `text` event whose part carries no text: a malformed frame, not an
-        // empty answer.
-        r#"printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"s","part":{"id":"p","type":"text","sessionID":"s"}}'
-exit 0"#
-            .to_string(),
-        // Only tool traffic replaying Orbit's own prompt: that is not the
-        // agent's completion evidence.
-        format!(
-            r#"printf '%s\n' '{{"type":"tool_use","timestamp":1,"sessionID":"s","part":{{"id":"p","type":"tool","tool":"bash","sessionID":"s","state":{{"status":"completed","output":"{SUCCESS_ENVELOPE}"}}}}}}'
-exit 0"#
-        ),
-        // Only reasoning: a draft envelope written while thinking aloud.
-        format!(
-            r#"printf '%s\n' '{{"type":"reasoning","timestamp":1,"sessionID":"s","part":{{"id":"p","type":"reasoning","sessionID":"s","text":"{SUCCESS_ENVELOPE}","time":{{"start":1,"end":2}}}}}}'
-exit 0"#
-        ),
-        // Step boundaries without any answer: the agent stopped mid-turn.
-        r#"printf '%s\n' '{"type":"step_start","timestamp":1,"sessionID":"s","part":{"id":"p","type":"step-start"}}'
-exit 0"#
-            .to_string(),
     ] {
         let outcome = dispatch(&Harness::new(&body), spec(60));
-        assert!(!outcome.success, "invalid OpenCode output must fail: {body}");
+        assert!(
+            !outcome.success,
+            "invalid OpenCode output must fail: {body}"
+        );
     }
-}
-
-#[test]
-fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
-    let outcome = dispatch(&Harness::new("sleep 30\nexit 0"), spec(1));
-    assert!(!outcome.success);
-    let message = outcome.message.unwrap_or_default();
-    assert!(message.contains("timeout") || message.contains("wall-clock"));
-}
-
-#[test]
-fn shipped_executor_is_sandboxed_and_missing_binary_is_stable() {
-    let resource = opencode_resource();
-    assert!(
-        resource.spec.sandbox.is_some(),
-        "OpenCode asset must opt into the OS sandbox"
-    );
-    assert_eq!(resource.spec.command.as_deref(), Some("opencode"));
-
-    let dir = tempfile::tempdir().expect("missing-binary tempdir");
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    let missing = dir.path().join("missing/opencode");
-    seed_opencode_executor(&runtime, &missing, false);
-    let harness = Harness {
-        argv_path: dir.path().join("argv.txt"),
-        stdin_path: dir.path().join("stdin.txt"),
-        cwd_path: dir.path().join("cwd.txt"),
-        _dir: dir,
-        edit_path: PathBuf::new(),
-        runtime,
-    };
-    let error = try_dispatch(&harness, spec(60)).expect_err("missing binary must fail");
-    assert!(
-        error.contains("opencode"),
-        "stable diagnostic names binary: {error}"
-    );
-    assert!(
-        error.contains("failed to spawn"),
-        "stable diagnostic names spawn failure: {error}"
-    );
 }

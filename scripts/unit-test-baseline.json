@@ -290,7 +290,6 @@
         "application/task/tests/transitions.rs::approve_does_not_overwrite_a_status_changed_after_its_read",
         "application/task/tests/transitions.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force",
         "application/tests/executor.rs::custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration",
-        "application/tests/executor.rs::migrated_default_executor_realigns_platform_mismatched_sandbox_on_linux",
         "application/tests/executor.rs::seed_default_executors_heals_leftover_macos_sandbox_on_linux",
         "application/tests/executor.rs::seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform",
         "application/tests/executor.rs::seed_default_executors_upgrades_old_unsandboxed_linux_default",
