@@ -556,6 +556,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
+    fn explore_delegation_available(&self) -> bool {
+        NullRuntimeHost::explore_delegation_available(self)
+    }
     fn resolve_activity_tool_denials(
         &self,
         task_ids: &[String],

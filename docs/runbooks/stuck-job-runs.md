@@ -352,6 +352,16 @@ redactor before appearing in wait progress, human output, or the JSON `warnings`
 array. Queue and provider sandbox warnings remain visible with sensitive values
 replaced by redaction markers.
 
+## Read-only explorer runs
+
+A run of `agent_explore_pipeline` is a read-only explorer that an implement or review-repair
+agent delegated through `orbit.agent.invoke` (see
+[CONFIG.md](../CONFIG.md#workflowexplore--read-only-exploration-for-implementing-agents)).
+It is a single-step run in its caller's worktree with no task ownership; its input names
+the caller as `parent_run_id`. A stuck explorer only holds one of its caller's
+`workflow.explore.max_concurrent_per_run` slots: cancel it with `orbit run cancel <RUN_ID>`,
+and the calling agent continues without the answer. Never resume or resubmit one by hand.
+
 ## Resume from checkpoints
 
 The v2 executor checkpoints every completed top-level step into

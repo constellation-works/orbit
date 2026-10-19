@@ -184,6 +184,12 @@ impl OrbitRuntime {
         self.context.settings().regression_risk()
     }
 
+    /// `[workflow.explore]` as admitted: whether implement and review-repair
+    /// runs may delegate read-only exploration, and its per-run budgets.
+    pub(crate) fn explore_settings(&self) -> orbit_config::ExploreSettings {
+        self.context.settings().explore()
+    }
+
     /// `[workflow.tag_instructions]` as admitted.
     pub(crate) fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
         self.context.settings().tag_instructions()

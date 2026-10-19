@@ -11,6 +11,7 @@
 /// recovery or review activity here when it should start even though the
 /// task requires a tool it disallows.
 const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
+    "agent_explore",
     "agent_invoke",
     "agent_review_repair",
     "final_recovery",

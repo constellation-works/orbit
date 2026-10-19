@@ -1,4 +1,5 @@
 mod activity_tool_requirements;
+pub(crate) mod agent_explore;
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
 pub(crate) mod catalog_layers;
@@ -6,6 +7,7 @@ pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
 mod exec;
+mod explore_analytics;
 mod final_recovery;
 mod forge_hold_resume;
 mod orphan_adoption;
@@ -40,6 +42,10 @@ pub(crate) fn log_best_effort<T>(
 }
 
 pub(crate) use activity_tool_requirements::drops_disallowed_requirements;
+pub use agent_explore::{
+    AgentInvocation, BoundedExploreAnswer, EXPLORE_JOB_ID, ExploreInvocationSummary,
+    ExploreSubmission,
+};
 pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
@@ -48,6 +54,9 @@ pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
 pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
+pub use explore_analytics::{
+    EXPLORE_COMPARISON_SCHEMA_VERSION, ExploreCohort, ExploreComparison, ExploreCrewComparison,
+};
 pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,

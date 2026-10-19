@@ -1,18 +1,14 @@
-//! Operator-only host agent invocation [ORB-11354].
+//! Agent invocation [ORB-11354] [ORB-16814].
 //!
-//! Submits one durable, asynchronous exploration run and returns its run ID.
+//! Submits one durable, asynchronous invocation run and returns its run ID.
 //! Everything that decides whether it may run lives below this file: the
 //! governed-operation chokepoint in
 //! `orbit_common::governance::authorization` gates the tool name, and
-//! `OrbitRuntime::admit_agent_invoke` is the canonical admission that also
-//! covers the CLI. This tool collects input and hands it over.
-//!
-//! The self-dispatch guard below mirrors `orbit.command.exec`: a managed run's
-//! leaf agent must not reach a surface whose entire purpose is to start a
-//! process outside the sandbox that run is executing inside. The capability
-//! chokepoint would refuse it anyway — a managed run resolves as an agent —
-//! but refusing by run scope first gives the leaf the reason rather than a
-//! capability message that reads like a misconfiguration.
+//! `OrbitRuntime::admit_agent_invoke` is the canonical admission. An
+//! operator gets the trusted-host invocation; a managed implement or
+//! review-repair run gets a sandboxed read-only explorer, and every other
+//! managed run is refused there with the reason. This tool collects input
+//! and hands it over.
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{ToolParam, ToolSchema};
@@ -28,7 +24,8 @@ impl Tool for OrbitAgentInvokeTool {
             ToolParam {
                 name: "prompt".to_string(),
                 description: "What to investigate. The invoked agent reports back; it makes no \
-                     Orbit task, lifecycle, commit, or pull-request change."
+                     Orbit task, lifecycle, commit, or pull-request change. An explorer lists \
+                     the paths it read in `answer.paths_read`."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: true,
@@ -37,7 +34,8 @@ impl Tool for OrbitAgentInvokeTool {
                 name: "cwd".to_string(),
                 description: "Absolute working directory the agent starts in. Must exist and be \
                      inside this workspace's checkout or a linked worktree under \
-                     `.orbit/state/worktrees/`; it is never inferred from the caller."
+                     `.orbit/state/worktrees/`; it is never inferred from the caller. An \
+                     explorer's must be inside the calling run's own worktree."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: true,
@@ -45,7 +43,8 @@ impl Tool for OrbitAgentInvokeTool {
             ToolParam {
                 name: "crew".to_string(),
                 description: "Configured crew selecting the provider, model, and reasoning \
-                     effort. Defaults to the workspace's default crew."
+                     effort. Defaults to the workspace's default crew. An explorer's must be in \
+                     `workflow.purpose_crews.explorer`, which it is drawn from when omitted."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
@@ -53,7 +52,9 @@ impl Tool for OrbitAgentInvokeTool {
             ToolParam {
                 name: "timeout_seconds".to_string(),
                 description: "Provider wall-clock bound in seconds, excluding queue time. \
-                     Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling."
+                     Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling. \
+                     An explorer defaults to, and may not exceed, \
+                     `workflow.explore.timeout_seconds`."
                     .to_string(),
                 param_type: "integer".to_string(),
                 required: false,
@@ -83,7 +84,8 @@ impl Tool for OrbitAgentInvokeTool {
                      `danger-full-access`). Tightens or names the provider sandbox for \
                      this run only; values the provider does not support are refused. \
                      The submission result reports the effective mode as \
-                     `provider:mode`."
+                     `provider:mode`. Operator invocations only: an explorer is always \
+                     read-only."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
@@ -96,10 +98,15 @@ impl Tool for OrbitAgentInvokeTool {
                 "Submit an asynchronous agent invocation for exploration or debugging and return \
                  its run ID, or wait for its answer with `wait_seconds`. Queued submissions \
                  include `queued: true`, a one-based `queue_position` and a warning. \
-                 The agent runs on the host outside Orbit's filesystem sandbox, as \
-                 the same OS user as Orbit, so it can reach anything that user can; it is \
+                 An operator's invocation runs on the host outside Orbit's filesystem sandbox, \
+                 as the same OS user as Orbit, so it can reach anything that user can; it is \
                  admitted per invocation and requires operator capability — the same test for a \
-                 session that arrived over SSH as for a local one. Track it with \
+                 session that arrived over SSH as for a local one. An implement or review-repair \
+                 agent may instead delegate a read-only question when `workflow.explore.enabled` \
+                 is on: it gets a sandboxed explorer from the explorer crew pool that reads its \
+                 own worktree, cannot write or change Orbit state, and is bounded by per-run \
+                 call, concurrency, timeout and answer-size budgets; every other agent is \
+                 refused, and a refusal never stops the caller's run. Track it with \
                  `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's \
                  summary, findings, next_steps, any other result fields and its bounded final \
                  message, and `agent_invocation.progress` its latest message and last activity \
@@ -113,17 +120,6 @@ impl Tool for OrbitAgentInvokeTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        if ctx
-            .orbit_host
-            .as_ref()
-            .is_some_and(|host| host.task_scope().run_id.is_some())
-        {
-            return Err(OrbitError::CapabilityDenied(
-                "managed runs cannot invoke a host agent; a leaf agent admitting an unsandboxed \
-                 subprocess would step outside the sandbox its own run executes inside"
-                    .to_string(),
-            ));
-        }
         super::execute_host_action(ctx, input, OrbitBuiltinAction::AgentInvoke)
     }
 
@@ -133,7 +129,9 @@ impl Tool for OrbitAgentInvokeTool {
         ));
         schema["properties"]["timeout_seconds"]["minimum"] = serde_json::json!(1);
         schema["properties"]["timeout_seconds"]["maximum"] = serde_json::json!(7200);
-        schema["properties"]["timeout_seconds"]["default"] = serde_json::json!(1800);
+        // No schema `default`: an operator's invocation defaults to 1800 seconds
+        // and an explorer's to `workflow.explore.timeout_seconds`, so a client
+        // filling one in would push an explorer past its ceiling.
         schema["properties"]["wait_seconds"]["minimum"] = serde_json::json!(0);
         schema["properties"]["wait_seconds"]["maximum"] = serde_json::json!(600);
         Some(schema)

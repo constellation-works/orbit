@@ -64,7 +64,8 @@ spec:
       own commit; the host commits your fixes after you return as a second
       commit, `review: <summary>`, under your reviewer identity.
     - Do not change task status, acceptance criteria, plan, or description; do
-      not approve, merge, dispatch, or invoke another agent.
+      not approve, merge, or dispatch, and never delegate edits, validation,
+      commits or dispatch to another agent.
     - You may change any path a fix requires, inside or outside the task's
       selectors; there is no footprint limit. List every path you changed on
       the finding it fixes. The gate widens the task's selectors over every
@@ -576,8 +577,27 @@ spec:
     `orbit.codebase.show` with the path lists the tasks behind a mark when
     you need them. In your summary, name each marked file you checked and
     what each listed category showed.
+  explore_instruction: |
+    Read-only delegation
+
+    You may hand read-only questions to a cheaper agent instead of spending
+    your own turns on them: locating code, tracing callers, summarizing a
+    module, or finding the tests that cover a path.
+    - Through Orbit: call `orbit.agent.invoke` with `prompt` (one focused
+      question), `cwd` (your worktree root or a directory inside it),
+      `wait_seconds` (up to 600) and an `idempotency_key` unique to the
+      question. A crew from the workspace's explorer pool reads your
+      worktree in a read-only sandbox and answers with `answer.summary`,
+      `answer.findings` and `answer.paths_read`. Calls, concurrent
+      explorers, timeout and answer size are budgeted per run; when a call
+      is refused, continue the work yourself.
+    - Natively: your provider's own read-only subagents (for example
+      Claude's Agent tool on a small model) are allowed for the same kind
+      of question.
+    Delegate only reading. Never delegate edits, validation, commits or
+    dispatch: you make every fix, run every check and own the report. An explorer's answer is a lead, not evidence; read
+    what you rely on in the files themselves before you change or cite it.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

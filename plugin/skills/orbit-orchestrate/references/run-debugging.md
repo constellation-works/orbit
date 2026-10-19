@@ -212,6 +212,18 @@ the forwarded caller machine ID, which is attribution rather than an
 authenticated principal. They are deliberately **not resumable**: the
 admission covered one invocation, so submit a new one rather than resuming.
 
+### Explorer runs
+
+A run of `agent_explore_pipeline` is a read-only explorer an implement or
+review-repair agent delegated through `orbit.agent.invoke`. Its input names the
+caller as `parent_run_id` (with `parent_task_id` and `parent_activity`); the
+caller's run detail lists its explorers with state, crew, duration, tokens,
+cost and paths read. Unlike an operator invocation it runs inside the executor
+sandbox with the reviewer filesystem profile, so a sandbox denial of a write is
+the expected outcome, not a defect. A refused call never creates a run: the
+calling agent got the reason as a tool error, and the `agent.explore` audit
+entry records it.
+
 For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
 
 ## Check Task State

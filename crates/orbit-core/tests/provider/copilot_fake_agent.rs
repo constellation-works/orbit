@@ -126,6 +126,7 @@ fn spec(model: Option<&str>, timeout_seconds: u64) -> AgentLoopSpec {
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: model.map(str::to_string),

@@ -341,6 +341,18 @@ export function renderRunDetailMeta() {
     lineage.addEventListener("click", () => navigateToRun(sourceId));
     actions.appendChild(lineage);
   }
+  // A read-only explorer names the implement or review-repair run that
+  // delegated it.
+  const parentRunId = run.job_id === "agent_explore_pipeline" ? run.input?.parent_run_id : null;
+  if (parentRunId) {
+    const parent = el("button", {
+      class: "back-action explore-parent",
+      text: `Delegated by ${parentRunId}`,
+      title: `Open ${parentRunId}`,
+    });
+    parent.addEventListener("click", () => navigateToRun(parentRunId));
+    actions.appendChild(parent);
+  }
   const replay = run.run_id ? buildReplayRunButton(run, feedback) : null;
   if (replay) actions.appendChild(replay);
   // The claim rides beside the run in the detail payload; the cancel
@@ -367,6 +379,8 @@ export function renderRunDetailMeta() {
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
+  const explorers = buildExploreInvocations(detail.explore_invocations);
+  if (explorers) wrap.appendChild(explorers);
   const processes = buildProviderProcesses(detail.provider_processes);
   if (processes) wrap.appendChild(processes);
   syncNodes(meta, [wrap, feedback]);
@@ -871,6 +885,50 @@ function buildChildDispatches(run) {
   return el("div", { class: "child-dispatch-panel" }, [
     el("div", { class: "label", text: `child runs (${dispatches.length})` }),
     el("div", { class: "child-dispatch-summary", text: `${dispatches.length} admitted: ${tally}` }),
+    ...rows,
+  ]);
+}
+
+// The read-only explorers this run's implement or review-repair agent
+// delegated to, oldest first: crew, outcome, duration, tokens and cost. They
+// ran on this run's slot, so their spend is part of this delivery's.
+function buildExploreInvocations(invocations) {
+  if (!Array.isArray(invocations) || invocations.length === 0) return null;
+  const tokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const known = invocations.filter((i) => typeof i.cost_usd === "number");
+  const totalCost = known.reduce((sum, i) => sum + i.cost_usd, 0);
+  const totalTokens = invocations.reduce((sum, i) => sum + (i.total_tokens || 0), 0);
+  const costText = known.length === 0
+    ? "cost unknown"
+    : `$${totalCost.toFixed(4)}${known.length < invocations.length ? ` (${known.length} of ${invocations.length} priced)` : ""}`;
+  const rows = invocations.map((invocation) => {
+    const state = invocation.state || "unknown";
+    const link = el("button", {
+      class: "back-action",
+      text: invocation.run_id,
+      title: `Open ${invocation.run_id}`,
+    });
+    link.addEventListener("click", () => navigateToRun(invocation.run_id));
+    const parts = [`crew ${invocation.crew || "-"}`];
+    if (invocation.parent_activity) parts.push(`from ${invocation.parent_activity}`);
+    parts.push(`${tokens(invocation.input_tokens || 0)} in / ${tokens(invocation.output_tokens || 0)} out`);
+    parts.push(typeof invocation.cost_usd === "number" ? `$${invocation.cost_usd.toFixed(4)}` : "cost unknown");
+    if (invocation.paths_read != null) parts.push(`${invocation.paths_read} paths read`);
+    const row = el("div", { class: "child-dispatch-row explore-invocation" }, [
+      stateCell(state),
+      link,
+      el("span", { class: "duration", text: recordDurationText(invocation) }),
+      el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
+    ]);
+    row.dataset.state = state;
+    return row;
+  });
+  return el("section", { class: "child-dispatch-panel explore-invocations", "aria-label": "Explorer invocations" }, [
+    el("div", { class: "label", text: `explorer invocations (${invocations.length})` }),
+    el("div", {
+      class: "child-dispatch-summary",
+      text: `${invocations.length} read-only ${invocations.length === 1 ? "call" : "calls"} · ${tokens(totalTokens)} tokens · ${costText}`,
+    }),
     ...rows,
   ]);
 }

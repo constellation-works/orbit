@@ -461,6 +461,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
+    /// `[workflow.explore]`: whether implement and review-repair runs may
+    /// delegate read-only exploration, and its per-run budgets.
+    explore: orbit_config::ExploreSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -500,6 +503,7 @@ impl OrbitRuntimeSettings {
         generated_paths: std::collections::BTreeMap<String, String>,
         light_delivery_paths: Vec<String>,
         regression_risk: orbit_config::RegressionRiskSettings,
+        explore: orbit_config::ExploreSettings,
     ) -> Self {
         Self {
             persistence,
@@ -536,7 +540,12 @@ impl OrbitRuntimeSettings {
             generated_paths,
             light_delivery_paths,
             regression_risk,
+            explore,
         }
+    }
+
+    pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {
+        self.explore
     }
 
     pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {

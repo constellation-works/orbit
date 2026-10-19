@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests."
-last_updated: 2026-10-12
+last_updated: 2026-10-19
 last_validated: 2026-10-18
 ---
 
@@ -10,7 +10,7 @@ last_validated: 2026-10-18
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 21 jobs;
+[`runtime/assets.rs`](../../crates/orbit-core/src/runtime/assets.rs): 22 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 
@@ -26,6 +26,7 @@ relative to `crates/orbit-engine/src/`.
 | Shipped job | Evidence level and named behavior | Owning test source |
 | --- | --- | --- |
 | `agent_invoke_pipeline` | Graph through MCP stdio: `a_remote_operator_session_invokes_an_agent_end_to_end` submits an invocation, polls terminal success and verifies the completed envelope plus persisted trusted-host admission. Provider executables return planted responses; the shipped graph is not replaced. Refusal: `a_remote_agent_session_cannot_invoke_an_agent`. Core admission refusals: `a_runs_own_runner_grant_cannot_admit_an_invocation`, `an_admitted_run_cannot_be_resumed`, `an_unauthorized_keyed_submission_claims_nothing`. | `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs`; Core `application/job/tests/agent_invoke.rs` |
+| `agent_explore_pipeline` | Boundary: `agent_explore_admission_scenarios` submits an explorer from a managed implement run's MCP environment and verifies the pool crew, the caller's worktree, no trusted-host admission, inherited resource class, idempotent retry and run-detail summary; refusals cover an out-of-pool crew, a foreign cwd, a widened provider sandbox, each budget, the disabled switch, other activities, nesting and a finished caller; the operator path stays trusted-host. `agent_explore_sandbox_scenarios` (Linux) resolves the shipped explorer profile and verifies it denies a worktree write the implementer's grants. Engine: `delegation_is_offered_only_while_the_host_enables_it`, `an_unwrapped_explorer_runs_codex_read_only`. The shipped graph's provider run is not executed. | `crates/orbit-core/tests/runtime/admission_audit/agent_explore.rs`; `crates/orbit-engine/tests/engine/v2_cli_agent/explore.rs` |
 | `baseline_hold_refresh_pipeline` | Graph through the owner sweep runtime: `a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks` dispatches and executes the shipped refresh job outside the tick, records its verdict and lets other clock work continue. `a_checked_tip_is_judged_from_its_recorded_result_without_another_run` and `an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh` cover recorded results and bounded retry. | `crates/orbit-core/tests/runtime/baseline_hold_tick.rs` |
 | `blocked_task_recovery_pipeline` | Graph through the owner runtime: `recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw` runs the shipped recovery job for a settled follower failure, checks machine-bound failure evidence and crew selection, and verifies requeue. | `crates/orbit-core/tests/runtime/distributed_drain/recovery.rs` |
 | `ci_failure_sweep_pipeline` | Boundary: `ci_failure_fixture_goldens` drives `file_ci_failure_tasks` through `OrbitRuntime::run_deterministic` over captured log shapes, including rustfmt diffs ending in punctuation, symbols-only excerpts falling back to the step, and unusable signatures retaining exact-key deduplication without aborting unrelated filings. It reads the filed tasks back and reruns scenarios to verify persisted deduplication; `ci_failure_predating_a_landed_repair_is_held_not_refiled` holds a failure tested before a done repair of the same signature landed and files one tested after it. `ci_failure_claimed_branch_defers_attribution_until_the_claim_settles` keeps a follower-claimed task-branch failure out of the owner's bundle, files the landing failure in the same snapshot, and writes the observation when the claim is released. Collection's in-flight-descendant hold is covered by `orbit-engine`'s `executor::automation::ci::tests::pending`. Filing only; pilot admission and the shipped graph have no current test. | `crates/orbit-core/tests/ci_failure_goldens.rs` |

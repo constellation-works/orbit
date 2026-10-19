@@ -163,6 +163,7 @@ fn dispatch_codex(
         instruction: "Return the requested response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
+        explore_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

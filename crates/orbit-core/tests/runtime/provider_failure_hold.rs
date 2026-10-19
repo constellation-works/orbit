@@ -765,6 +765,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         instruction: "implement the task".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
+        explore_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

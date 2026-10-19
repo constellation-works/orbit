@@ -41,6 +41,9 @@ pub enum CrewPurpose {
     /// Tasks the CI failure, Dependabot and code-scanning sweeps file, and
     /// merged-head repairs a review reconciliation files.
     SweepTasks,
+    /// Read-only exploration an implement or review-repair run delegates
+    /// through `orbit.agent.invoke`.
+    Explorer,
 }
 
 /// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
@@ -50,7 +53,7 @@ const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
@@ -58,6 +61,7 @@ impl CrewPurpose {
         Self::Review,
         Self::BaselineRedRepair,
         Self::SweepTasks,
+        Self::Explorer,
     ];
 
     /// The purpose's stable name, as `workflow.purpose_crews.<name>` and the
@@ -71,6 +75,7 @@ impl CrewPurpose {
             Self::Review => "review",
             Self::BaselineRedRepair => "baseline_red_repair",
             Self::SweepTasks => "sweep_tasks",
+            Self::Explorer => "explorer",
         }
     }
 
@@ -95,6 +100,7 @@ impl CrewPurpose {
             Self::Review => "workflow.purpose_crews.review",
             Self::BaselineRedRepair => "workflow.purpose_crews.baseline_red_repair",
             Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
+            Self::Explorer => "workflow.purpose_crews.explorer",
         }
     }
 
@@ -125,7 +131,9 @@ impl CrewPurpose {
         match self {
             Self::TaskPilot | Self::AutoFix => Some("workflow.low_complexity_crews"),
             Self::FailureRecovery => Some("workflow.medium_complexity_crews"),
-            Self::FinalRecovery | Self::Review => None,
+            // An explorer is a cheap crew by intent; with no pool there is no
+            // explorer, and agent callers are refused.
+            Self::FinalRecovery | Self::Review | Self::Explorer => None,
             Self::BaselineRedRepair | Self::SweepTasks => {
                 Some("the task's complexity pool, then workflow.default_crew")
             }

@@ -592,8 +592,9 @@ spec:
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
         and merge. Follow item 10's scratch policy. Gates read durable artifacts and
-        task state, never the execution summary as an oracle. Do not invoke another agent
-        or dispatch work. In the execution summary, map criteria to results,
+        task state, never the execution summary as an oracle. Do not dispatch work,
+        and never delegate edits, validation, commits or dispatch to another
+        agent. In the execution summary, map criteria to results,
         list validation commands as passed/failed/not run with reasons, record
         the item 11 reconciliation (delivery paths, paths outside the task's
         selectors, cleanup outcome, leftovers), and disclose risks or
@@ -674,8 +675,27 @@ spec:
     `orbit.codebase.show` with the path lists the tasks behind a mark when
     you need them. In the execution summary, say what you did for each
     marked file you changed.
+  explore_instruction: |
+    Read-only delegation
+
+    You may hand read-only questions to a cheaper agent instead of spending
+    your own turns on them: locating code, tracing callers, summarizing a
+    module, or finding the tests that cover a path.
+    - Through Orbit: call `orbit.agent.invoke` with `prompt` (one focused
+      question), `cwd` (your worktree root or a directory inside it),
+      `wait_seconds` (up to 600) and an `idempotency_key` unique to the
+      question. A crew from the workspace's explorer pool reads your
+      worktree in a read-only sandbox and answers with `answer.summary`,
+      `answer.findings` and `answer.paths_read`. Calls, concurrent
+      explorers, timeout and answer size are budgeted per run; when a call
+      is refused, continue the work yourself.
+    - Natively: your provider's own read-only subagents (for example
+      Claude's Agent tool on a small model) are allowed for the same kind
+      of question.
+    Delegate only reading. Never delegate edits, validation, commits or
+    dispatch: you make every change, run every check and own the result. An explorer's answer is a lead, not evidence; read
+    what you rely on in the files themselves before you change or cite it.
   tool_disallow_list:
-    - orbit.agent.invoke
     - orbit.auto_task.add
     - orbit.auto_task.mint
     - orbit.auto_task.update

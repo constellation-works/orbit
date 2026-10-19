@@ -173,7 +173,7 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run. Any operator session may admit one,
+- It is **not** a trusted-host invocation for a managed run. Any operator session may admit one,
   local or arriving over SSH: a remote caller reached this machine through an
   SSH login that already lets it start any process it likes, so `operator` is
   the whole test. Start the calling federated or remote-proxy server with
@@ -181,6 +181,19 @@ What it is not:
   refused. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
+
+**Read-only explorers.** A managed `agent_implement` or `agent_review_repair`
+run may call the same tool when `workflow.explore.enabled` is on and
+`workflow.purpose_crews.explorer` has an eligible member. That call gets a
+different, narrower run: an `agent_explore_pipeline` explorer drawn from the
+explorer pool, sandboxed with no writes (Codex in its read-only inner sandbox),
+starting in a `cwd` inside the caller's own worktree, with every task,
+lifecycle, dispatch, commit and invocation tool denied. It never gets a
+trusted-host admission. The answer adds `paths_read`. Per-run call and
+concurrency budgets, a timeout ceiling and an answer-size cap apply; each
+refusal names its reason and setting, and the caller continues without
+delegating. Every other managed run is refused. See
+[CONFIG.md](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowexplore--read-only-exploration-for-implementing-agents).
 
 Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
 checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run

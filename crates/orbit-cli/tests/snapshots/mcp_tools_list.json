@@ -1,28 +1,27 @@
 [
   {
     "name": "orbit_agent_invoke",
-    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. Queued submissions include `queued: true`, a one-based `queue_position` and a warning. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit_workflow_run_show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. Queued submissions include `queued: true`, a one-based `queue_position` and a warning. An operator's invocation runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. An implement or review-repair agent may instead delegate a read-only question when `workflow.explore.enabled` is on: it gets a sandboxed explorer from the explorer crew pool that reads its own worktree, cannot write or change Orbit state, and is bounded by per-run call, concurrency, timeout and answer-size budgets; every other agent is refused, and a refusal never stops the caller's run. Track it with `orbit_workflow_run_show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "prompt": {
           "type": "string",
-          "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change."
+          "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change. An explorer lists the paths it read in `answer.paths_read`."
         },
         "cwd": {
           "type": "string",
-          "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller."
+          "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller. An explorer's must be inside the calling run's own worktree."
         },
         "crew": {
           "type": "string",
-          "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew."
+          "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew. An explorer's must be in `workflow.purpose_crews.explorer`, which it is drawn from when omitted."
         },
         "timeout_seconds": {
           "type": "integer",
-          "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling.",
+          "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling. An explorer defaults to, and may not exceed, `workflow.explore.timeout_seconds`.",
           "minimum": 1,
-          "maximum": 7200,
-          "default": 1800
+          "maximum": 7200
         },
         "wait_seconds": {
           "type": "integer",
@@ -36,7 +35,7 @@
         },
         "provider_sandbox": {
           "type": "string",
-          "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`."
+          "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`. Operator invocations only: an explorer is always read-only."
         },
         "model": {
           "type": "string",

@@ -48,6 +48,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
         "baseline_hold_tick",
         "task_pilot::crew_selection",
         "provider_limit_admission",
+        "admission_audit::agent_explore",
         "task_delivery",
     ]
     .contains(&module);

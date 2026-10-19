@@ -22,7 +22,7 @@ use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 pub(crate) use crate::runtime::host_resource::delivery::DeliveryResourceClass;
 pub(crate) use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::delivery::{
-    RESOURCE_CLASS_KEY, SUBMITTED_DELIVERY_JOBS, resource_class_in,
+    ATTRIBUTED_CHILD_JOBS, RESOURCE_CLASS_KEY, SUBMITTED_DELIVERY_JOBS, resource_class_in,
 };
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -91,6 +91,15 @@ impl OrbitRuntime {
         adopted: bool,
     ) -> Option<DeliveryResourceClass> {
         let job = run.job_id.as_str();
+        if ATTRIBUTED_CHILD_JOBS.contains(&job) {
+            // Only the class its admission copied from the delegating
+            // delivery: an explorer captures none of its own.
+            return run
+                .input
+                .as_ref()
+                .and_then(|input| input.get(RESOURCE_CLASS_KEY))
+                .and_then(|class| serde_json::from_value(class.clone()).ok());
+        }
         let claimed = CLAIMED_LEAF_JOBS.contains(&job);
         if !claimed && !SUBMITTED_DELIVERY_JOBS.contains(&job) {
             return None;

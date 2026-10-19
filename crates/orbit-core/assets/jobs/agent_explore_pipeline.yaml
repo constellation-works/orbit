@@ -1,0 +1,30 @@
+# Read-only exploration delegated by a managed implement or review-repair run.
+#
+# Submitted only by `orbit.agent.invoke` when its caller is such a run and
+# `workflow.explore.enabled` is on. The admission checks the calling run, its
+# worktree, the explorer crew pool and the per-run budgets before this run
+# exists, and records the delegating run as `parent_run_id`.
+#
+# One step on purpose, like the operator's invocation: no worktree setup, no
+# lock reservation, no task transition and no PR behavior. Unlike it, the
+# activity runs inside Orbit's executor sandbox with a read-only profile and
+# carries no trusted-host admission. Status, results and cancellation are the
+# ordinary run surfaces — `orbit run show|logs|cancel <RUN_ID>`.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: agent_explore_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  # A host resource guard across every delegating run. Each run's own limit
+  # is `workflow.explore.max_concurrent_per_run`; past this ceiling an
+  # explorer queues and its submission reports the position.
+  max_active_runs: 8
+
+  steps:
+    - id: explore
+      target: activity:agent_explore
+      # Forward the admission's input as one object, so prompt text is never
+      # recursively templated.
+      default_input: "{{ input }}"

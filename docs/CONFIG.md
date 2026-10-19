@@ -302,7 +302,7 @@ provider_limit_explicit_crews = "wait"
 | `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too while `workflow.purpose_crews.failure_recovery` is unset. |
 | `workflow.hard_complexity_crews` | `[]` | The same, for `hard`. |
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
-| `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `sweep_tasks`). Unset or `[]` keeps the purpose's earlier route. `final_recovery` (default `["sol:100", "opus:20"]`, `[]` disables it; see [final recovery pool](#final-recovery-pool)), `review` and `pre_landing_review` (see [automatic review](#review-and-operation--automatic-review)) keep their own rules. See [purpose crew pools](#purpose-crew-pools). |
+| `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `sweep_tasks`, `explorer`). Unset or `[]` keeps the purpose's earlier route. `final_recovery` (default `["sol:100", "opus:20"]`, `[]` disables it; see [final recovery pool](#final-recovery-pool)), `review` and `pre_landing_review` (see [automatic review](#review-and-operation--automatic-review)) keep their own rules. See [purpose crew pools](#purpose-crew-pools). |
 | `workflow.provider_limit_max_used_pct` | `90` | **Advanced.** Admission skips a crew while a live usage window of its provider or model is exhausted or used at or above this percent (`1`–`100`; `100` skips only on exhaustion). See [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. |
 | `workflow.provider_limit_budgets` | `[]` | **Advanced.** Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (`["grok:30usd/5h"]`). See [budgets](#budgets-for-providers-that-report-no-usage). |
@@ -506,6 +506,45 @@ Analytics › Codebase knows which paths regress; these marks tell the agent tha
 Marks reach the agent as `task.regression_risk` in the envelope: `window_days` and `marks`, each with `path`, `regressed` (`"N of M touching tasks"`), `nature` and `escape` (the one or two values most of the file's links record; a link without a typed classification reads `unclassified`, never a guess) and `lesson`, the newest regression task's title cut to one line, with internal task and friction IDs removed (omitted when nothing is left). The activity's `regression_risk_instruction` follows the main instruction and maps each nature and escape to one check: for example `no_test` asks the implementer for a focused regression check at the public boundary, `merge_reintroduced` to re-verify the touched area after a rebase, and `contract_drift` to update the affected docs or contract in the same diff, and the reviewer checks those categories on the marked files. With the switch off, a task without `file:` selectors, or no file qualifying, the envelope has no `regression_risk` key and the instruction is unchanged. `orbit codebase show <path>` and `orbit.codebase.show` give the tasks behind a mark.
 
 Each prompt that carries marks records them on the task as a `regression_risk_marked` history event whose decision names the run, the activity, the marked paths and the window, once per run, activity and paths. A claimed follower leaf computes marks from its own records and records none, since it cannot write its owner's task. The Regressions ranking reads these events back and compares the marked paths' regression rate for tasks delivered with marks against the same paths' rate in the window before the first mark, with the counts shown ([dashboard](design/user-interface/2_design.md)). Building marks scans task metadata and the history of tasks updated in the window; a scan that fails, or a record that cannot be written, is logged and never refuses the dispatch. Settings are read when the runtime opens.
+
+### `[workflow.explore]` — read-only exploration for implementing agents
+
+```toml
+[workflow.explore]
+enabled = true
+max_calls_per_run = 6
+max_concurrent_per_run = 2
+timeout_seconds = 600
+max_answer_bytes = 16384
+
+[workflow.purpose_crews]
+explorer = ["haiku:3", "luna:1"]
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.explore.enabled` | `false` | Let a managed `agent_implement` or `agent_review_repair` run delegate read-only questions to explorer crews through `orbit.agent.invoke`. |
+| `workflow.explore.max_calls_per_run` | `6` | Explorer invocations one calling run may submit (`1`–`100`). |
+| `workflow.explore.max_concurrent_per_run` | `2` | Explorers of one calling run that may be queued or running at once (`1`–`16`). |
+| `workflow.explore.timeout_seconds` | `600` | Default and ceiling of one explorer's provider wall clock, in seconds (`1`–`3600`). |
+| `workflow.explore.max_answer_bytes` | `16384` | Largest explorer answer, in bytes, returned to the calling agent (`1`–`262144`). |
+| `workflow.purpose_crews.explorer` | `[]` | The [purpose pool](#purpose-crew-pools) explorers draw from. Members disabled here, or whose executor `host_os` excludes this host, are skipped. |
+
+An implementing agent spends its expensive crew reading code. With the switch on and an eligible pool member, the `agent_implement` and `agent_review_repair` prompts gain a **Read-only delegation** instruction: the agent may call `orbit.agent.invoke` with a `prompt`, a `cwd` inside its own worktree and a `wait_seconds`, and gets back `answer` with `paths_read`. It may also use its provider's own read-only subagents, such as Claude's Agent tool on a small model. It never delegates edits, validation, commits or dispatch, and it treats an answer as a lead to confirm, not as evidence.
+
+An explorer is an `agent_explore_pipeline` run of the `agent_explore` activity, not a trusted-host invocation:
+
+- **Who may call.** Only a managed run of `agent_implement` or `agent_review_repair` that is still active. Every other agent is refused, as is an explorer itself, so explorers never nest. The operator's `orbit.agent.invoke` path is unchanged.
+- **Where it reads.** `cwd` must resolve inside the calling run's own linked worktree; a path in another worktree or the main checkout is refused. The explorer starts in that worktree under the `reviewer` filesystem profile, which grants no writes, and a provider with a read-only inner sandbox (Codex) runs in it. `provider_sandbox` is refused.
+- **Which crew.** One drawn by weight from `workflow.purpose_crews.explorer`. A named `crew` must be an eligible member of that pool; any other crew is refused.
+- **What it may do.** Its tool policy denies every task, friction, lifecycle, dispatch, commit, pull-request and workspace-claim tool, and `orbit.agent.invoke`. It carries no task, so it owns nothing it could change.
+- **Budgets.** A call past `max_calls_per_run` or `max_concurrent_per_run`, or a `timeout_seconds` above the setting, is refused, and the refusal names the setting. An answer longer than `max_answer_bytes` is shortened (final message, extra fields, next steps, findings, then the summary) and reported with `answer_truncated: true`. A retried call with the same `idempotency_key` returns the earlier run and spends no budget.
+
+Every refusal is an ordinary tool error with its reason; the calling agent continues without delegating. With the switch off or no eligible pool member, the instruction is not added and every call is refused.
+
+**Accounting.** Each explorer records its calling run, task and activity in its input (`parent_run_id`, `parent_task_id`, `parent_activity`) and an `agent.explore` audit entry, and its invocation records carry its own tokens and cost. Run detail lists a calling run's explorers with state, crew, duration, tokens, cost and paths read, and an explorer's detail links back to its caller. An explorer takes no drain slot of its own: it runs inside its caller's slot, bounded by `max_concurrent_per_run`, and inherits the caller's resource class, so its resource minutes count in the caller's [work-class resource profile](design/auto-concurrency/2_design.md). Analytics › Cost compares, per implementing crew, the implement runs that called explorers with those that did not: run count, mean duration, mean implementing-crew cost, and footprint misses (runs that widened their task's `context_files`), each with its sample count.
+
+Settings are read when the runtime opens.
 
 ### `[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks
 
@@ -839,6 +878,7 @@ baseline_red_repair = ["opus"]
 | Pre-landing review | `workflow.purpose_crews.pre_landing_review` | before-PR and before-landing review | `workflow.purpose_crews.review` |
 | Red-base repair | `workflow.purpose_crews.baseline_red_repair` | tasks the red-base re-check files (`baseline-red-repair` tag) | the task's complexity pool, then `default_crew` |
 | Sweep tasks | `workflow.purpose_crews.sweep_tasks` | tasks the CI failure sweep files (`ci-failure-sweep` tag), the Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files (its follow-up tag) | the same |
+| Explorer | `workflow.purpose_crews.explorer` | the read-only [explorers](#workflowexplore--read-only-exploration-for-implementing-agents) an implement or review-repair agent delegates | none: exploration is not offered |
 
 Final recovery keeps its own rules (no fallback; `[]` turns it off), and automatic review keeps its own (required for a review layer before landing; it avoids the crew that implemented the reviewed work).
 
