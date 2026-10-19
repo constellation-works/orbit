@@ -418,6 +418,19 @@ impl ConfigStore {
             ));
         }
         let value = parse_value_literal(raw_value);
+        // Loading clamps legacy persisted run windows so the CLI remains
+        // usable, but an explicit write must not persist an unsafe window.
+        // Check the parsed literal (including hexadecimal TOML integers)
+        // before mutating the document, for every config-store writer.
+        if key == "retention.runs_days"
+            && let Some(days) = value.as_integer()
+            && days < 30
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} has invalid value {days}; expected 30..=36500: Reliability Pipeline \
+                 echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state"
+            )));
+        }
         let segments: Vec<&str> = key.split('.').collect();
         // The non-empty segment check above makes `split_last` always `Some`;
         // still handle it as an error rather than `expect()` because this is

@@ -180,9 +180,18 @@ pub(super) fn resolve_retention_days(
     const MAX_DAYS: u32 = 36_500;
     match raw {
         Some(value) if key == "retention.runs_days" && value < 30 => {
-            Err(OrbitError::InvalidInput(format!(
-                "{key} has invalid value {value}; expected 30..={MAX_DAYS}: Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state"
-            )))
+            // Older releases recommended 14 days. Keep those persisted
+            // files loadable so operators can repair them through config set.
+            // ConfigStore refuses new writes below the floor separately.
+            tracing::warn!(
+                key,
+                stored_days = value,
+                effective_days = 30,
+                "stored run retention is below the supported minimum; using 30 days; \
+                 persist the correction with orbit config set retention.runs_days 30 \
+                 (add --global for the global config)"
+            );
+            Ok(30)
         }
         Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
             "{key} has invalid value {value}; expected 1..={MAX_DAYS}"

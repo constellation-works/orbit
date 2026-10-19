@@ -400,9 +400,12 @@ orbit gc audit --older-than-days 30   # one-off window instead of the configured
 
 `retention.audit_days` and `retention.runs_days` default to 60 days. On a large
 store, consider `retention.runs_days = 30` before enabling the sweep. Values
-below 30, including the command override, are refused because Reliability
-Pipeline echo dedupe and forecast-accuracy limiter shares need 30 days of run
-state. Leave audit retention at 60 unless you have a reason to shorten it. `gc audit` prunes the host-wide command audit,
+below 30 are refused for new config writes and command overrides because
+Reliability Pipeline echo dedupe and forecast-accuracy limiter shares need
+30 days of run state. Older global or workspace files with a shorter window
+load with an effective 30 days and a warning; startup leaves the file intact.
+Persist the correction with `orbit config set retention.runs_days 30` (add
+`--global` for the global file). Leave audit retention at 60 unless you have a reason to shorten it. `gc audit` prunes the host-wide command audit,
 this workspace's run audit, and run audit whose workspace id is no longer
 registered, then removes blobs that no remaining audit row, run step or
 pipeline state names. Another registered workspace keeps its own window. A blob
