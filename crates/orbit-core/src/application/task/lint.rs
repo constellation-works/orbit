@@ -11,8 +11,8 @@ use crate::OrbitRuntime;
 use crate::application::task::DeclaredContextFiles;
 
 use super::paths::{
-    canonicalize_existing_prefix, context_workspace_root, extract_task_path_mentions,
-    task_path_exists,
+    canonicalize_existing_prefix, context_workspace_root, is_path_under_workspace,
+    normalize_path_token, task_path_exists,
 };
 use crate::runtime::task::declared_context_files;
 
@@ -154,6 +154,101 @@ fn lint_context_file_paths(
             ),
         });
     }
+}
+
+/// Read description references, expanding comma brace groups before checking
+/// existence. Creation/example markers apply to this occurrence only, before
+/// deduplication, so an unmarked mention of the same path is still checked.
+fn extract_task_path_mentions(text: &str, workspace_root: &Path) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    let is_wrapper = |ch: char| {
+        matches!(
+            ch,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ':' | ';'
+        )
+    };
+    for line in text.lines() {
+        let words: Vec<_> = line.split_whitespace().collect();
+        for (index, raw) in words.iter().enumerate() {
+            if marks_created_or_example_path(&words[index.saturating_sub(6)..index]) {
+                continue;
+            }
+            // Keep braces: unlike other wrappers, they can end a path group.
+            let trimmed = raw
+                .trim_start_matches(is_wrapper)
+                .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
+            for expanded in expand_path_braces(trimmed) {
+                if let Some(path) = normalize_path_token(&expanded) {
+                    if path.starts_with('/')
+                        && !is_path_under_workspace(Path::new(&path), workspace_root)
+                    {
+                        continue;
+                    }
+                    paths.insert(path);
+                }
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
+/// Deliberately local prose heuristic, not a natural-language parser: the
+/// immediately preceding words must be a creation/example marker, or `to`
+/// with a move/rename verb in the preceding six words on the same line.
+/// Sources remain references; markers never exempt a whole sentence or task.
+fn marks_created_or_example_path(prefix: &[&str]) -> bool {
+    let words: Vec<_> = prefix
+        .iter()
+        .map(|word| {
+            word.trim_matches(['`', '"', '\'', '(', ')', ',', ':', ';'])
+                .to_ascii_lowercase()
+        })
+        .collect();
+    let words: Vec<_> = words.iter().map(String::as_str).collect();
+    [
+        &["create"][..],
+        &["create", "a"],
+        &["create", "file"],
+        &["create", "a", "file"],
+        &["new", "file"],
+        &["e.g."],
+        &["for", "example"],
+        &["such", "as"],
+    ]
+    .iter()
+    .any(|marker| words.ends_with(marker))
+        || (words.last() == Some(&"to")
+            && words.iter().any(|word| matches!(*word, "move" | "rename")))
+}
+
+/// Expand simple, non-nested comma groups, including multiple groups. Cap the
+/// Cartesian product at 64 paths; malformed or excessive patterns stay literal
+/// so they cannot hide a missing reference or cause exponential lint work.
+fn expand_path_braces(token: &str) -> Vec<String> {
+    let mut pending = vec![token.to_string()];
+    let mut expanded = Vec::new();
+    while let Some(path) = pending.pop() {
+        let Some(open) = path.find('{') else {
+            expanded.push(path);
+            continue;
+        };
+        let Some(close) = path[open..].find('}').map(|offset| open + offset) else {
+            return vec![token.to_string()];
+        };
+        let group = &path[open + 1..close];
+        let members: Vec<_> = group.split(',').collect();
+        if members.len() < 2
+            || members.iter().any(|member| member.is_empty())
+            || group.contains('{')
+            || pending.len() + expanded.len() + members.len() > 64
+        {
+            return vec![token.to_string()];
+        }
+        for member in members {
+            pending.push(format!("{}{member}{}", &path[..open], &path[close + 1..]));
+        }
+    }
+    expanded
 }
 
 fn lint_description_paths(
