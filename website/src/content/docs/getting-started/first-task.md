@@ -37,7 +37,7 @@ Open it, read the description and criteria, and click **Approve**. It moves to
 `backlog`. If the task is wrong, click **reject**, or ask your agent to fix it
 first.
 
-![The Tasks list: a proposed task under Awaiting approval with Approve, a task in progress with its host and View run, and backlog tasks with Ship, each showing whether it is eligible now or waiting.](../../../assets/dashboard/dashboard-approve-ship.png)
+![The Tasks list: a proposed task under Awaiting approval with Approve, a task in progress with its host and View run, and backlog tasks with Ship.](../../../assets/dashboard/dashboard-approve-ship.png)
 
 You can also tell your agent to approve it. Either way, approval is an
 explicit step, recorded in the task's history; nothing approves a task on its

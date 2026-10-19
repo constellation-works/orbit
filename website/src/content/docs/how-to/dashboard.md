@@ -10,7 +10,7 @@ errors, automation, and settings. It has no login and binds to loopback only.
 To use another machine's dashboard, tunnel to it over SSH, or switch to a
 registered host with the host picker.
 
-![The dashboard's Tasks view: the top bar with the host's load, memory, and disk and the refresh clock, the rail with Tasks, Jobs, and Drain, and tasks in status cards with Approve, View run, and Ship, with the backlog's waiting summary linking to Drain.](../../../assets/dashboard/dashboard-tasks.png)
+![The dashboard's Tasks view: the top bar with the host's load, memory, and disk and the refresh clock, tasks in status cards with Approve, View run, and Ship, and the Drain dock on the right.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
