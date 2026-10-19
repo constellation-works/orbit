@@ -158,8 +158,8 @@ fn write_error(error: std::io::Error) -> OrbitError {
     OrbitError::Execution(error.to_string())
 }
 
-/// Full non-ok diagnostics in severity order. Repair text stays verbatim on
-/// its own line, even when a command exceeds the terminal width.
+/// Full non-ok diagnostics in severity order. Long findings and repair
+/// actions wrap onto indented lines when exceeding the terminal width.
 fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> String {
     use orbit_cmd::WorkspaceDoctorStatus as Status;
     let mut findings = Vec::new();
@@ -176,10 +176,11 @@ fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> Str
             let mut finding = format!(
                 "{}  {label}\n{}",
                 row.check_name,
-                wrap_message(&row.message, width)
+                wrap_finding_message(&row.message, width)
             );
             if let Some(fix) = &row.remediation {
-                finding.push_str(&format!("\nFix: {fix}"));
+                finding.push('\n');
+                finding.push_str(&wrap_action(fix, width));
             }
             findings.push(finding);
         }
@@ -189,6 +190,84 @@ fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> Str
     } else {
         format!("Findings:\n\n{}", findings.join("\n\n"))
     }
+}
+
+/// Wrap a finding message onto indented lines, keeping each line within the terminal width.
+fn wrap_finding_message(message: &str, width: u16) -> String {
+    let indent = "  ";
+    if width == 0 {
+        return message
+            .lines()
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("{indent}{line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let available = width.saturating_sub(indent.len() as u16).max(1);
+    let wrapped = wrap_message(message, available);
+    wrapped
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Wrap repair action text, wrapping long actions onto indented continuation lines.
+fn wrap_action(fix: &str, width: u16) -> String {
+    let single_line = format!("Fix: {fix}");
+    if width == 0 || single_line.chars().count() <= width as usize {
+        return single_line;
+    }
+    let indent = "  ";
+    let first_available = width.saturating_sub(5).max(1) as usize;
+    let rest_available = width.saturating_sub(indent.len() as u16).max(1) as usize;
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_max = first_available;
+
+    for word in fix.split_whitespace() {
+        if current_line.is_empty() {
+            current_line.push_str(word);
+        } else if current_line.chars().count() + 1 + word.chars().count() <= current_max {
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            lines.push(current_line);
+            current_line = word.to_string();
+            current_max = rest_available;
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    let mut out = String::new();
+    let mut iter = lines.into_iter();
+    if let Some(first) = iter.next() {
+        if format!("Fix: {first}").chars().count() <= width as usize {
+            out.push_str(&format!("Fix: {first}"));
+        } else {
+            out.push_str(&format!("Fix:\n{indent}{first}"));
+        }
+    }
+    for line in iter {
+        out.push('\n');
+        out.push_str(indent);
+        out.push_str(&line);
+    }
+    out
 }
 
 /// Use the table library's display-width-aware wrapping without the list's

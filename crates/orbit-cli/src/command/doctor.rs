@@ -29,6 +29,10 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub deep: bool,
 
+    /// Print only failures and warnings.
+    #[arg(long)]
+    pub problems: bool,
+
     /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
     pub fix_stale_locks: bool,
@@ -263,7 +267,27 @@ impl Execute for DoctorCommand {
             .iter()
             .map(orbit_cmd::doctor_row_json)
             .collect::<Vec<_>>();
-        let mut blocks = Vec::new();
+
+        let summary = format!("{failures} failure(s), {warnings} warning(s).");
+        let mut blocks = vec![Block::text(summary)];
+
+        results.sort_by_key(|row| match row.status {
+            WorkspaceDoctorStatus::Error => 0,
+            WorkspaceDoctorStatus::Warning => 1,
+            WorkspaceDoctorStatus::Ok => 2,
+            WorkspaceDoctorStatus::Info => 3,
+            WorkspaceDoctorStatus::Skipped => 4,
+        });
+
+        if self.problems {
+            results.retain(|row| {
+                matches!(
+                    row.status,
+                    WorkspaceDoctorStatus::Error | WorkspaceDoctorStatus::Warning
+                )
+            });
+        }
+
         {
             use crate::output::table::{Column, Table};
             let mut table = Table::new(vec![
@@ -271,7 +295,11 @@ impl Execute for DoctorCommand {
                 Column::new("STATUS").fixed(),
                 Column::new("DETAILS"),
             ])
-            .empty_message("no workspace checks ran");
+            .empty_message(if self.problems {
+                "no problems found"
+            } else {
+                "no workspace checks ran"
+            });
             for row in &results {
                 use comfy_table::Cell;
                 table.add_row(vec![
@@ -288,8 +316,6 @@ impl Execute for DoctorCommand {
                     "\n{}",
                     crate::output::color::text("Workspace healthy.", Role::Ok)
                 )));
-            } else {
-                eprintln!("\n{failures} failure(s), {warnings} warning(s).");
             }
         }
 
