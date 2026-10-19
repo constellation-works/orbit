@@ -81,7 +81,16 @@ export function fetchAndRenderOrchestrators() {
       console.error(`orchestrator scorecard window ${payload && payload.window} rejected under ${selectedWindow} selection`);
       return;
     }
+    const priorComputedAt = lastData && lastData.computed_at;
+    const freshScan = Boolean(priorComputedAt && payload && payload.computed_at && payload.computed_at !== priorComputedAt);
     lastData = payload;
+    if (freshScan) {
+      detailCache.clear();
+      if (open) {
+        loadDetail(open.orchestrator, open.key);
+        return;
+      }
+    }
     render();
   }, COUNT_ID);
 }
@@ -356,14 +365,14 @@ function countCell(row, component) {
   return td;
 }
 
-function openCount(orchestrator, key) {
-  if (open && open.orchestrator === orchestrator && open.key === key) {
-    open = null;
-    render();
-    return;
-  }
+function detailCacheKey(orchestrator) {
+  const computedAt = (lastData && lastData.computed_at) || "";
+  return `${requestScope}\0${computedAt}\0${orchestrator}`;
+}
+
+function loadDetail(orchestrator, key) {
   const scope = requestScope;
-  const cacheKey = `${scope}\0${orchestrator}`;
+  const cacheKey = detailCacheKey(orchestrator);
   open = { orchestrator, key, detail: detailCache.get(cacheKey) || null, error: null };
   render();
   if (open.detail) return;
@@ -379,6 +388,15 @@ function openCount(orchestrator, key) {
     open = { ...open, error: error.message || String(error) };
     render();
   });
+}
+
+function openCount(orchestrator, key) {
+  if (open && open.orchestrator === orchestrator && open.key === key) {
+    open = null;
+    render();
+    return;
+  }
+  loadDetail(orchestrator, key);
 }
 
 function detailNode() {
@@ -406,7 +424,7 @@ function detailNode() {
   const node = el("section", { class: "orch-detail", "aria-label": `${label} tasks for ${orchestrator}` }, children);
   node.id = "orchestrators-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([orchestrator, key, !!detail, error]);
+  node.dataset.hash = JSON.stringify([orchestrator, key, (lastData && lastData.computed_at) || "", detail, error]);
   return node;
 }
 

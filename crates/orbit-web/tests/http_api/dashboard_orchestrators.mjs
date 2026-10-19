@@ -322,6 +322,68 @@ assert.match(part('detail').querySelector('p.orch-detail-error').textContent, /U
 click(part('detail').querySelector('button.orch-close'));
 assert.equal(part('detail'), undefined);
 
+// A recurring scorecard poll with a newer computed_at re-fetches an open
+// drill-down, updates its rendered tasks, and answers subsequent re-opens
+// from the refreshed cache.
+click(cellButton('opus', 'spec_edits'));
+assert.deepEqual(detailTasks(), ['ORB-1', 'ORB-2']);
+
+const scorecardT2 = {
+  ...scorecard,
+  computed_at: '2026-10-18T01:00:00.000Z',
+  rows: [
+    scorecardRow('opus', false,
+      { owned: 30, weighted_landed: 40, landed_initiative: 5, spec_edits: 3, spec_defects: 4, review_rejects: 1, rework: 3 },
+      { owned: 100, weighted_landed: 133.33, landed_initiative: 16.67, spec_edits: 10, spec_defects: 13.33, review_rejects: 3.33, rework: 10 },
+      { owned: 96, weighted_landed: 128, landed_initiative: 16, spec_edits: 9.6, spec_defects: 12.8, review_rejects: 3.2, rework: 9.6 },
+      { value: 38, per_100_tasks: 126.67, per_8_hours: 121.6 }),
+    scorecard.rows[1],
+  ],
+};
+const detailB = detailFor('opus', {
+  spec_edits: [
+    task('ORB-10', []),
+    task('ORB-11', []),
+    task('ORB-12', []),
+  ],
+});
+
+const polling = orchestrators.fetchAndRenderOrchestrators();
+const pollRequest = pending.at(-1);
+assert.equal(pollRequest.url.pathname, '/api/orchestrators/scorecard');
+pollRequest.resolve(response(scorecardT2));
+await polling;
+await settle();
+
+const detailRefreshRequest = pending.at(-1);
+assert.equal(detailRefreshRequest.url.pathname, '/api/orchestrators/detail', 'the open drill-down re-requests detail after a newer computed_at');
+assert.equal(detailRefreshRequest.url.searchParams.get('orchestrator'), 'opus');
+detailRefreshRequest.resolve(response(detailB));
+await settle();
+
+assert.deepEqual(detailTasks(), ['ORB-10', 'ORB-11', 'ORB-12'], 'the open drill-down renders the refreshed tasks');
+assert.match(part('detail').textContent, /3 counts from 3 tasks/);
+
+const pendingBeforeReopen = pending.length;
+click(cellButton('opus', 'spec_edits'));
+assert.equal(part('detail'), undefined, 'closing the open count');
+click(cellButton('opus', 'spec_edits'));
+assert.equal(pending.length, pendingBeforeReopen, 'reopening the count reuses the refreshed detail with no new request');
+assert.deepEqual(detailTasks(), ['ORB-10', 'ORB-11', 'ORB-12'], 'reopened count shows refreshed tasks');
+
+// A poll with an unchanged computed_at retains the open detail without a re-request.
+const pendingBeforeSamePoll = pending.length;
+const samePolling = orchestrators.fetchAndRenderOrchestrators();
+assert.equal(pending.length, pendingBeforeSamePoll + 1);
+pending.at(-1).resolve(response(scorecardT2));
+await samePolling;
+await settle();
+assert.equal(pending.length, pendingBeforeSamePoll + 1, 'no detail request when computed_at is unchanged');
+assert.deepEqual(detailTasks(), ['ORB-10', 'ORB-11', 'ORB-12']);
+
+click(cellButton('opus', 'spec_edits'));
+assert.equal(part('detail'), undefined);
+
 // The aggregate view has no per-workspace scorecard.
 common.setWorkspace('');
 orchestrators.placeholdOrchestratorsAggregate();
