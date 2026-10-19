@@ -287,6 +287,18 @@ fn approval_lines(approvals: &Value) -> Vec<String> {
                 task["detail"].as_str().unwrap_or("no evidence recorded"),
             ));
         }
+        if task["reason"] == "warnings" {
+            for finding in task["findings"].as_array().into_iter().flatten() {
+                let Some(text) = finding["text"].as_str().filter(|text| !text.is_empty()) else {
+                    continue;
+                };
+                lines.push(format!(
+                    "  Task {}: {}: {text}",
+                    task["task_id"].as_str().unwrap_or("-"),
+                    finding["kind"].as_str().unwrap_or("warning"),
+                ));
+            }
+        }
     }
     lines
 }

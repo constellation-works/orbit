@@ -102,5 +102,12 @@ spec:
         oneOf:
           - type: string
           - type: "null"
+      implementation_lane:
+        description: >
+          Callable tools of the implement activity and both artifact-attachment
+          paths. Null when that activity could not be read.
+        oneOf:
+          - type: "null"
+          - type: object
   action: prepare_task_pilot
   config: {}

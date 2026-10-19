@@ -457,6 +457,9 @@ pub(crate) fn prepare(
         "workspace_path": workspace_root,
         // The only machine a `required_machine` finding may name.
         "owner_machine": runtime.automation_execution_location(),
+        // Callable tools of the activity that will implement the task, plus
+        // both artifact-attachment paths. Null when that activity cannot be read.
+        "implementation_lane": lane.prompt_input(),
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
             json!({
                 "base_branch": requested_base_branch(runtime, input),

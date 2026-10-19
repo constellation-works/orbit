@@ -37,7 +37,8 @@ use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, TaskStatus, TaskType,
 };
 use orbit_types::workflow::{
-    ChildDispatchPhase, DrainApprovalReport, DrainWaitingTask, JobRunState, PipelineState,
+    ChildDispatchPhase, DrainApprovalReport, DrainHoldFinding, DrainWaitingTask, JobRunState,
+    PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -50,7 +51,7 @@ use crate::runtime::engine::crew::normalized_task_crew;
 use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    approval_disqualification, approved_by_drain, held_classification,
+    approval_disqualification, approved_by_drain, held_classification, warning_findings_for_hold,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -118,11 +119,14 @@ fn approval_snapshot(
         closed: Vec::new(),
     };
     for task in proposed {
-        let held = |reason: &str, detail: Option<String>| DrainWaitingTask {
-            task_id: task.id.clone(),
-            reason: Some(reason.to_string()),
-            blocked_by: Vec::new(),
-            detail,
+        let held = |reason: &str, detail: Option<String>, findings: Vec<DrainHoldFinding>| {
+            DrainWaitingTask {
+                task_id: task.id.clone(),
+                reason: Some(reason.to_string()),
+                blocked_by: Vec::new(),
+                detail,
+                findings,
+            }
         };
         let disqualified =
             approval_disqualification(&task.tags, &task.context_files, task.complexity);
@@ -153,19 +157,21 @@ fn approval_snapshot(
             };
             snapshot
                 .held
-                .push(held(PILOT_VERIFIED_NO_DIFF, Some(detail)));
+                .push(held(PILOT_VERIFIED_NO_DIFF, Some(detail), Vec::new()));
             continue;
         }
         if let Some(reason) = disqualified {
-            snapshot.held.push(held(reason, None));
+            snapshot.held.push(held(reason, None, Vec::new()));
             continue;
         }
         if task.task_type == TaskType::Bug
             && let Some(hold) = runtime.unverified_finding_hold(&runtime.get_task(&task.id)?)?
         {
-            snapshot
-                .held
-                .push(held(UNVERIFIED_REVIEW_FINDING, Some(hold.detail())));
+            snapshot.held.push(held(
+                UNVERIFIED_REVIEW_FINDING,
+                Some(hold.detail()),
+                Vec::new(),
+            ));
             continue;
         }
         let history = runtime.get_task_history(&task.id)?;
@@ -173,11 +179,20 @@ fn approval_snapshot(
             .iter()
             .rev()
             .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT);
-        if let Some(classification) = latest
-            .filter(|entry| entry.event == "task_pilot_applied")
-            .and_then(|entry| held_classification(runtime, entry))
+        if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
+            && let Some(classification) = held_classification(runtime, entry)
         {
-            snapshot.held.push(held(classification, None));
+            let findings = if classification == "warnings" {
+                match entry.receipt() {
+                    Some(operation_id) => {
+                        warning_findings_for_hold(runtime, &task.id, operation_id)?
+                    }
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            snapshot.held.push(held(classification, None, findings));
             continue;
         }
         // A pilot still running would be duplicated by a second one.
@@ -188,6 +203,7 @@ fn approval_snapshot(
             snapshot.held.push(held(
                 "pilot_running",
                 Some(format!("task-pilot run {} is assessing it", pilot.run_id)),
+                Vec::new(),
             ));
             continue;
         }
@@ -203,6 +219,7 @@ fn approval_snapshot(
                 Some(format!(
                     "task-pilot run {run_id} left no decision; edit the task or approve it to retry"
                 )),
+                Vec::new(),
             ));
             continue;
         }

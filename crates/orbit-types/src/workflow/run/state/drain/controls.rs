@@ -81,6 +81,18 @@ pub struct DrainWindowExtension {
     pub extended_at: DateTime<Utc>,
 }
 
+/// One pilot finding that held a proposed task, named so an approval report
+/// can show it without opening the pilot audit.
+///
+/// `kind` is the assessment field (`utility_warnings`, `surface_warnings`,
+/// and the other warning fields). `text` is that finding's first non-empty
+/// line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainHoldFinding {
+    pub kind: String,
+    pub text: String,
+}
+
 /// A backlog task a drain's admission pass left unstarted, and why.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DrainWaitingTask {
@@ -97,6 +109,10 @@ pub struct DrainWaitingTask {
     /// a `host_os_mismatch` task waits for, say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Pilot findings when `reason` is `warnings`. Empty for every other
+    /// hold, and for a warnings hold whose audit could not be read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<DrainHoldFinding>,
 }
 
 /// What an `--approve-proposed` drain has done with `proposed` work.

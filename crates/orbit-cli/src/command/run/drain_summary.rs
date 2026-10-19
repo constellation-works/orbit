@@ -377,14 +377,17 @@ fn approval_lines(report: &DrainApprovalReport, formatter: &WaitingTaskFormatter
             )
         },
     )];
-    for task in &report.held {
+    for held in &report.held {
         let task = WaitingTask {
-            task_id: task.task_id.clone(),
-            reason: task.reason.clone(),
-            blocked_by: task.blocked_by.clone(),
-            detail: task.detail.clone(),
+            task_id: held.task_id.clone(),
+            reason: held.reason.clone(),
+            blocked_by: held.blocked_by.clone(),
+            detail: held.detail.clone(),
         };
         lines.push(format!("  {}", waiting_line(&task, "held", formatter)));
+        for finding in &held.findings {
+            lines.push(format!("    {}: {}", finding.kind, finding.text));
+        }
     }
     let listed = report.held.len() as u64;
     if report.held_total > listed {
