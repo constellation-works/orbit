@@ -3,12 +3,15 @@
 //! Each poll reads `api/hosts` once, without probing, then the drain, failed-run
 //! and review routes for the serving host and every other registered host that
 //! is not already known to be unreachable. Remote routes go through
-//! `api/on/<host>/…`. Items are keyed by host, workspace and id. When more than
-//! one host is registered, notification text names the host. Drain and failure
-//! counts are sums across the hosts that answered. A host that does not answer
-//! keeps the baseline from its last answer, so those items are not announced
-//! again when it returns, and the missing answer makes that count unavailable
-//! instead of adding zero.
+//! `api/on/<host>/…`. Items are keyed by host, workspace and id. A failed run's
+//! id is the task and root-cause leaf, so one task's leaf, gate and auto
+//! pipeline count and notify once. When more than one host is registered,
+//! notification text names the host. Drain and failure counts are sums across
+//! the hosts that answered. The failure count is distinct failures in the
+//! fetched page (at most [`PAGE`] runs per host), not the endpoint's run
+//! total. A host that does not answer keeps the baseline from its last answer,
+//! so those items are not announced again when it returns, and the missing
+//! answer makes that count unavailable instead of adding zero.
 //! Fleet phases and holds are compared per workspace. Baseline-red task holds
 //! come from each available workspace's readiness snapshot, not fleet labels.
 
@@ -23,6 +26,8 @@ const FAILED_SINCE: &str = "24h";
 const PAGE: usize = 200;
 /// More new items than this in one read become a single notification.
 const MAX_SEPARATE: usize = 3;
+/// Failed rows, and separately review rows, kept for the tray menu.
+pub const TRAY_ITEM_LIMIT: usize = 8;
 
 /// Counts the native shell can display after polling the dashboard.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,9 +38,110 @@ pub enum PollSummary {
     Live {
         /// Workspaces with an active drain, summed across hosts.
         drains: Option<usize>,
-        /// Failed runs in the dashboard's summary window, summed across hosts.
+        /// Distinct failures in the fetched page, summed across hosts.
+        /// One task's leaf, gate and auto pipeline count once. `None` when a
+        /// host did not answer or its failed-run list did not parse.
         failed: Option<u64>,
+        /// Tray rows: up to [`TRAY_ITEM_LIMIT`] failed items, newest first,
+        /// then the same bound of review items.
+        attention: Vec<AttentionItem>,
     },
+}
+
+/// Whether a tray row is a failure or a task in review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionKind {
+    /// A distinct failed task, opened at its root-cause run.
+    Failed,
+    /// A task in review, opened at that task.
+    Review,
+}
+
+/// One tray row. The title is what the menu shows; the route is where a click
+/// opens the dashboard. Neither field includes a raw run id in the title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttentionItem {
+    /// Failed or review.
+    pub kind: AttentionKind,
+    /// Task title, or the job name when the run names no task.
+    pub title: String,
+    /// Dashboard host, workspace and task or run the click opens.
+    pub route: DashboardRoute,
+}
+
+impl AttentionItem {
+    /// The tray label: `Failed: <title>` or `Review: <title>`.
+    #[must_use]
+    pub fn menu_label(&self) -> String {
+        let kind = match self.kind {
+            AttentionKind::Failed => "Failed",
+            AttentionKind::Review => "Review",
+        };
+        format!("{kind}: {}", self.title.replace(['\n', '\r'], " "))
+    }
+}
+
+/// Where a click opens the dashboard, relative to the server's origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardRoute {
+    /// Registered remote host. `None` is the serving host.
+    pub host: Option<String>,
+    /// Workspace the task or run belongs to.
+    pub workspace: String,
+    /// Task page or run page.
+    pub target: RouteTarget,
+}
+
+/// The dashboard page a tray row or notification opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteTarget {
+    /// `#runs?run_id=`, the root-cause leaf when a parent echoed it.
+    Run(String),
+    /// `#tasks?open=`, the same task link the dashboard builds.
+    Task(String),
+}
+
+impl DashboardRoute {
+    /// `base` with this host, workspace and hash route.
+    ///
+    /// The query uses the same encoding as the dashboard's address bar. The
+    /// fragment is `runs?run_id=` or `tasks?open=`, which the dashboard router
+    /// already accepts.
+    #[must_use]
+    pub fn location(&self, base: &url::Url) -> url::Url {
+        let mut url = base.clone();
+        {
+            let mut query = url.query_pairs_mut();
+            query.clear();
+            if let Some(host) = &self.host {
+                query.append_pair("host", host);
+            }
+            if !self.workspace.is_empty() {
+                query.append_pair("workspace", &self.workspace);
+            }
+        }
+        let id = match &self.target {
+            RouteTarget::Run(id) | RouteTarget::Task(id) => encode_segment(id),
+        };
+        let fragment = match &self.target {
+            RouteTarget::Run(_) => format!("runs?run_id={id}"),
+            RouteTarget::Task(_) => format!("tasks?open={id}"),
+        };
+        url.set_fragment(Some(&fragment));
+        url
+    }
+}
+
+/// One announcement. `route` is set when a click should open one task or run;
+/// a summary of many items uses the newest item's route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    /// Notification title.
+    pub title: String,
+    /// Notification body. It names a title and workspace, never an id.
+    pub body: String,
+    /// Dashboard route a click opens, when this announcement has one.
+    pub route: Option<DashboardRoute>,
 }
 
 /// One registered host to poll. The serving host uses the local `/api` routes.
@@ -51,10 +157,17 @@ struct PollHost {
 /// One item a notification can name.
 #[derive(Clone)]
 struct Item {
-    /// Host, workspace and run or task id, for comparing reads; never shown.
+    /// Host, workspace and id, for comparing reads; never shown.
+    ///
+    /// A failure's id is the task and root-cause leaf, so the leaf, gate and
+    /// auto pipeline of one failure share it. A review item's id is the task.
     key: ItemKey,
     label: String,
     workspace: String,
+    /// Set for a failed run or a review task. Drain and hold items have none.
+    route: Option<DashboardRoute>,
+    /// ISO-8601 timestamp. Empty when the row did not name one; newer sorts first.
+    recency: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -185,7 +298,7 @@ impl Watcher {
     pub fn poll(
         &mut self,
         mut get: impl FnMut(&str) -> Option<Value>,
-        mut notify: impl FnMut(&str, &str),
+        mut notify: impl FnMut(&Notice),
     ) -> PollSummary {
         // `probe=false` lists the host file without opening an SSH session.
         // Reachability is the forward itself: probing every host on the tray's
@@ -226,8 +339,7 @@ impl Watcher {
                 format!("job-runs/all?state=failed&since={FAILED_SINCE}&limit={PAGE}");
             let drains = get(&api_path(host, "fleet/drains"))
                 .and_then(|body| drain_snapshot(&mut get, host, &body));
-            let failed =
-                get(&api_path(host, &failed_route)).map(|body| failed_runs(&body, &host.name));
+            let failed = get(&api_path(host, &failed_route)).map(|body| failed_runs(&body, host));
             let review = review_snapshot(&mut get, host);
             reads.push(HostRead {
                 name: host.name.clone(),
@@ -329,6 +441,7 @@ impl Watcher {
             &mut notify,
         );
 
+        let attention = attention_items(&reads);
         let any = reads
             .iter()
             .any(|read| read.drains.is_some() || read.failed.is_some() || read.review.is_some());
@@ -339,6 +452,7 @@ impl Watcher {
             return PollSummary::Live {
                 drains: None,
                 failed: None,
+                attention,
             };
         }
         PollSummary::Live {
@@ -352,6 +466,7 @@ impl Watcher {
                     .iter()
                     .map(|read| read.failed.as_ref().and_then(|listing| listing.total)),
             ),
+            attention,
         }
     }
 }
@@ -534,29 +649,119 @@ fn remember_holds(
     *previous = Some(keys);
 }
 
-fn failed_runs(body: &Value, host: &str) -> Listing {
-    let items = rows(body)
-        .filter_map(|run| {
-            let task_title = run["tasks"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find_map(|task| task["title"].as_str());
-            let label = task_title.or_else(|| run["job_id"].as_str())?;
-            Some(Item::new(
-                host,
-                run["workspace_id"].as_str()?,
-                run["run_id"].as_str()?,
-                label,
-                &workspace_name(run),
-            ))
-        })
-        .collect();
-    Listing {
-        items,
-        total: body["total"].as_u64(),
-        unavailable: unavailable_scopes(body, host),
+/// Distinct failures in this page. The endpoint's `total` counts every failed
+/// run, including the gate and auto pipeline that echo one leaf, so the tray
+/// does not use it. A body with no `items` array did not parse: the count
+/// stays unavailable instead of becoming zero.
+fn failed_runs(body: &Value, host: &PollHost) -> Listing {
+    let Some(rows) = body["items"].as_array() else {
+        return Listing {
+            items: Vec::new(),
+            total: None,
+            unavailable: unavailable_scopes(body, &host.name),
+        };
+    };
+    let mut items: Vec<Item> = Vec::new();
+    let mut index: HashMap<ItemKey, usize> = HashMap::new();
+    for run in rows {
+        let Some(item) = failure_item(host, run) else {
+            continue;
+        };
+        if let Some(slot) = index.get(&item.key).copied() {
+            if item.recency > items[slot].recency {
+                items[slot] = item;
+            }
+        } else {
+            index.insert(item.key.clone(), items.len());
+            items.push(item);
+        }
     }
+    Listing {
+        total: Some(items.len() as u64),
+        unavailable: unavailable_scopes(body, &host.name),
+        items,
+    }
+}
+
+/// One failed run folded into the task and the leaf it actually failed on.
+/// A parent that records `root_cause` shares that leaf's identity.
+fn failure_item(host: &PollHost, run: &Value) -> Option<Item> {
+    let run_id = non_empty(run.get("run_id"))?;
+    let workspace_id = non_empty(run.get("workspace_id"))?;
+    let root = run.get("root_cause").filter(|value| value.is_object());
+    let leaf = root
+        .and_then(|cause| non_empty(cause.get("leaf_run_id")))
+        .unwrap_or(run_id);
+    let task_id = root
+        .and_then(|cause| non_empty(cause.get("task_id")))
+        .or_else(|| task_id_of(run));
+    let label =
+        task_title(run, task_id).or_else(|| non_empty(run.get("job_id")).map(str::to_string))?;
+    let identity = match task_id {
+        Some(task) => format!("{task}\n{leaf}"),
+        None => leaf.to_string(),
+    };
+    Some(
+        Item::new(
+            &host.name,
+            workspace_id,
+            &identity,
+            &label,
+            &workspace_name(run),
+        )
+        .opened(
+            DashboardRoute {
+                host: remote_host(host),
+                workspace: workspace_id.to_string(),
+                target: RouteTarget::Run(leaf.to_string()),
+            },
+            run_recency(run),
+        ),
+    )
+}
+
+fn non_empty(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+}
+
+fn remote_host(host: &PollHost) -> Option<String> {
+    (!host.local && !host.name.is_empty()).then(|| host.name.clone())
+}
+
+fn task_id_of(run: &Value) -> Option<&str> {
+    run.get("task_ids")
+        .and_then(Value::as_array)
+        .and_then(|ids| ids.iter().find_map(|id| non_empty(Some(id))))
+        .or_else(|| {
+            run.get("tasks")
+                .and_then(Value::as_array)
+                .and_then(|tasks| tasks.iter().find_map(|task| non_empty(task.get("id"))))
+        })
+}
+
+fn task_title(run: &Value, task_id: Option<&str>) -> Option<String> {
+    let tasks = run.get("tasks")?.as_array()?;
+    if let Some(task_id) = task_id
+        && let Some(title) = tasks.iter().find_map(|task| {
+            (non_empty(task.get("id")) == Some(task_id))
+                .then(|| non_empty(task.get("title")))
+                .flatten()
+        })
+    {
+        return Some(title.to_string());
+    }
+    tasks
+        .iter()
+        .find_map(|task| non_empty(task.get("title")).map(str::to_string))
+}
+
+fn run_recency(run: &Value) -> &str {
+    ["finished_at", "started_at", "scheduled_at", "created_at"]
+        .into_iter()
+        .find_map(|key| non_empty(run.get(key)))
+        .unwrap_or("")
 }
 
 /// Workspaces a successful aggregate could not read. An absent `unavailable`
@@ -593,7 +798,7 @@ fn review_snapshot(
     loop {
         let body = get(&path)?;
         body["items"].as_array()?;
-        let page = review_tasks(&body, &host.name);
+        let page = review_tasks(&body, host);
         listing.total = listing.total.or(page.total);
         listing.unavailable.extend(page.unavailable);
         listing.items.extend(
@@ -617,22 +822,29 @@ fn review_snapshot(
     }
 }
 
-fn review_tasks(body: &Value, host: &str) -> Listing {
+fn review_tasks(body: &Value, host: &PollHost) -> Listing {
     let items = rows(body)
         .filter_map(|task| {
-            Some(Item::new(
-                host,
-                task["workspace_id"].as_str()?,
-                task["id"].as_str()?,
-                task["title"].as_str()?,
-                &workspace_name(task),
-            ))
+            let id = non_empty(task.get("id"))?;
+            let workspace_id = non_empty(task.get("workspace_id"))?;
+            let title = non_empty(task.get("title"))?;
+            let recency = non_empty(task.get("created_at")).unwrap_or("");
+            Some(
+                Item::new(&host.name, workspace_id, id, title, &workspace_name(task)).opened(
+                    DashboardRoute {
+                        host: remote_host(host),
+                        workspace: workspace_id.to_string(),
+                        target: RouteTarget::Task(id.to_string()),
+                    },
+                    recency,
+                ),
+            )
         })
         .collect();
     Listing {
         items,
         total: body["total"].as_u64(),
-        unavailable: unavailable_scopes(body, host),
+        unavailable: unavailable_scopes(body, &host.name),
     }
 }
 
@@ -646,7 +858,15 @@ impl Item {
             },
             label: label.to_string(),
             workspace: workspace_name.to_string(),
+            route: None,
+            recency: String::new(),
         }
+    }
+
+    fn opened(mut self, route: DashboardRoute, recency: &str) -> Self {
+        self.route = Some(route);
+        self.recency = recency.to_string();
+        self
     }
 }
 
@@ -670,21 +890,81 @@ fn announce(
     title: &str,
     plural: &str,
     show_host: bool,
-    notify: &mut impl FnMut(&str, &str),
+    notify: &mut impl FnMut(&Notice),
 ) {
+    if added.is_empty() {
+        return;
+    }
     if added.len() > MAX_SEPARATE {
         let mut places: Vec<String> = added.iter().map(|item| place(item, show_host)).collect();
         places.sort_unstable();
         places.dedup();
-        notify(
-            &format!("{} {plural}", added.len()),
-            &format!("In {}", places.join(", ")),
-        );
+        notify(&Notice {
+            title: format!("{} {plural}", added.len()),
+            body: format!("In {}", places.join(", ")),
+            route: newest_route(added),
+        });
         return;
     }
     for item in added {
-        notify(title, &place_with_label(item, show_host));
+        notify(&Notice {
+            title: title.to_string(),
+            body: place_with_label(item, show_host),
+            route: item.route.clone(),
+        });
     }
+}
+
+/// The route of the newest item. Equal timestamps keep the earlier row, which
+/// is the newest when the server listed newest first and none named a time.
+fn newest_route(items: &[Item]) -> Option<DashboardRoute> {
+    let mut best: Option<&Item> = None;
+    for item in items {
+        best = Some(match best {
+            Some(current) if item.recency > current.recency => item,
+            Some(current) => current,
+            None => item,
+        });
+    }
+    best.and_then(|item| item.route.clone())
+}
+
+fn attention_items(reads: &[HostRead]) -> Vec<AttentionItem> {
+    let mut failed = Vec::new();
+    let mut review = Vec::new();
+    for read in reads {
+        if let Some(listing) = &read.failed {
+            failed.extend(listing.items.iter().filter(|item| item.route.is_some()));
+        }
+        if let Some(listing) = &read.review {
+            review.extend(listing.items.iter().filter(|item| item.route.is_some()));
+        }
+    }
+    let mut items = bounded_attention(failed, AttentionKind::Failed);
+    items.extend(bounded_attention(review, AttentionKind::Review));
+    items
+}
+
+fn bounded_attention(items: Vec<&Item>, kind: AttentionKind) -> Vec<AttentionItem> {
+    let mut ranked: Vec<(usize, &Item)> = items.into_iter().enumerate().collect();
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .recency
+            .cmp(&left.1.recency)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked
+        .into_iter()
+        .take(TRAY_ITEM_LIMIT)
+        .filter_map(|(_, item)| {
+            Some(AttentionItem {
+                kind,
+                title: item.label.clone(),
+                route: item.route.clone()?,
+            })
+        })
+        .collect()
 }
 
 fn place(item: &Item, show_host: bool) -> String {

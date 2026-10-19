@@ -28,10 +28,15 @@ dashboard's own host switcher.
   one that is still starting. The server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
   can leave the server running until you stop it yourself.
-- **Menu bar and tray.** The icon's menu shows how many drains are running and how many runs
-  failed in the last 24 hours, summed across this host and every registered remote host, with
-  **Open Orbit**, **Restart Dashboard Server**, **Check for
-  Updates…** (see [Auto-update](#auto-update)), **Launch at Login** and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failed runs),
+- **Menu bar and tray.** The icon's menu shows how many drains are running and how many distinct
+  task failures were in the last 24 hours, summed across this host and every registered remote host.
+  One task's leaf, gate and auto pipeline count once. The number is the distinct failures in the
+  newest 200 failed runs fetched per host, not the endpoint's raw run total, so a failure older
+  than that page is not included. The menu also lists up to 8 `Failed: <task title>` rows and 8
+  `Review: <task title>` rows, newest first. Choosing one opens the dashboard at that run (a
+  failure opens the root-cause leaf) or task. The rest of the menu is **Open Orbit**, **Restart
+  Dashboard Server**, **Check for Updates…** (see [Auto-update](#auto-update)), **Launch at Login**
+  and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failures),
   and closing the window keeps the app in the menu bar; **Quit Orbit** or ⌘Q ends it. On Linux,
   closing the window quits, because a desktop without an AppIndicator host has no tray to return
   from. Restarting the server reloads the window once the new server is ready.
@@ -47,15 +52,19 @@ dashboard's own host switcher.
   host, and the host's previous runs and review tasks stay remembered, so they are not announced
   again when the host returns. Native notifications cover:
 
-  - A run that newly appears as failed, naming the task title (or the job) and workspace.
-  - A task that newly appears in review, naming its title and workspace.
+  - A task failure that newly appears, naming the task title (or the job) and workspace. The
+    leaf, gate and auto pipeline of one failure notify once; a later run of that same root cause
+    does not notify again. Clicking the notification opens the dashboard at the root-cause run.
+  - A task that newly appears in review, naming its title and workspace. Clicking it opens the
+    dashboard at that task.
   - A drain moving from draining, pulling or winding down to idle (**Drain finished**).
   - A new fleet hold (**Drain held**), naming the hold and workspace.
   - A new task hold caused by a red base (**Task held**), naming the workspace and explaining that
     it waits for the base branch to pass. Internal task identifiers are never displayed.
 
   When more than one host is registered, the notification names the host too. More than three new
-  items of one kind in a poll arrive as one summary. Unchanged holds are not announced again;
+  items of one kind in a poll arrive as one summary, and a click opens the newest item's route.
+  Unchanged holds are not announced again;
   a hold that clears and later returns is new. An unavailable workspace or a failed read never
   counts as a drain ending and preserves its previous phases and holds. Its first available read
   establishes a quiet baseline. Readiness reads cover up to 500 backlog tasks; a partial read

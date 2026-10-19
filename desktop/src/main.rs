@@ -8,7 +8,8 @@
 //!
 //! The dashboard page is a remote origin to Tauri: no capability grants it a
 //! command, and the window never navigates anywhere except the status page
-//! and the running dashboard. Other links open in the default browser.
+//! and the running dashboard. A tray row or notification click may open that
+//! dashboard at a task or run route. Other links open in the default browser.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
