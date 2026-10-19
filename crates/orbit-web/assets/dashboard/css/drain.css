@@ -362,7 +362,9 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-start-held { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; }
 .drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: 14px; }
 
-.drain-card > .operation-feedback { min-height: 0; padding: 8px 18px; border-top: 1px solid var(--hair); border-bottom: 0; }
+/* A Start's result sits under the Start card (index.html), as a panel of its own,
+   so it shows on Drain and in the Tasks dock alike. */
+.drain-col-side > .operation-feedback { min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

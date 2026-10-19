@@ -226,7 +226,6 @@
                   <div class="body" id="auto-drain-body">
                     <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
                   </div>
-                  <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
                 </section>
                 <section class="panel drain-waits-card" id="drain-waits-panel" aria-labelledby="drain-waits-title">
                   <header><h2 class="drain-title" id="drain-waits-title">Why tasks are waiting</h2><span class="count">Snapshot · can change before admission</span></header>
@@ -246,6 +245,9 @@
                   </header>
                   <div class="body" id="auto-drain-start-body"></div>
                 </section>
+                <!-- A Start's result and its no-retry warning sit under the Start card,
+                     which both dock homes show; the status card is hidden on Tasks. -->
+                <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
                 <section class="panel" id="locks-panel" aria-labelledby="locks-title">
                   <header><h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span></header>
                   <div class="body" id="locks-body"></div>
