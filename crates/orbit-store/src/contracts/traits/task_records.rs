@@ -13,6 +13,14 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
 pub trait TaskHistoryStoreBackend: Send + Sync {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError>;
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
+    /// Evidence that a task's history and comments are unchanged, taken
+    /// without reading them: equal stamps mean both reads would return what
+    /// they returned when the earlier stamp was taken, or something newer
+    /// that a later stamp catches. `None` when this backend cannot vouch for
+    /// them, so the caller reads instead of reusing anything derived.
+    fn task_history_stamp(&self, _id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
     fn update_task_history(
         &self,
         id: &str,

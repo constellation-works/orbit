@@ -1,5 +1,6 @@
 pub(crate) mod admission_load_store;
 pub(crate) mod audit_event_store;
+pub(crate) mod codebase_facts_store;
 pub(crate) mod connection;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;

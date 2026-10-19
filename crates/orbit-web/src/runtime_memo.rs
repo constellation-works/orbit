@@ -10,8 +10,8 @@
 //! `/api/cost` (keyed by the canonical window), and the codebase
 //! analytics scan behind `/api/codebase/analytics` and the agent scorecard
 //! scan behind `/api/agents/*`, which cache typed facts rather than a response
-//! body. The agent scan alone is served stale while one background refresh
-//! replaces it. `/api/routines` uses a host namespace keyed by
+//! body. The agent and codebase analytics scans are served stale while one
+//! background refresh replaces them. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
 //! payload served from a memo reports its age in an `Age` header.
 
@@ -34,10 +34,17 @@ use serde_json::Value;
 /// the served payload is.
 pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 
-/// Freshness bound for the codebase analytics scan. A miss reads every task
-/// bundle's history, and the rankings it feeds move over days, so the 30 s
-/// dashboard poll must not repeat it.
+/// Freshness bound for the codebase analytics scan. A scan rereads the
+/// bundles of tasks that changed since the last one (the rest come from the
+/// store's derived task facts), and the rankings it feeds move over days, so
+/// the 30 s dashboard poll must not repeat it.
 pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
+
+/// How long past [`CODEBASE_ANALYTICS_TTL`] the analytics scan is still
+/// served while one background refresh replaces it. A day covers a dashboard
+/// left idle overnight; past it, a request waits for a scan rather than read
+/// rankings that old.
+pub(crate) const CODEBASE_ANALYTICS_STALE_LIMIT: Duration = Duration::from_secs(24 * 3600);
 
 /// Freshness bound for the agent scorecard scan. A miss reads the history
 /// and comments of every task active in the last 90 days, and the rankings

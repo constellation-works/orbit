@@ -6,11 +6,15 @@
 //! when it started waiting, and its next reservation grant (or its leaving
 //! the backlog) says when the wait ended.
 //!
-//! The scan reads every task bundle's history. A caller that serves repeated
-//! requests (the dashboard) caches the facts and slices every window,
-//! threshold and rollup from them; the CLI and the tool scan once per call.
+//! What a task's history, comments and failed claim settlements say about it
+//! ([`HistoryFacts`]) is kept in the store between scans (see [`super::stored`]),
+//! so a scan reads only the bundles of tasks that changed since. Envelope
+//! facts come from the task index at every scan. A caller that serves
+//! repeated requests (the dashboard) also caches the facts and slices every
+//! window, threshold and rollup from them; the CLI and the tool scan once
+//! per call.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -29,6 +33,7 @@ use orbit_types::workflow::{
     BUBBLEWRAP_NAMESPACE_REFUSALS, ClaimFailureClass, FORGE_UNAVAILABLE_EXPIRED_EVENT,
     ProviderFailureClass,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::regression::{PendingLink, RegressionLink};
@@ -64,7 +69,7 @@ const SETTLEMENT_MATCH_SECONDS: i64 = 300;
 
 /// A footprint entry: a workspace-relative path and whether it names a
 /// directory (`dir:` selector) rather than a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(in crate::application) struct Anchor {
     pub(super) path: String,
     pub(super) dir: bool,
@@ -120,9 +125,55 @@ pub(in crate::application) enum BlockCause {
     Unclassified,
 }
 
+/// [`BlockCause`] as stored: its infrastructure cause or actor kind by name,
+/// which must name one this binary lists to be read back.
+#[derive(Serialize, Deserialize)]
+enum StoredCause {
+    Infra(String),
+    Run,
+    BaseConflict(Vec<Anchor>),
+    Manual(String),
+    NotFailure,
+    Unclassified,
+}
+
+impl Serialize for BlockCause {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.clone() {
+            Self::Infra(cause) => StoredCause::Infra(cause.to_string()),
+            Self::Run => StoredCause::Run,
+            Self::BaseConflict(paths) => StoredCause::BaseConflict(paths),
+            Self::Manual(actor) => StoredCause::Manual(actor.to_string()),
+            Self::NotFailure => StoredCause::NotFailure,
+            Self::Unclassified => StoredCause::Unclassified,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BlockCause {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let known = |names: &[&'static str], name: String| {
+            names
+                .iter()
+                .find(|known| **known == name)
+                .copied()
+                .ok_or_else(|| serde::de::Error::custom(format!("unknown block cause '{name}'")))
+        };
+        Ok(match StoredCause::deserialize(deserializer)? {
+            StoredCause::Infra(cause) => Self::Infra(known(INFRA_CAUSES, cause)?),
+            StoredCause::Run => Self::Run,
+            StoredCause::BaseConflict(paths) => Self::BaseConflict(paths),
+            StoredCause::Manual(actor) => Self::Manual(known(ACTOR_KINDS, actor)?),
+            StoredCause::NotFailure => Self::NotFailure,
+            StoredCause::Unclassified => Self::Unclassified,
+        })
+    }
+}
+
 /// One entry into `blocked`: when, the history event that wrote it, and its
 /// classified cause.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Block {
     pub(super) at: DateTime<Utc>,
     pub(super) event: String,
@@ -259,32 +310,55 @@ pub struct CodebaseFacts {
     pub(super) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
 }
 
-/// Scan the workspace once. A task whose history cannot be read keeps its
-/// envelope facts with an empty history rather than failing the whole view.
-pub(super) fn scan(
-    runtime: &OrbitRuntime,
-    delivery_window: Option<&super::sections::Params>,
-    include_landed: bool,
-) -> Result<CodebaseFacts, OrbitError> {
-    let computed_at = Utc::now();
-    let tasks = runtime.list_task_metadata()?;
-    let pending_links = pending_links(&tasks);
+/// What one task's history, comments and failed claim settlements say,
+/// apart from its envelope: everything a scan otherwise rereads the bundle
+/// for, and what [`super::stored`] keeps between scans. Envelope fields
+/// (status, title, footprint, tags, run) are joined at every scan, so an
+/// envelope edit never needs these recomputed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct HistoryFacts {
+    /// When the task last entered `done`, whatever its status now.
+    pub(super) entered_done: Option<DateTime<Utc>>,
+    /// When the task last entered `rejected`, whatever its status now.
+    pub(super) entered_rejected: Option<DateTime<Utc>>,
+    pub(super) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
+    /// Whether a history entry only a job run writes is present.
+    pub(super) marks_run: bool,
+    pub(super) blocks: Vec<Block>,
+    /// Ascending.
+    pub(super) left_backlog: Vec<DateTime<Utc>>,
+    /// The verified landing receipt: its commit and when it landed.
+    pub(super) receipt: Option<(String, DateTime<Utc>)>,
+    pub(super) marks: Vec<(DateTime<Utc>, RegressionRiskMarks)>,
+    /// The task-pilot receipts, read for a task with a landing receipt.
+    pub(super) pilot: Option<super::pilot::PilotInputs>,
+    /// The receipt commit's changed paths, once a diff produced them. Never
+    /// stored as unavailable: missing objects may be fetched later.
+    pub(super) landed_paths: Option<BTreeSet<String>>,
+}
 
-    let settlements = failed_claim_settlements(runtime);
-    let mut facts = Vec::with_capacity(tasks.len());
-    let mut landed_scan = include_landed.then(|| super::landed::Scanner::new(runtime));
-    let mut pilot_runs = None;
-    for task in tasks {
-        let id = task.id.to_string();
-        let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
+impl HistoryFacts {
+    /// Read the task's history (and, for a landed task, its comments) and
+    /// derive its facts. The flag is false when a read failed: the facts
+    /// then stand for an empty history and must not be stored.
+    pub(super) fn compute(
+        runtime: &OrbitRuntime,
+        id: &str,
+        settlements: &[SettledFailure],
+    ) -> (Self, bool) {
+        let _span = tracing::trace_span!(
+            target: "orbit.core.codebase",
+            "codebase_task_facts_computed",
+            task_id = %id,
+        )
+        .entered();
+        let mut complete = true;
+        let history = runtime.get_task_history(id).unwrap_or_else(|error| {
             tracing::warn!(task_id = %id, %error, "codebase analytics: task history unreadable");
+            complete = false;
             Vec::new()
         });
-        let done_at = (task.status == TaskStatus::Done)
-            .then(|| entered(&history, TaskStatus::Done).unwrap_or(task.updated_at));
-        let rejected_at = (task.status == TaskStatus::Rejected)
-            .then(|| entered(&history, TaskStatus::Rejected).unwrap_or(task.updated_at));
-        let widenings: Vec<_> = history
+        let widenings = history
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
             .filter_map(|entry| {
@@ -297,43 +371,21 @@ pub(super) fn scan(
                 Some((entry.at, anchors))
             })
             .collect();
-        let had_run = task.job_run_id.is_some()
-            || !widenings.is_empty()
-            || history.iter().any(entry_marks_run);
-        let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
         let blocks = history
             .iter()
             .filter(|entry| entry.to_status == Some(TaskStatus::Blocked))
             .map(|entry| Block {
                 at: entry.at,
                 event: entry.event.clone(),
-                cause: classify_block(entry, task_settlements),
+                cause: classify_block(entry, settlements),
             })
             .collect();
-        let mut footprint: Vec<Anchor> = task
-            .context_files
-            .iter()
-            .filter_map(|selector| Anchor::parse(selector))
-            .collect();
-        footprint.sort();
-        footprint.dedup();
         let mut left_backlog: Vec<DateTime<Utc>> = history
             .iter()
             .filter(|entry| entry.to_status.is_some_and(|to| to != TaskStatus::Backlog))
             .map(|entry| entry.at)
             .collect();
         left_backlog.sort();
-        let receipt = super::landed::receipt(&history);
-        let delivery_at =
-            done_at.map(|at| receipt.as_ref().map_or(at, |(_, landed_at)| *landed_at));
-        let landed = delivery_at
-            .filter(|at| delivery_window.is_none_or(|params| params.within(*at)))
-            .and_then(|_| {
-                landed_scan
-                    .as_mut()?
-                    .read(runtime, &id, receipt, delivery_window.is_some())
-            });
-        let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
         let marks = history
             .iter()
             .filter_map(|entry| match &entry.decision {
@@ -343,12 +395,111 @@ pub(super) fn scan(
                 _ => None,
             })
             .collect();
-        let pilot = (landed.is_some() && !no_diff)
+        let receipt = super::landed::receipt(&history);
+        let pilot = receipt
+            .is_some()
             .then(|| {
-                let runs = pilot_runs.get_or_insert_with(|| super::pilot::PilotRuns::load(runtime));
-                super::pilot::read(runtime, runs, &id, computed_at)
+                super::pilot::inputs(runtime, id).unwrap_or_else(|error| {
+                    tracing::warn!(task_id = %id, %error, "codebase analytics: task comments unreadable");
+                    complete = false;
+                    None
+                })
             })
             .flatten();
+        let facts = Self {
+            entered_done: entered(&history, TaskStatus::Done),
+            entered_rejected: entered(&history, TaskStatus::Rejected),
+            widenings,
+            marks_run: history.iter().any(entry_marks_run),
+            blocks,
+            left_backlog,
+            receipt,
+            marks,
+            pilot,
+            landed_paths: None,
+        };
+        (facts, complete)
+    }
+}
+
+/// Scan the workspace once. A task whose history cannot be read keeps its
+/// envelope facts with an empty history rather than failing the whole view.
+/// Each task's [`HistoryFacts`] are reused from the store while its history
+/// stamp and settlements match, and computed and stored otherwise.
+pub(super) fn scan(
+    runtime: &OrbitRuntime,
+    delivery_window: Option<&super::sections::Params>,
+    include_landed: bool,
+) -> Result<CodebaseFacts, OrbitError> {
+    let computed_at = Utc::now();
+    let tasks = runtime.list_task_metadata()?;
+    let pending_links = pending_links(&tasks);
+
+    let settlements = failed_claim_settlements(runtime);
+    let mut stored = super::stored::StoredFacts::load(runtime);
+    let mut facts = Vec::with_capacity(tasks.len());
+    let mut landed_scan = include_landed.then(|| super::landed::Scanner::new(runtime));
+    let mut pilot_runs = None;
+    for task in tasks {
+        let id = task.id.to_string();
+        let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let mut entry = stored.entry(runtime, &id, task_settlements);
+        let done_at = (task.status == TaskStatus::Done)
+            .then(|| entry.facts.entered_done.unwrap_or(task.updated_at));
+        let rejected_at = (task.status == TaskStatus::Rejected)
+            .then(|| entry.facts.entered_rejected.unwrap_or(task.updated_at));
+        let had_run =
+            task.job_run_id.is_some() || !entry.facts.widenings.is_empty() || entry.facts.marks_run;
+        let mut footprint: Vec<Anchor> = task
+            .context_files
+            .iter()
+            .filter_map(|selector| Anchor::parse(selector))
+            .collect();
+        footprint.sort();
+        footprint.dedup();
+        let delivery_at = done_at.map(|at| {
+            entry
+                .facts
+                .receipt
+                .as_ref()
+                .map_or(at, |(_, landed_at)| *landed_at)
+        });
+        let landed = delivery_at
+            .filter(|at| delivery_window.is_none_or(|params| params.within(*at)))
+            .and_then(|_| {
+                let scanner = landed_scan.as_mut()?;
+                let Some((commit, at)) = entry.facts.receipt.clone() else {
+                    return delivery_window
+                        .is_some()
+                        .then(|| scanner.observe(runtime, &id))
+                        .flatten();
+                };
+                if entry.facts.landed_paths.is_none() {
+                    entry.facts.landed_paths = scanner.changed_paths(&commit);
+                    entry.dirty |= entry.facts.landed_paths.is_some();
+                }
+                Some(super::landed::Landed {
+                    at,
+                    commit,
+                    paths: entry.facts.landed_paths.clone()?,
+                })
+            });
+        let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+        let pilot = (landed.is_some() && !no_diff)
+            .then(|| {
+                // A delivery-observed landing has no receipt, so its pilot
+                // receipts were not read with its stored facts.
+                let inputs = if entry.facts.receipt.is_some() {
+                    entry.facts.pilot.clone()
+                } else {
+                    super::pilot::inputs(runtime, &id).ok().flatten()
+                }?;
+                let runs = pilot_runs.get_or_insert_with(|| super::pilot::PilotRuns::load(runtime));
+                Some(super::pilot::attribute(runtime, runs, inputs, computed_at))
+            })
+            .flatten();
+        stored.keep(&id, &entry);
+        let history = entry.facts;
         facts.push(TaskFacts {
             landed,
             delivery_at,
@@ -367,12 +518,13 @@ pub(super) fn scan(
             done_at,
             rejected_at,
             had_run,
-            widenings,
-            blocks,
-            left_backlog,
-            marks,
+            widenings: history.widenings,
+            blocks: history.blocks,
+            left_backlog: history.left_backlog,
+            marks: history.marks,
         });
     }
+    stored.save(runtime, facts.iter().map(|task| task.id.as_str()));
     attach_regressions(&mut facts, pending_links);
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();

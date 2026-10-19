@@ -7,15 +7,21 @@
 //! selectors included), not the diff that landed. The related-file query
 //! separately measures verified landed diffs, including unreserved Markdown,
 //! and the task-pilot ranking grades each pilot's selectors against them.
-//! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once,
-//! from its event log alone and outside the task commit lock when nothing is
-//! left to recover; [`codebase_analytics`] and [`codebase_path_detail`] only
-//! slice those facts by window, minimum support and rollup. Analytics uses
-//! verified landing receipts in task history, without observing delivery
-//! runs. Related queries use [`OrbitRuntime::codebase_related_scan`] for
-//! window-scoped delivery fallback, which lists the workspace's runs and
-//! parses the job catalog once per scan. A caller that keeps the history-only
-//! facts (the dashboard) answers another selection without rescanning.
+//! [`OrbitRuntime::codebase_scan`] lists every task's envelope from the task
+//! index and takes what its history, comments and failed claim settlements
+//! say from the store's derived per-task facts (`stored`), reading a task's
+//! event log (outside the task commit lock when nothing is left to recover)
+//! and diffing its landed commit only when that task changed since the last
+//! scan by any process. Every scan path shares those rows; a missing or
+//! outdated row is recomputed and written back. [`codebase_analytics`] and
+//! [`codebase_path_detail`] only slice the facts by window, minimum support
+//! and rollup. Analytics uses verified landing receipts in task history,
+//! without observing delivery runs. Related queries use
+//! [`OrbitRuntime::codebase_related_scan`] for window-scoped delivery
+//! fallback, which lists the workspace's runs and parses the job catalog once
+//! per scan; what delivery observation finds is never stored with a task. A
+//! caller that keeps the history-only facts (the dashboard) answers another
+//! selection without rescanning.
 
 mod detail;
 mod facts;
@@ -26,6 +32,7 @@ mod regression;
 mod related;
 mod risk;
 mod sections;
+mod stored;
 
 use std::time::Duration;
 
@@ -133,9 +140,11 @@ impl CodebaseQuery {
 }
 
 impl OrbitRuntime {
-    /// Scan the workspace's tasks, reservations and lock denials once. A task
-    /// whose history cannot be read keeps its envelope facts. Landed paths and
-    /// pilot grading use task-history receipts only, without delivery observation.
+    /// Scan the workspace's tasks, reservations and lock denials once, reusing
+    /// the stored facts of every task unchanged since they were computed. A
+    /// task whose history cannot be read keeps its envelope facts. Landed paths
+    /// and pilot grading use task-history receipts only, without delivery
+    /// observation.
     pub fn codebase_scan(&self) -> Result<CodebaseFacts, OrbitError> {
         facts::scan(self, None, true)
     }

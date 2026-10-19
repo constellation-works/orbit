@@ -33,38 +33,34 @@ impl Scanner {
         }
     }
 
-    pub(super) fn read(
-        &mut self,
-        runtime: &OrbitRuntime,
-        id: &str,
-        owner: Option<(String, DateTime<Utc>)>,
-        observe_delivery: bool,
-    ) -> Option<Landed> {
-        let (commit, at) = owner.or_else(|| {
-            if !observe_delivery {
-                return None;
-            }
-            let delivery = runtime
-                .observe_codebase_task_delivery(id, &self.delivery)
-                .ok()?;
-            if delivery.landing.status != LandingObservationStatus::Merged {
-                return None;
-            }
-            Some((
-                delivery
-                    .landing
-                    .landed_commit
-                    .or(delivery.commit.head_sha)?,
-                delivery.landing.observed_at?,
-            ))
-        })?;
-        // Never fetch from a read-only analytics request. Missing/pruned objects
-        // remain unavailable and are counted separately from empty diffs.
-        let paths = self
-            .paths
-            .entry(commit.clone())
-            .or_insert_with(|| changed_paths(self.repo.as_ref()?, &commit))
-            .clone()?;
+    /// The files `commit` changed, diffed at most once per scan. `None`
+    /// when the repository, the commit or its objects are missing: never
+    /// fetched by a read-only analytics request, and counted separately from
+    /// an empty diff. A later fetch can supply them, so the caller keeps no
+    /// `None` as final.
+    pub(super) fn changed_paths(&mut self, commit: &str) -> Option<BTreeSet<String>> {
+        self.paths
+            .entry(commit.to_string())
+            .or_insert_with(|| changed_paths(self.repo.as_ref()?, commit))
+            .clone()
+    }
+
+    /// For a done task without a landing receipt, the landed diff its
+    /// delivery run observed as merged. Only a window-scoped related scan
+    /// asks, so nothing it returns is stored with the task.
+    pub(super) fn observe(&mut self, runtime: &OrbitRuntime, id: &str) -> Option<Landed> {
+        let delivery = runtime
+            .observe_codebase_task_delivery(id, &self.delivery)
+            .ok()?;
+        if delivery.landing.status != LandingObservationStatus::Merged {
+            return None;
+        }
+        let commit = delivery
+            .landing
+            .landed_commit
+            .or(delivery.commit.head_sha)?;
+        let at = delivery.landing.observed_at?;
+        let paths = self.changed_paths(&commit)?;
         Some(Landed { at, commit, paths })
     }
 }
@@ -93,6 +89,12 @@ pub(super) fn receipt(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<
 }
 
 fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<String>> {
+    let _span = tracing::trace_span!(
+        target: "orbit.core.codebase",
+        "codebase_landed_diff",
+        commit = %commit,
+    )
+    .entered();
     let landed = repo.find_commit(git2::Oid::from_str(commit).ok()?).ok()?;
     let tree = landed.tree().ok()?;
     let parent = if landed.parent_count() == 0 {
