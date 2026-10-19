@@ -223,45 +223,142 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
             Ok(())
         }
         (Some(Value::String(root)), Some(condition)) => {
-            let expected = format!(
-                "${{{{ !cancelled() && (github.event_name != 'pull_request' || needs.{root}.outputs.state == 'open') }}}}"
-            );
-            if condition.as_str() != Some(expected.as_str()) {
+            if condition.as_str() != Some(format!("${{{{ {} }}}}", live_open(root)).as_str()) {
                 return Err(unreadable("unsupported emission condition"));
             }
-            let state = &workflow["jobs"][root];
-            if state.get("needs").is_some()
-                || state["if"] != "${{ github.event_name == 'pull_request' }}"
-                || state.get("continue-on-error").is_some()
-            {
-                return Err(unreadable("unsupported live-state dependency"));
+            live_state(workflow, root)
+        }
+        // A job narrowed by the change-scope gate still reports on every PR:
+        // the scope job never fails and every mode it can output either runs
+        // the job or skips it under its unchanged name.
+        (Some(Value::Array(needs)), Some(condition)) => {
+            let [Value::String(root), Value::String(scope)] = needs.as_slice() else {
+                return Err(unreadable("unsupported emission dependencies"));
+            };
+            let open = live_open(root);
+            let mode = format!("needs.{scope}.outputs.mode");
+            let full = format!("${{{{ {open} && {mode} != 'docs' && {mode} != 'skip' }}}}");
+            let docs = format!("${{{{ {open} && {mode} == 'docs' }}}}");
+            if !matches!(condition.as_str(), Some(c) if c == full || c == docs) {
+                return Err(unreadable("unsupported emission condition"));
             }
-            let steps = state["steps"]
-                .as_array()
-                .filter(|steps| steps.len() == 1)
-                .ok_or_else(|| unreadable("live-state projection steps"))?;
-            let step = &steps[0];
-            let step_id = step["id"]
-                .as_str()
-                .ok_or_else(|| unreadable("live-state output identity"))?;
-            if state["outputs"]
-                != serde_json::json!({"state":format!("${{{{ steps.{step_id}.outputs.state }}}}")})
-                || step.get("if").is_some()
-                || step.get("continue-on-error").is_some()
-            {
-                return Err(unreadable("live-state output binding"));
-            }
-            let command = step["run"]
-                .as_str()
-                .ok_or_else(|| unreadable("live-state source read"))?;
-            if !projected_api_read(command) || !command.trim().starts_with("gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '") {
-                return Err(unreadable("live-state read does not name this PR"));
-            }
-            let name = step["name"]
-                .as_str()
-                .ok_or_else(|| unreadable("live-state step name"))?;
-            api_step(workflow, root, name)
+            live_state(workflow, root)?;
+            change_scope(workflow, root, scope)
         }
         _ => Err(unreadable("conditional emission is unsupported")),
     }
+}
+
+/// The adapter's live-PR gate: true on every non-PR event and on an open PR.
+fn live_open(root: &str) -> String {
+    format!(
+        "!cancelled() && (github.event_name != 'pull_request' || needs.{root}.outputs.state == 'open')"
+    )
+}
+
+fn live_state(workflow: &Value, root: &str) -> Result<(), OrbitError> {
+    let state = &workflow["jobs"][root];
+    if state.get("needs").is_some()
+        || state["if"] != "${{ github.event_name == 'pull_request' }}"
+        || state.get("continue-on-error").is_some()
+    {
+        return Err(unreadable("unsupported live-state dependency"));
+    }
+    let steps = state["steps"]
+        .as_array()
+        .filter(|steps| steps.len() == 1)
+        .ok_or_else(|| unreadable("live-state projection steps"))?;
+    let step = &steps[0];
+    let step_id = step["id"]
+        .as_str()
+        .ok_or_else(|| unreadable("live-state output identity"))?;
+    if state["outputs"]
+        != serde_json::json!({"state":format!("${{{{ steps.{step_id}.outputs.state }}}}")})
+        || step.get("if").is_some()
+        || step.get("continue-on-error").is_some()
+    {
+        return Err(unreadable("live-state output binding"));
+    }
+    let command = step["run"]
+        .as_str()
+        .ok_or_else(|| unreadable("live-state source read"))?;
+    if !projected_api_read(command) || !command.trim().starts_with("gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '") {
+        return Err(unreadable("live-state read does not name this PR"));
+    }
+    let name = step["name"]
+        .as_str()
+        .ok_or_else(|| unreadable("live-state step name"))?;
+    api_step(workflow, root, name)
+}
+
+/// The exact `Change scope` job (scripts/ci-change-scope.sh): one checkout and
+/// one classification step whose only output is `mode`. `continue-on-error`
+/// keeps a failing or timed-out classifier from failing its dependents, which
+/// then see an empty mode and run in full. On a PR the mode is `full` or
+/// `docs`; whatever the script prints, a dependent either runs or skips, so
+/// the script's contents never decide emission. Any other key, step, binding
+/// or condition refuses.
+fn change_scope(workflow: &Value, root: &str, scope: &str) -> Result<(), OrbitError> {
+    let job = workflow["jobs"][scope]
+        .as_object()
+        .ok_or_else(|| unreadable("change-scope job"))?;
+    if job.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "needs"
+                | "if"
+                | "name"
+                | "runs-on"
+                | "timeout-minutes"
+                | "continue-on-error"
+                | "permissions"
+                | "outputs"
+                | "steps"
+        )
+    }) || job.get("needs") != Some(&Value::String(root.into()))
+        || job.get("if").and_then(Value::as_str)
+            != Some(format!("${{{{ {} }}}}", live_open(root)).as_str())
+        || job.get("continue-on-error") != Some(&Value::Bool(true))
+        || !matches!(
+            job.get("runs-on").and_then(Value::as_str),
+            Some("ubuntu-latest" | "ubuntu-22.04" | "ubuntu-24.04")
+        )
+        || !job.get("timeout-minutes").is_some_and(Value::is_u64)
+    {
+        return Err(unreadable("unsupported change-scope job"));
+    }
+    let Some([checkout, classify]) = job["steps"].as_array().map(Vec::as_slice) else {
+        return Err(unreadable("change-scope steps"));
+    };
+    let pinned = checkout["uses"]
+        .as_str()
+        .and_then(|uses| uses.strip_prefix("actions/checkout@"))
+        .is_some_and(|pin| pin.len() == 40 && pin.bytes().all(|b| b.is_ascii_hexdigit()));
+    if !pinned
+        || checkout.as_object().map(serde_json::Map::len) != Some(2)
+        || checkout["with"] != serde_json::json!({"token":"${{ secrets.GITHUB_TOKEN }}"})
+    {
+        return Err(unreadable("change-scope checkout"));
+    }
+    let step_id = classify["id"]
+        .as_str()
+        .ok_or_else(|| unreadable("change-scope output identity"))?;
+    if job["outputs"]
+        != serde_json::json!({"mode":format!("${{{{ steps.{step_id}.outputs.mode }}}}")})
+        || classify.as_object().map(serde_json::Map::len) != Some(4)
+        || !classify["name"].is_string()
+        || classify["run"] != "scripts/ci-change-scope.sh"
+        || classify["env"]
+            != serde_json::json!({
+                "GH_TOKEN": "${{ github.token }}",
+                "GH_REPO": "${{ github.repository }}",
+                "EVENT": "${{ github.event_name }}",
+                "PR": "${{ github.event.pull_request.number }}",
+                "SHA": "${{ github.sha }}",
+                "BEFORE": "${{ github.event.before }}",
+            })
+    {
+        return Err(unreadable("change-scope classification binding"));
+    }
+    Ok(())
 }

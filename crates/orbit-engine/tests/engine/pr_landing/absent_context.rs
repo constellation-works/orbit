@@ -694,6 +694,94 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                     "update\nmerge\n"
                 );
             });
+            // The repository's own ci.yml gates its required jobs on the
+            // change-scope job, and a full-mode head reports `Docs guards` as
+            // skipped. Every mutation of that exact scope shape still refuses.
+            let ci = || -> Value {
+                serde_yaml::from_str(
+                    &fs::read_to_string(
+                        Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../.github/workflows/ci.yml"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            };
+            let full = |row: &Path, source: &Value| {
+                let (fx, host) = setup_with_context(
+                    row,
+                    &serde_yaml::to_string(source).unwrap(),
+                    "Check / Clippy / Test",
+                );
+                fs::write(fx.forge.join("scope-checks"), "full").unwrap();
+                let mut input = fx.complete_input();
+                input["auto_fix"] = json!(true);
+                (fx, action(&host, "pr_complete", &input))
+            };
+            in_fresh_row(sandbox, |row| {
+                let (fx, result) = full(row, &ci());
+                result.unwrap_or_else(|error| panic!("ci.yml: {error}"));
+                assert_eq!(
+                    fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                    "update\nmerge\n"
+                );
+            });
+            for case in [
+                "scope_script",
+                "scope_output",
+                "scope_condition",
+                "scope_failure",
+                "scope_step",
+                "always",
+                "needs",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let mut source = ci();
+                    let scope = &mut source["jobs"]["scope"];
+                    match case {
+                        "scope_script" => {
+                            scope["steps"][1]["run"] = json!("scripts/ci-change-scope.sh --docs")
+                        }
+                        "scope_output" => {
+                            scope["outputs"]["mode"] = json!("${{ steps.foreign.outputs.mode }}")
+                        }
+                        "scope_condition" => {
+                            scope["if"] = json!(
+                                scope["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" }}", " && github.actor == 'owner' }}")
+                            )
+                        }
+                        "scope_failure" => {
+                            scope.as_object_mut().unwrap().remove("continue-on-error");
+                        }
+                        "scope_step" => {
+                            scope["steps"][1]["env"]["EVENT"] = json!("push");
+                        }
+                        "always" => {
+                            source["jobs"]["ci"]["if"] = json!(
+                                source["jobs"]["ci"]["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" }}", " && always() }}")
+                            )
+                        }
+                        _ => {
+                            source["jobs"]["ci"]["needs"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(json!("docs"));
+                        }
+                    }
+                    let (fx, result) = full(row, &source);
+                    assert!(result.is_err(), "{case}");
+                    assert!(
+                        !fx.forge.join("mutations").exists(),
+                        "unknown change-scope semantics cannot update: {case}"
+                    );
+                });
+            }
             // macOS runs only on agent-main pushes, so a pull request can never
             // emit its checks: a missing one must not prompt a branch update.
             in_fresh_row(sandbox, |row| {

@@ -353,7 +353,12 @@ A candidate that needs repair must produce a fresh validated handoff instead.
 Under existing completion/auto-fix authority, an otherwise successful old head
 with absent required contexts has one bounded base-refresh path. Adapter-owned
 PR-event/integration evidence and complete old/base workflow blobs must prove
-non-emission and exact supported emission on the fresh descendant base. The
+non-emission and exact supported emission on the fresh descendant base.
+Supported emission is an unconditional job, a job behind the adapter's live-PR
+state read, or one also narrowed by the exact `Change scope` job of `ci.yml`
+(`scripts/ci-change-scope.sh`, `continue-on-error`): every mode it can output
+either runs such a job or reports it skipped under its name. A skipped check
+run on the old head that no policy requires does not stop the path. The
 inherited-failure and absent-context paths share one durable owner-task
 reservation and absolute deadline across attempts and runs. Reservation
 precedes the expected-head provider update; an unknown outcome is observed,
