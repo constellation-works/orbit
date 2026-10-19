@@ -5,6 +5,147 @@ use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use serde_json::json;
 
+/// V2 worker diagnostics name the job; the failing YAML step comes from the
+/// root's audit/checkpoint or the echo's recorded cause, even off-page.
+#[test]
+fn history_failures_resolves_synthetic_job_diagnostics() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_failures_resolves_synthetic_job_diagnostics",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::{PipelineState, RunRootCause};
+
+    const ROOT: &str = "jrun-diagnostic-root";
+    let fixture = Fixture::terminal();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let task_id = runtime
+        .add_task(TaskAddParams {
+            title: "Synthetic diagnostic failure".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    for (id, hours) in [
+        (ROOT, 48),
+        ("jrun-diagnostic-echo", 2),
+        ("jrun-diagnostic-echo2", 1),
+    ] {
+        let at = (Utc::now() - Duration::hours(hours)).to_rfc3339();
+        let job = if id == ROOT {
+            "task_pr_pipeline"
+        } else {
+            "task_auto_pipeline"
+        };
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, created_at, resolved_crew, input_json)
+             VALUES (?1, ?2, ?4, 1, 'failed', ?3, ?3, ?3, ?3, 'sol', ?5)",
+            params![
+                id,
+                workspace_id,
+                at,
+                job,
+                json!({"task_ids":[task_id]}).to_string()
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
+                target_id, state, started_at, finished_at, error_code, error_message)
+             VALUES (?1, ?2, 0, 'job', ?4, 'failed', ?3, ?3,
+                'provider_limit', 'provider quota exhausted')",
+            params![workspace_id, id, at, job],
+        )
+        .unwrap();
+        if id != ROOT {
+            let mut state = PipelineState::new(id.into(), job.into(), json!({}));
+            state.root_cause = Some(RunRootCause {
+                leaf_run_id: ROOT.into(),
+                task_id: Some(task_id.clone()),
+                step: Some("implement_one".into()),
+                code: Some("provider_limit".into()),
+            });
+            runtime.write_run_state(id, &state).unwrap();
+        }
+    }
+    for (index, body_kind) in ["step_started", "step_finished"].into_iter().enumerate() {
+        let at = (Utc::now() - Duration::hours(48) + Duration::seconds(index as i64)).to_rfc3339();
+        let event_id = format!("{ROOT}-{index}");
+        let payload = json!({
+            "event_id": event_id, "ts": at, "step_id": "implement_one",
+            "body_kind": body_kind, "outcome": "error",
+            "error_message": "provider quota exhausted",
+        });
+        db.execute(
+            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                event_type, ts, run_id, agent_identity, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5)",
+            params![workspace_id, event_id, at, ROOT, payload.to_string()],
+        )
+        .unwrap();
+    }
+    let history = |extra: &[&str]| {
+        let mut args = vec![
+            "run",
+            "history",
+            "--failures",
+            "--no-reconcile",
+            "--json",
+            "--task",
+            &task_id,
+        ];
+        args.extend_from_slice(extra);
+        fixture.json(&args)
+    };
+    let assert_step = |expected: &str| {
+        for extra in [vec![], vec!["--since", "24h"], vec!["--limit", "1"]] {
+            let doc = history(&extra);
+            assert_eq!(doc["failures"].as_array().unwrap().len(), 1, "{doc}");
+            assert_eq!(doc["failures"][0]["run_id"], ROOT, "{doc}");
+            assert_eq!(doc["failures"][0]["step"], expected, "{extra:?}: {doc}");
+            assert_eq!(
+                doc["failures"][0]["cause"],
+                "provider_limit: provider quota exhausted"
+            );
+        }
+    };
+    let root_only = history(&["--job", "task_pr_pipeline"]);
+    assert_eq!(
+        root_only["failures"][0]["step"], "implement_one",
+        "{root_only}"
+    );
+    assert_step("implement_one");
+    let shown = fixture.json(&["run", "show", ROOT, "--no-reconcile", "--json"]);
+    assert_eq!(shown["steps"][0]["target_id"], "implement_one", "{shown}");
+    assert_eq!(shown["root_cause"]["step"], "implement_one", "{shown}");
+
+    // Checkpoint evidence remains usable when the audit trail is unavailable.
+    db.execute("DELETE FROM v2_audit_events WHERE run_id = ?1", [ROOT])
+        .unwrap();
+    let mut state = PipelineState::new(ROOT.into(), "task_pr_pipeline".into(), json!({}));
+    state.record_failure_activity("failure_handoff".into(), "implement_one".into(), json!({}));
+    runtime.write_run_state(ROOT, &state).unwrap();
+    let root_only = history(&["--job", "task_pr_pipeline"]);
+    assert_eq!(
+        root_only["failures"][0]["step"], "implement_one",
+        "{root_only}"
+    );
+    assert_step("implement_one");
+
+    // Without root step evidence, an echo still supplies the real step.
+    state.failure_activity_checkpoint = None;
+    runtime.write_run_state(ROOT, &state).unwrap();
+    assert_step("implement_one");
+    let root_only = history(&["--job", "task_pr_pipeline"]);
+    assert!(root_only["failures"][0]["step"].is_null(), "{root_only}");
+}
+
 #[test]
 fn history_filters_before_limit_and_shows_tasks_and_duration() {
     if !isolated_run_observation(

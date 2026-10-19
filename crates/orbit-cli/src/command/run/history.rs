@@ -5,7 +5,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{
     JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step,
 };
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunRootCause};
+use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, RunRootCause};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -242,7 +242,7 @@ fn failure_history_payload(
         .enumerate()
         .map(|(index, run)| (run.run_id.as_str(), index))
         .collect::<HashMap<_, _>>();
-    let mut loaded: HashMap<String, Option<JobRun>> = HashMap::new();
+    let mut loaded: HashMap<String, FailureFacts> = HashMap::new();
     let mut seen = HashSet::new();
     let mut rows = Vec::new();
     for (index, run) in runs.iter().enumerate() {
@@ -334,6 +334,9 @@ fn is_reported_failure(state: JobRunState) -> bool {
 }
 
 /// Task ids, failing step, crew and first cause line of the root-cause run.
+type FailureFacts = (Vec<String>, Option<String>, Option<String>, Option<String>);
+
+/// Cache each root's facts so folded echoes share one checkpoint/audit read.
 /// Missing runs contribute nothing; the caller fills step and tasks from the
 /// recorded cause.
 fn root_facts(
@@ -341,22 +344,39 @@ fn root_facts(
     read: RunRead,
     runs: &[JobRun],
     listed: &HashMap<&str, usize>,
-    loaded: &mut HashMap<String, Option<JobRun>>,
+    loaded: &mut HashMap<String, FailureFacts>,
     root_id: &str,
-) -> (Vec<String>, Option<String>, Option<String>, Option<String>) {
-    if let Some(&index) = listed.get(root_id) {
-        return facts_of(&runs[index]);
-    }
-    let slot = loaded
+) -> FailureFacts {
+    loaded
         .entry(root_id.to_string())
-        .or_insert_with(|| read.show(runtime, root_id).ok());
-    slot.as_ref().map(facts_of).unwrap_or_default()
+        .or_insert_with(|| {
+            if let Some(&index) = listed.get(root_id) {
+                return facts_of(runtime, &runs[index]);
+            }
+            read.show(runtime, root_id)
+                .ok()
+                .as_ref()
+                .map(|run| facts_of(runtime, run))
+                .unwrap_or_default()
+        })
+        .clone()
 }
 
-fn facts_of(run: &JobRun) -> (Vec<String>, Option<String>, Option<String>, Option<String>) {
+fn facts_of(runtime: &OrbitRuntime, run: &JobRun) -> FailureFacts {
+    let step = runtime
+        .run_root_cause(&run.run_id)
+        .ok()
+        .flatten()
+        .and_then(|cause| cause.step)
+        .or_else(|| {
+            // Keep activity-row evidence if the checkpoint cannot be read.
+            run_error_step(run)
+                .filter(|step| step.target_type != JobTargetType::Job)
+                .map(|step| step.target_id.clone())
+        });
     (
         job_run_task_ids(run),
-        run_error_step(run).map(|step| step.target_id.clone()),
+        step,
         run.resolved_crew.clone(),
         failure_cause_line(run),
     )
