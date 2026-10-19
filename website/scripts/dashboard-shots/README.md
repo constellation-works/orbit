@@ -80,15 +80,15 @@ pixels even when the capture script sanitizes text.
 
 | File | Size (px) | Shows | Used on |
 |---|---|---|---|
-| `dashboard-tasks.png` | 2880 × 1732 | The whole Tasks view: top bar with host resources and the refresh clock, the rail, status cards, and the Drain dock | Quickstart, Use the Dashboard |
-| `dashboard-approve-ship.png` | 1648 × 1416 | The task list: Awaiting approval with **Approve**, In progress with **View run**, Backlog with its readiness strip and **Ship** | First Task |
+| `dashboard-tasks.png` | 2880 × 1732 | The whole Tasks view: top bar with host resources and the refresh clock, the rail with Drain as its own page, and the status cards | Quickstart, Use the Dashboard |
+| `dashboard-approve-ship.png` | 2448 × 1176 | The task list: Awaiting approval with **Approve**, In progress with **View run**, Backlog with its waiting summary, each task's readiness and **Ship** | First Task |
 | `dashboard-run-detail.png` | 2396 × 1782 | A successful `task_pr_pipeline` run and its step timeline | First Task |
 | `dashboard-drain-card.png` | 2448 × 2878 | The Drain page's Overview: throttle banner, summary tiles, the Auto-drain card, why tasks are waiting and fleet drains, then Start a window and Locks held | Delivery Workflows, Use the Dashboard |
 | `dashboard-automation.png` | 2880 × 1732 | Automation → Routines with the sweep clock, the next hour, and each routine | Use the Dashboard, Schedule Recurring Work |
 | `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with each host's health | Use the Dashboard |
 
 Five were captured on 2026-10-10 from the redesigned dashboard (status-card
-task list, Drain and Log dock, full-width top bar). The Drain image was
-recaptured on 2026-10-19 after Drain became its own page. The run detail shows a
+task list, Drain and Log dock, full-width top bar). The Drain, Tasks and
+task-list images were recaptured on 2026-10-19 after Drain became its own page. The run detail shows a
 red-CI fix, 21 steps in 20m 35s, with its artifact identifiers replaced by
 demo labels. Its counts are from that moment, not live.
