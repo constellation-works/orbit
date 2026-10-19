@@ -8,7 +8,19 @@ use super::before_pr::{ReviewedHandoff, revision};
 use super::*;
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
+use orbit_store::TaskCommitBoundary;
+use orbit_store::contracts::{
+    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
+    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+};
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::{
+    LightDeliveryDecision, LightDeliveryJudgement, SKIP_REVIEW_TAG, SKIP_VALIDATION_TAG,
+    TaskEnvelopeV2,
+};
 use orbit_types::workflow::automation::AutomationState;
+use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, ReviewBudget};
 
 /// Land an unrelated change on `main` as pull request #41 after the review
 /// settled, so the reviewed base is no longer the landing base.
@@ -789,7 +801,387 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         history
     );
     assert_eq!(owner.accepted_task_handoff(&claim).unwrap(), accepted);
+
+    // A docs/CI handoff that legitimately skipped validation or review uses
+    // the same public boundary. Each tag is a separate candidate so an empty
+    // required-command list cannot hide the review refusal.
+    light_base_update(LightTag::SkipValidation, false);
+    light_base_update(LightTag::SkipReview, false);
+    light_base_update(LightTag::SkipValidation, true);
+    light_base_update(LightTag::SkipReview, true);
 }
+
+/// Which light-delivery exemption the candidate is authorized to use.
+#[derive(Clone, Copy)]
+enum LightTag {
+    /// Nonempty required commands, no validation logs, and no captured review.
+    SkipValidation,
+    /// Empty required commands, a captured before-PR review contract, and no
+    /// review evidence.
+    SkipReview,
+}
+
+impl LightTag {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SkipValidation => SKIP_VALIDATION_TAG,
+            Self::SkipReview => SKIP_REVIEW_TAG,
+        }
+    }
+
+    fn commands(self) -> Vec<String> {
+        match self {
+            Self::SkipValidation => vec!["make docs-check".into()],
+            Self::SkipReview => Vec::new(),
+        }
+    }
+
+    fn captured_review(self) -> bool {
+        matches!(self, Self::SkipReview)
+    }
+
+    fn refusal(self) -> &'static str {
+        match self {
+            Self::SkipValidation => "required validation missing",
+            Self::SkipReview => "review_evidence_missing",
+        }
+    }
+}
+
+/// Accept `tag` on a docs/CI candidate, or on a source path when `outside`.
+///
+/// The acceptance observation says the tag applies either way. A later base
+/// update recomputes the owner's current judgement, so a source path is
+/// refused even though acceptance was shown an applying decision.
+fn light_base_update(tag: LightTag, outside: bool) {
+    use orbit_types::workflow::{PrBaseUpdateAdmission, PrBaseUpdateReservation};
+    let commands = tag.commands();
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    if !commands.is_empty() {
+        let orbit = root.path().join(OWNER).join("repo/.orbit");
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(
+            orbit.join("config.toml"),
+            format!(
+                "[workflow]\nrequired_validation_commands = {}\n",
+                serde_json::to_string(&commands).unwrap()
+            ),
+        )
+        .unwrap();
+    }
+    let (owner, repo) = open_runtime(root.path(), OWNER);
+    let path = if outside {
+        "src/lib.rs"
+    } else {
+        "docs/guide.md"
+    };
+    std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+    let task_id = backlog_task(&owner, &repo, path, None);
+    owner
+        .update_task_as_human(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                tags: Some(vec![tag.as_str().into()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("operator sets the light-delivery tag");
+    assert!(
+        owner
+            .get_task(&task_id)
+            .unwrap()
+            .tags
+            .iter()
+            .any(|carried| carried == tag.as_str()),
+        "the task carries the tag acceptance will recheck"
+    );
+
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "baseline"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/repository.git",
+        ],
+    );
+    let base = revision(&repo, "HEAD");
+    let branch = format!("orbit/{task_id}");
+    git(&repo, &["checkout", "-q", "-b", &branch]);
+    std::fs::write(repo.join(path), "changed\n").unwrap();
+    if !outside {
+        // A docs change and a CI workflow, both inside the default allow-list.
+        let workflow = repo.join(".github/workflows/ci.yml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, "name: CI\non: [pull_request]\n").unwrap();
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "candidate"]);
+    let candidate = revision(&repo, "HEAD");
+    git(&repo, &["checkout", "-q", "main"]);
+
+    let captured_review = tag.captured_review();
+    let ship = AdmissionShipContract {
+        mode: "pr".into(),
+        base_branch: "main".into(),
+        landing_branch: "main".into(),
+        before_pr: captured_review,
+        before_landing: false,
+        completion: "review".into(),
+        authorization_reference: None,
+        review: captured_review.then(|| AdmissionReviewContract {
+            contract_version: REVIEW_CONTRACT_VERSION,
+            crew: Some("reviewer".into()),
+            budget: ReviewBudget::default(),
+            required_validation_commands: Some(commands.clone()),
+            baseline_commands: Vec::new(),
+            host_evidence: Vec::new(),
+        }),
+    };
+    let boundary = TaskCommitBoundary::new(
+        owner.sqlite_store().unwrap(),
+        TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap(),
+        owner.workspace_id().unwrap(),
+    )
+    .unwrap();
+    let request = AdmissionRequest {
+        request_id: format!("light-{path}"),
+        caller_version: "test".into(),
+        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        caller_fingerprint: None,
+        caller_before_pr: false,
+        review_gate: captured_review,
+        run_context: AdmissionRunContext {
+            run_id: "drain".into(),
+            job_name: "workspace_pull_pipeline".into(),
+            machine_name: None,
+        },
+        ship: ship.clone(),
+        crews: None,
+        os: None,
+        browser_kit: false,
+        admissible: None,
+    };
+    let AdmissionLookup::Found { receipt, .. } = boundary
+        .admit_task(
+            &AdmissionIdentity::trusted_remote(ExecutionLocation {
+                machine_id: FOLLOWER.into(),
+                machine_name: None,
+            }),
+            &request,
+            &AdmissionOrdering::default(),
+            "test",
+            &repo,
+            &repo.join(".orbit"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &|_, _, _| Ok(None),
+        )
+        .expect("admit")
+    else {
+        panic!("no receipt");
+    };
+    let claim = receipt.claim.expect("claim");
+    assert_eq!(claim.task_id, task_id);
+    let run = ClaimRun {
+        machine_id: FOLLOWER.into(),
+        run_id: "leaf".into(),
+    };
+    owner
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                task_id.clone(),
+                claim.claim_id.clone(),
+                FOLLOWER.into(),
+                None,
+            )),
+            "bind",
+            &ClaimMutation::Bind {
+                run: run.clone(),
+                ship,
+            },
+        )
+        .expect("bind");
+    let worker = ClaimInvocation::trusted_worker(
+        task_id.clone(),
+        claim.claim_id.clone(),
+        FOLLOWER.into(),
+        Some(run),
+    );
+    let carried = vec![tag.as_str().to_string()];
+    let handoff = TaskHandoff {
+        schema_version: 1,
+        workspace_id: owner.workspace_id().unwrap(),
+        task_id: task_id.clone(),
+        claim_id: claim.claim_id.clone(),
+        machine_id: FOLLOWER.into(),
+        run_id: "leaf".into(),
+        candidate: HandoffCandidate {
+            repository: "owner/repository".into(),
+            source_branch: branch,
+            base_branch: "main".into(),
+            landing_branch: "main".into(),
+            candidate: candidate.clone(),
+            base: base.clone(),
+            delivery: HandoffDelivery::PullRequest { number: 42 },
+        },
+        review: HandoffReview::not_required(),
+        execution_summary: "Outcome: success".into(),
+        validation: vec![],
+        footprint_widening: vec![],
+        owed_criteria: vec![],
+        regression_from: vec![],
+    };
+    let observation = HandoffObservation {
+        footprint_widening: vec![],
+        candidate: handoff.candidate.clone(),
+        required_commands: commands.clone(),
+        owner_completion_authority: None,
+        review: None,
+        known_red: vec![],
+        // Acceptance is shown an applying decision. The base-update recheck
+        // judges the commits itself and does not reuse this value.
+        light_delivery: vec![
+            LightDeliveryDecision::decide(
+                tag.as_str(),
+                &[(task_id.as_str(), carried.as_slice())],
+                &candidate.commit,
+                LightDeliveryJudgement::Light { paths: 1 },
+            )
+            .expect("the delivered task carries the tag"),
+        ],
+    };
+    owner
+        .accept_task_handoff(&worker, "handoff", handoff, observation)
+        .expect("light handoff accepted without logs or review");
+    let accepted = owner.accepted_task_handoff(&claim.claim_id).unwrap();
+    assert!(
+        accepted.handoff.validation.is_empty(),
+        "a light handoff carries no validation logs"
+    );
+    assert_eq!(
+        accepted.handoff.review,
+        HandoffReview::not_required(),
+        "a light handoff carries no review"
+    );
+    assert_eq!(accepted.required_commands, commands);
+    let update = PrBaseUpdateReservation {
+        execution: accepted.handoff_id.clone(),
+        repository: accepted.handoff.candidate.repository.clone(),
+        pr_number: "42".into(),
+        head_sha: accepted.handoff.candidate.candidate.commit.clone(),
+        head_branch: accepted.handoff.candidate.source_branch.clone(),
+        base_branch: accepted.handoff.candidate.base_branch.clone(),
+        base_sha: accepted.handoff.candidate.base.commit.clone(),
+        deadline_ms: u64::MAX,
+        evidence: json!({"cause":"light-delivery"}),
+    };
+    if outside {
+        let history = owner.get_task_history(&task_id).unwrap();
+        let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+            .expect_err("a path outside the allow-list refuses the base update")
+            .to_string();
+        assert!(
+            error.contains(tag.refusal()),
+            "outside path refused for the tag's own check: {error}"
+        );
+        assert_eq!(owner.get_task_history(&task_id).unwrap(), history);
+        assert_eq!(
+            owner.accepted_task_handoff(&claim.claim_id).unwrap(),
+            accepted
+        );
+        return;
+    }
+
+    let expected = orbit_core::application::review::ExpectedCandidate {
+        candidate_commit: accepted.handoff.candidate.candidate.commit.clone(),
+        base_commit: accepted.handoff.candidate.base.commit.clone(),
+    };
+    owner
+        .approve_handoff_as_operator(
+            &accepted.handoff_id,
+            &expected,
+            "operator",
+            "approve-light-base-update",
+        )
+        .expect("operator approves the light handoff");
+    assert!(matches!(
+        RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+            .expect("light handoff reserves a provider base update"),
+        PrBaseUpdateAdmission::Reserved
+    ));
+    assert!(
+        matches!(
+            RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+                .expect("replaying the same update observes the reservation"),
+            PrBaseUpdateAdmission::Observe(_)
+        ),
+        "a second reserve observes the one already granted"
+    );
+
+    let envelope = task_envelope_path(&owner, &task_id);
+    let original = std::fs::read(&envelope).unwrap();
+    let mut document: TaskEnvelopeV2 =
+        serde_yaml::from_slice(&original).expect("task envelope decodes");
+    assert_eq!(document.id, task_id);
+    // An active claim fences ordinary tag edits. The recheck still reads the
+    // live envelope, so a withdrawn tag refuses the update that acceptance
+    // authorized.
+    document.tags.retain(|carried| carried != tag.as_str());
+    std::fs::write(&envelope, serde_yaml::to_string(&document).unwrap()).unwrap();
+    let history = owner.get_task_history(&task_id).unwrap();
+    let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+        .expect_err("withdrawing the tag refuses the reserved base update")
+        .to_string();
+    assert!(
+        error.contains(tag.refusal()),
+        "withdrawn tag refused for the tag's own check: {error}"
+    );
+    assert_eq!(owner.get_task_history(&task_id).unwrap(), history);
+    std::fs::write(&envelope, original).unwrap();
+
+    owner
+        .revoke_handoff_as_operator(
+            &accepted.handoff_id,
+            &expected,
+            "operator",
+            "authority withdrawn before provider call",
+            "withdraw-light-base-update",
+        )
+        .unwrap();
+    let history = owner.get_task_history(&task_id).unwrap();
+    let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+        .expect_err("revocation refuses the reserved base update")
+        .to_string();
+    assert!(
+        error.contains("landing authority revoked"),
+        "revoked authority is the refusal: {error}"
+    );
+    assert_eq!(owner.get_task_history(&task_id).unwrap(), history);
+    assert_eq!(
+        owner.accepted_task_handoff(&claim.claim_id).unwrap(),
+        accepted
+    );
+}
+
+/// The published envelope of `task_id` on `owner`.
+fn task_envelope_path(owner: &OrbitRuntime, task_id: &str) -> PathBuf {
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(&owner.global_root())).expect("task registry");
+    let binding = registry
+        .find_task_binding(task_id)
+        .expect("binding lookup")
+        .expect("task binding");
+    let path = binding.canonical_path.join("task.yaml");
+    assert!(path.is_file(), "task envelope {}", path.display());
+    path
+}
+
 crate::scenario_table!(
     current_base_update_authority,
     base_update_admission_rechecks_current_native_handoff_authority

@@ -241,7 +241,12 @@ impl OrbitRuntime {
             owner_completion_authority: self.owner_completion_authority(),
             review: None,
             known_red: vec![],
-            light_delivery: Vec::new(),
+            // Approval and landing recompute this owner's judgement of the
+            // accepted candidate. The base-update recheck has to do the same,
+            // or a skip-validation or skip-review handoff that acceptance
+            // already authorized is refused before a provider update is reserved.
+            light_delivery: self
+                .owner_light_delivery(&accepted.handoff.task_id, &accepted.handoff.candidate)?,
         };
         let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
