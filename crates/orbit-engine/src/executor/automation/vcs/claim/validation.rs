@@ -2,6 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{LightDeliveryDecision, SKIP_VALIDATION_TAG};
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffKnownRed, HandoffValidationLog,
 };
@@ -21,6 +22,7 @@ use super::super::baseline::{
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::flaky::rerun_failed_tests;
 use super::super::git::{BaseSyncMode, normalize_base_branch};
+use super::super::light_delivery::light_delivery_decision;
 use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
@@ -78,6 +80,12 @@ use super::{already_resolved, no_diff};
 /// ([`super::already_resolved`]); a candidate that changes the base is
 /// refused for one.
 ///
+/// [ORB-16855] When the owner's task carries `skip-validation` and the
+/// owner's captured `workflow.light_delivery_paths` covers every path the
+/// candidate changes on its base, no command or replay runs and the decision
+/// is `skipped_light_delivery`; the pin step re-judges the published
+/// candidate before attaching nothing.
+///
 /// [ORB-15764] A `no-diff-expected` skip checkpoint on that route runs no
 /// command or replay at all and records `skipped_no_diff_expected` with no
 /// validation references ([`super::no_diff`]).
@@ -126,8 +134,14 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     };
     require_clean_candidate(&workspace_path, &candidate)?;
 
-    let replays = claimed_deferred_replays(host, input)?;
-    let commands = with_replays(context.required_commands.clone(), &replays);
+    let light = light_validation(host, &context, &workspace_path, &candidate)?;
+    let (replays, commands) = if light.is_some() {
+        (Vec::new(), Vec::new())
+    } else {
+        let replays = claimed_deferred_replays(host, input)?;
+        let commands = with_replays(context.required_commands.clone(), &replays);
+        (replays, commands)
+    };
     let (results, validation_env) = run_claimed_commands(
         host,
         &context,
@@ -161,10 +175,43 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
             output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
             output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
         }
+        mark_light(&mut output, light.as_ref());
         return Ok(output);
     }
     let references = attach_handoff_logs(host, &context, &candidate, &results)?;
-    passed_output(&context, &candidate, &references, results, validation_env)
+    let mut output = passed_output(&context, &candidate, &references, results, validation_env)?;
+    mark_light(&mut output, light.as_ref());
+    Ok(output)
+}
+
+/// The owner task's `skip-validation` decision for this claimed candidate
+/// when the tag applies [ORB-16855]: the owner's captured allow-list
+/// covers every path the candidate changes on its base, so no required
+/// command or deferral replay runs. The owner re-judges the candidate, and
+/// records the decision in history, when it accepts the handoff.
+fn light_validation<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    workspace_path: &Path,
+    candidate: &HandoffCandidate,
+) -> Result<Option<LightDeliveryDecision>, OrbitError> {
+    Ok(light_delivery_decision(
+        host,
+        workspace_path,
+        &candidate.base.commit,
+        &candidate.candidate.commit,
+        std::slice::from_ref(&context.task_id),
+        SKIP_VALIDATION_TAG,
+    )?
+    .filter(LightDeliveryDecision::applies))
+}
+
+/// Record an applied `skip-validation` decision as the step's decision.
+fn mark_light(output: &mut Value, light: Option<&LightDeliveryDecision>) {
+    if let Some(light) = light {
+        output["decision"] = json!(SKIPPED_LIGHT_DELIVERY);
+        output["note"] = json!(light.note());
+    }
 }
 
 /// One required command's result on a claimed candidate: it passed, or it
@@ -297,7 +344,25 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let expected = with_replays(context.required_commands.clone(), &replayed);
+    let light = if input_string_field(prevalidated, "decision").as_deref()
+        == Some(SKIPPED_LIGHT_DELIVERY)
+    {
+        let light = light_validation(host, context, workspace_path, &candidate)?;
+        if light.is_none() {
+            return Err(refused(
+                "required validation was skipped for `skip-validation`, but the published \
+                 candidate no longer keeps the tag; rerun validation",
+            ));
+        }
+        light
+    } else {
+        None
+    };
+    let expected = if light.is_some() {
+        Vec::new()
+    } else {
+        with_replays(context.required_commands.clone(), &replayed)
+    };
     if results
         .iter()
         .map(|result| result.command.as_str())
@@ -340,7 +405,9 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
         .get("validation_env")
         .cloned()
         .unwrap_or(Value::Null);
-    passed_output(context, &candidate, &references, results, validation_env)
+    let mut output = passed_output(context, &candidate, &references, results, validation_env)?;
+    mark_light(&mut output, light.as_ref());
+    Ok(output)
 }
 
 /// Attach one typed log per command to the owner's task: a passed command's,
@@ -644,6 +711,12 @@ fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> Result<St
 /// command, on the owner's delivery path and a claimed leaf alike.
 pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &str =
     "skipped_no_required_commands";
+
+/// The decision a validation step records when every delivered task carries
+/// `skip-validation` and the candidate changes only
+/// `workflow.light_delivery_paths` [ORB-16855].
+pub(in crate::executor::automation::vcs) const SKIPPED_LIGHT_DELIVERY: &str =
+    "skipped_light_delivery";
 
 /// Why that decision ran nothing, in the step's own output.
 pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \

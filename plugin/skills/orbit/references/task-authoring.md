@@ -182,8 +182,9 @@ owes screenshots.
 
 Some tags add trusted instructions to the prompts of the activities that work
 on the task. Orbit ships them for `no-diff-expected` (the read-only handoff
-rule, for implementers) and `ui` (the screenshot rule, for implementers and
-reviewers). A workspace can map any tag to a repository file per role
+rule, for implementers), `skip-validation` (no local validation while the
+change stays light, for implementers) and `ui` (the screenshot rule, for
+implementers and reviewers). A workspace can map any tag to a repository file per role
 (implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
 replace a shipped default, or switch one off (docs/CONFIG.md). QA sweeps are
 implement tasks tagged `qa-sweep`, so that tag's implement file instructs QA.
@@ -196,6 +197,30 @@ instructions add to an activity's built-in rules and never override them. An
 oversized or missing mapped file fails the activity by name rather than
 running without it. `orbit run show` lists the tag instructions each dispatch
 received.
+
+## Light delivery tags
+
+For a documentation or CI-only change, file the task with `skip-review`, `skip-validation`
+or both:
+
+- `skip-review`: no agent review before the PR, before landing or after
+  landing.
+- `skip-validation`: the implementer runs no local validation, and delivery runs
+  no required validation and attaches no validation logs.
+
+Either way the PR is gated only by the required hosted checks.
+
+Set them when you file the task, or as an operator. An agent's update, the
+implementer's own included, cannot add either tag to an existing task.
+
+A tag applies only while every path the final candidate changes matches
+`workflow.light_delivery_paths`. By default that is documentation, CI
+configuration and CI helper scripts (`orbit config show` lists the patterns).
+Any other changed path makes delivery ignore
+both tags and review and validate normally, and the task's history records
+why. A reviewer that does run keeps its own checks, so tag a task with both to
+skip everything. Don't tag code changes in the hope they stay small: the
+allow-list, not the tag, decides.
 
 ## Modification footprint
 

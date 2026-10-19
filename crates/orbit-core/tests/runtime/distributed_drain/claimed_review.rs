@@ -318,6 +318,7 @@ impl ReviewedLeaf {
                 repository: REPOSITORY.into(),
             }),
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         self.pair
             .wire

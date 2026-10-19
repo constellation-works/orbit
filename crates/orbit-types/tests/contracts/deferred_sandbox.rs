@@ -91,6 +91,7 @@ fn host_gates(commands: &[&str]) -> HostValidationGates {
     HostValidationGates::local(ValidationGates {
         required_validation_commands: commands.iter().map(ToString::to_string).collect(),
         baseline_commands: Vec::new(),
+        light_delivery_paths: None,
     })
 }
 
@@ -784,6 +785,7 @@ fn a_record_naming_no_gate_is_refused_naming_the_gates_and_their_source() {
             gates: ValidationGates {
                 required_validation_commands: vec!["make ci-fast".to_string()],
                 baseline_commands: Vec::new(),
+                light_delivery_paths: None,
             },
             source,
         };

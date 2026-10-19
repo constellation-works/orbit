@@ -76,8 +76,14 @@ impl TaskCommitBoundary {
             &self.claim_ship(state)?,
             observed.review.as_ref(),
             false,
+            &observed.light_delivery,
         )?;
-        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands, None)?;
+        self.validate_handoff_evidence(
+            &accepted.handoff,
+            &accepted.required_commands,
+            None,
+            &observed.light_delivery,
+        )?;
         self.add_handoff_authorization(
             &accepted,
             &auth.machine_id,
@@ -204,8 +210,14 @@ impl TaskCommitBoundary {
             &self.claim_ship(state)?,
             observation.review.as_ref(),
             false,
+            &observation.light_delivery,
         )?;
-        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands, None)?;
+        self.validate_handoff_evidence(
+            &accepted.handoff,
+            &accepted.required_commands,
+            None,
+            &observation.light_delivery,
+        )?;
         let authorization = self.current_landing_authorization(&accepted)?;
         if authorization.workspace_id != self.workspace_id
             || authorization.task_id != auth.task_id

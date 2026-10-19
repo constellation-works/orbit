@@ -56,17 +56,19 @@ impl ClaimedLeaf {
         Some(ValidationGates {
             required_validation_commands: review.required_validation_commands.clone()?,
             baseline_commands: review.baseline_commands.clone(),
+            light_delivery_paths: None,
         })
     }
 }
 
 impl OrbitRuntime {
-    /// This host's own `workflow.required_validation_commands` and
-    /// `review.baseline_commands`.
+    /// This host's own `workflow.required_validation_commands`,
+    /// `review.baseline_commands` and `workflow.light_delivery_paths`.
     pub(crate) fn local_validation_gates(&self) -> ValidationGates {
         ValidationGates {
             required_validation_commands: self.workflow_required_validation_commands().to_vec(),
             baseline_commands: self.review_baseline_commands().to_vec(),
+            light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
         }
     }
 

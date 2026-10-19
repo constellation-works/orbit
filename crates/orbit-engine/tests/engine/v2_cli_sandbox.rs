@@ -934,6 +934,7 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
             required_validation_commands: vec!["make ci-test-affected".to_string()],
             baseline_commands: Vec::new(),
+            light_delivery_paths: None,
         });
     let pending = handoff
         .derive(

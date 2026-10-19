@@ -363,6 +363,10 @@ pub(crate) fn build_context_from_roots(
                 .workflow_unlocked_path_validation_commands
                 .clone(),
             runtime_config.snapshot.workflow_generated_paths.clone(),
+            runtime_config
+                .snapshot
+                .workflow_light_delivery_paths
+                .clone(),
         ),
     ))
 }

@@ -27,6 +27,8 @@ For tasks that deliver a diff, there is no required local gate: the required PR 
 
 Tasks tagged `no-diff-expected` run no workspace gates or required validation commands and attach no `no-diff.json` or workspace validation logs, in owner or claimed mode. Run only commands their own brief requires: QA sweeps may build and run the product, and reviews may reproduce findings when the brief asks for it.
 
+Tasks tagged `skip-validation` run no workspace gates (including the docs-index regeneration above, which the hosted checks still enforce) and no required or final validation commands while every changed path matches `workflow.light_delivery_paths` (by default `docs/**`, Markdown outside `crates/**` and `plugin/**`, `.github/**`, `scripts/ci-*` and `scripts/test-*-workflow*.py`). `skip-review` skips every review timing under the same condition. Only filing or an operator update sets either tag, and a change outside the list voids both: then run the gates above. See [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
+
 Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and `cargo test` / `nextest`) sequentially when they share a target directory. If they need to overlap, give them separate `CARGO_TARGET_DIR` values. Running two gates concurrently in one target can replace `target/debug/orbit` while generation-bound fixtures are active, causing spurious CLI fixture failures (F2026-10-118).
 
 ## Code

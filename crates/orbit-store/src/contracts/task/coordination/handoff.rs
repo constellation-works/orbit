@@ -27,6 +27,14 @@ pub struct HandoffObservation {
     /// handoff reports as known red. Acceptance requires one per such log;
     /// approval and landing recheck the logs the accepted handoff pinned.
     pub known_red: Vec<KnownRedObservation>,
+    /// [ORB-16855] The owner's own judgement of the candidate for each
+    /// light-delivery tag its copy of the task carries, against its
+    /// `workflow.light_delivery_paths`. An applying `skip-review` decision
+    /// admits a handoff without review evidence, an applying
+    /// `skip-validation` one admits it without validation logs, while the
+    /// owner's task still carries the tag; acceptance records each decision
+    /// in the task's history. Empty for a task without either tag.
+    pub light_delivery: Vec<orbit_types::task::LightDeliveryDecision>,
 }
 
 /// What the owner's own run of a required command on the handed-off base

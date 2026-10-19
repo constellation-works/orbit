@@ -4,9 +4,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskArtifact, TaskHistoryEntry, TaskStatus,
-    canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, LIGHT_DELIVERY_TAGS, Task, TaskArtifact,
+    TaskHistoryEntry, TaskStatus, canonical_artifact_path, is_system_identity_tag,
+    is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
@@ -760,6 +760,19 @@ impl OrbitRuntime {
                         }
                     }
                 }
+            }
+            // [ORB-16855] A light-delivery tag skips review or validation, so
+            // only filing or an operator may set it: an agent, the task's
+            // own implementer above all, cannot add one to an existing task.
+            if agent_context_declared()
+                && let Some(added) = LIGHT_DELIVERY_TAGS.iter().find(|tag| {
+                    tags.iter().any(|new| new == *tag) && !task.tags.iter().any(|old| old == *tag)
+                })
+            {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "an agent cannot add `{added}` to an existing task; only filing the task \
+                     or an operator update sets it"
+                )));
             }
             params.tags = Some(tags);
         }

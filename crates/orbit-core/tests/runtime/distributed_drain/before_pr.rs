@@ -470,6 +470,7 @@ impl ReviewedHandoff {
                 repository: REPOSITORY.into(),
             }),
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         owner
             .accept_task_handoff(&worker, "handoff", handoff, observation)

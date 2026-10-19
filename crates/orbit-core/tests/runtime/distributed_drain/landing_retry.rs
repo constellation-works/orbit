@@ -644,6 +644,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
             ),
             review: None,
             known_red: vec![],
+            light_delivery: Vec::new(),
         });
         // The same public coordination transaction used by the operator boundary,
         // interrupted before a job is submitted, with no timing or load injection.

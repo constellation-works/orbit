@@ -167,12 +167,35 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("handoff differs from captured ship contract"));
         }
-        self.validate_handoff_review(handoff, &ship, observation.review.as_ref(), true)?;
+        self.validate_handoff_review(
+            handoff,
+            &ship,
+            observation.review.as_ref(),
+            true,
+            &observation.light_delivery,
+        )?;
         let known_red = self.validate_handoff_evidence(
             handoff,
             &observation.required_commands,
             Some(&observation.known_red),
+            &observation.light_delivery,
         )?;
+        // [ORB-16855] A claimed leaf writes no owner history: the owner's own
+        // light-delivery judgement of the candidate is recorded here.
+        for decision in &observation.light_delivery {
+            params
+                .append_history
+                .push(orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: params.actor.clone(),
+                    event: decision.event().into(),
+                    note: Some(decision.note()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                });
+        }
         // [ORB-15427] The owner established each known-red command against
         // its own base run, or accepted the follower's base evidence because
         // the follower was admitted on another OS [ORB-16432]. The task's

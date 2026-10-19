@@ -241,6 +241,7 @@ impl OrbitRuntime {
             owner_completion_authority: self.owner_completion_authority(),
             review: None,
             known_red: vec![],
+            light_delivery: Vec::new(),
         };
         let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),

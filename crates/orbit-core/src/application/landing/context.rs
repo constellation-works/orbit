@@ -190,6 +190,8 @@ impl OrbitRuntime {
             review: None,
             // Acceptance ran the known-red bases; landing rechecks the logs.
             known_red: Vec::new(),
+            light_delivery: self
+                .owner_light_delivery(&accepted.handoff.task_id, &accepted.handoff.candidate)?,
         })
     }
 }

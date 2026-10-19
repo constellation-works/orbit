@@ -58,4 +58,6 @@ pub use observe::observe_candidate;
 pub(super) use published::observe_accepted_revision;
 pub use published::{observe_accepted_published_handoff, observe_published_candidate};
 pub(in crate::executor::automation) use validation::claim_validate;
-pub(super) use validation::{NO_REQUIRED_COMMANDS_NOTE, SKIPPED_NO_REQUIRED_COMMANDS};
+pub(super) use validation::{
+    NO_REQUIRED_COMMANDS_NOTE, SKIPPED_LIGHT_DELIVERY, SKIPPED_NO_REQUIRED_COMMANDS,
+};

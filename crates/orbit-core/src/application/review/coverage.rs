@@ -9,17 +9,25 @@
 //! onto it), and asks `orbit-automation` for the decision. Only accepted
 //! exclusions reach the page; every refusal leaves the landing an ordinary
 //! obligation.
+//!
+//! [ORB-16855] A landing no certificate covers is also excluded when every
+//! task it delivers carries `skip-review` and every path it changes matches
+//! `workflow.light_delivery_paths`: such a delivery had no agent review
+//! before landing and gets none after.
 
 use orbit_automation::AutomationError;
 use orbit_automation::review::{
     LandingFacts, combined_task_meaning_digest, exclusion, task_meaning_digest,
 };
+use orbit_common::fs::path_filter::PathFilter;
 use orbit_store::contracts::ReviewStoreBackend;
+use orbit_types::task::{LIGHT_DELIVERY_PATHS_KEY, LightDeliveryJudgement, SKIP_REVIEW_TAG};
 use orbit_types::workflow::ReviewCertificate;
-use orbit_types::workflow::automation::{AutomationState, Delivery, SourcePage};
+use orbit_types::workflow::automation::{AutomationState, Delivery, DeliveryExclusion, SourcePage};
 
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::task::light_delivery::carries;
 
 /// Certificates considered per landing; one candidate tree rarely has more.
 const CERTIFICATES_PER_LANDING: usize = 5;
@@ -82,9 +90,66 @@ pub(crate) fn exclusions(
                 }
             }
         }
+        if !page.exclusions.contains_key(&delivery.key)
+            && let Some(decision) = light_delivery_exclusion(runtime, source, delivery)?
+        {
+            page.exclusions.insert(delivery.key.clone(), decision);
+        }
     }
     Ok(())
 }
+
+/// The exclusion of a fully attributed landing whose tasks all carry
+/// `skip-review` and whose changed paths all match this host's
+/// `workflow.light_delivery_paths` [ORB-16855].
+fn light_delivery_exclusion(
+    runtime: &OrbitRuntime,
+    source: &Source<'_>,
+    delivery: &Delivery,
+) -> Result<Option<DeliveryExclusion>, AutomationError> {
+    if delivery.task_ids.is_empty() || delivery.unattributed.is_some() {
+        return Ok(None);
+    }
+    let mut digests = Vec::with_capacity(delivery.task_ids.len());
+    for task_id in &delivery.task_ids {
+        let Ok(task) = runtime.get_task(task_id) else {
+            return Ok(None);
+        };
+        if !carries(&task, SKIP_REVIEW_TAG) {
+            return Ok(None);
+        }
+        digests.push((task_id.clone(), task_meaning_digest(&task)?));
+    }
+    let filter = PathFilter::new(
+        LIGHT_DELIVERY_PATHS_KEY,
+        runtime.workflow_light_delivery_paths(),
+    )?;
+    let changed = source.git_matching_paths(
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--end-of-options",
+            &delivery.before.commit,
+            &delivery.after.commit,
+            "--",
+        ],
+        |_| true,
+    )?;
+    if !LightDeliveryJudgement::new(changed.len(), &filter.outside(&changed)).is_light() {
+        return Ok(None);
+    }
+    Ok(Some(DeliveryExclusion {
+        attempt_id: format!("{LIGHT_DELIVERY_ASSURANCE}:{}", delivery.key),
+        assurance: LIGHT_DELIVERY_ASSURANCE.to_string(),
+        task_meaning_digest: combined_task_meaning_digest(&digests)?,
+        final_candidate_tree: delivery.after.tree.clone(),
+    }))
+}
+
+/// The assurance a light-delivery exclusion carries.
+const LIGHT_DELIVERY_ASSURANCE: &str = "light_delivery";
 
 fn landing_facts(
     runtime: &OrbitRuntime,

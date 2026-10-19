@@ -87,6 +87,7 @@ fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
         owner_completion_authority: None,
         review: None,
         known_red: vec![],
+        light_delivery: Vec::new(),
     };
     // The local validator records this signature first. Accepted remote evidence
     // must reuse it, including a retried acceptance after a lost reply.
