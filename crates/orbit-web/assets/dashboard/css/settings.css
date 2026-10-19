@@ -3,6 +3,9 @@
 /* ORB-12724: the Config tab's shared chrome, plus the System, Crews and Keys
    panels. Provenance is carried by the source chip's colour, so each layer
    stays distinguishable at a glance without reading the label. */
+/* The shell gives this pane its height; block-size containment lets the
+   inspector use cqh to fit below the topbar (and host banners). */
+.tab-pane[data-tab="config"] { container-type: size; }
 .config-layout { grid-template-columns: minmax(0, 1fr); }
 .tab-pane[data-tab="config"] .panel { min-width: 0; }
 #config-panel > .body { padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 12px; }
@@ -461,7 +464,9 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
 
 .cfx-inspector {
   position: sticky; top: 12px; display: flex; flex-direction: column; gap: 16px; padding: 16px;
+  max-height: calc(100cqh - 24px); overflow-y: auto; overscroll-behavior-y: contain;
 }
+.cfx-inspector > * { flex-shrink: 0; }
 .cfx-inspector-head { display: flex; flex-direction: column; gap: 8px; }
 .cfx-inspector-key { margin: 0; color: var(--fg-strong); font: 600 15px/1.35 var(--font-mono); overflow-wrap: anywhere; }
 .cfx-inspector-desc { margin: 0; color: var(--fg-dim); }
@@ -561,7 +566,7 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
 
 @container config-card (max-width: 980px) {
   .cfx-main { grid-template-columns: minmax(0, 1fr); }
-  .cfx-inspector { position: static; }
+  .cfx-inspector { position: static; max-height: none; overflow-y: visible; }
 }
 @container config-card (max-width: 640px) {
   .cfx-arrow { display: none; }

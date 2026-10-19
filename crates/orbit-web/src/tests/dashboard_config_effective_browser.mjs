@@ -10,8 +10,9 @@
 // for a not-inherited one, a save to the chosen file with its CLI preview,
 // a refused save, removing a workspace override, crews by provider, paths,
 // the Review findings switch persisting `review.verify_findings` across a
-// reload, and a 375px phone with no horizontal page scroll. No Orbit store is
-// contacted.
+// reload, a sticky inspector with internal scrolling, and narrow selection
+// revealing the stacked inspector without horizontal scroll. No Orbit store
+// is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -471,6 +472,85 @@ try {
     await page.screenshot({ path: path.join(evidence, `config-effective-${width}.png`), fullPage: true });
   }
 
+  // 10. A registry-sized list must not push the selected editor off-screen.
+  // Scroll the actual Config pane, not window (the shell owns scrolling).
+  for (let index = 0; index < 48; index++) {
+    const key = `workflow.validation_env.fixture_${index}`;
+    KEYS.push({ key, section: 'delivery', type: 'string', builtIn: '', description: 'Environment value passed to validation commands.' });
+    files.workspace[key] = `value_${index}`;
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.reload();
+  await select('workflow.max_active_runs');
+  const geometry = () => page.evaluate(() => {
+    const panel = document.querySelector('#config-body .cfx-inspector');
+    const pane = document.querySelector('.tab-pane[data-tab="config"]');
+    const box = panel.getBoundingClientRect();
+    const viewport = pane.getBoundingClientRect();
+    const table = document.querySelector('#config-body .cfx-keys').getBoundingClientRect();
+    return {
+      top: box.top, bottom: box.bottom, height: box.height,
+      viewportTop: Math.max(0, viewport.top), viewportBottom: Math.min(innerHeight, viewport.bottom), viewportHeight: pane.clientHeight,
+      tableBottom: table.bottom, paneScroll: pane.scrollTop, windowScroll: window.scrollY,
+      clientHeight: panel.clientHeight, scrollHeight: panel.scrollHeight, scrollTop: panel.scrollTop,
+      overflowY: getComputedStyle(panel).overflowY,
+    };
+  });
+  const scrollToListBottom = async () => {
+    await page.locator('.tab-pane[data-tab="config"]').evaluate((pane) => {
+      const table = pane.querySelector('.cfx-keys').getBoundingClientRect();
+      if (pane.scrollHeight > pane.clientHeight) {
+        pane.scrollTop += table.bottom - pane.getBoundingClientRect().bottom + 12;
+      } else {
+        // Capture the broken base too, where Config incorrectly grows the
+        // document instead of scrolling its pane. The geometry check fails.
+        window.scrollBy(0, table.bottom - innerHeight + 12);
+      }
+    });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  };
+  const scrollFailures = [];
+  for (const height of [900, 600]) {
+    await page.setViewportSize({ width: 1440, height });
+    await scrollToListBottom();
+    const box = await geometry();
+    evidenceLog[`sticky${height}`] = box;
+    if (!(box.paneScroll > 1000 && box.windowScroll === 0 && box.tableBottom <= box.viewportBottom
+      && box.top >= box.viewportTop && box.bottom <= box.viewportBottom)) {
+      scrollFailures.push(`inspector stays inside the real scroll viewport at 1440x${height}: ${JSON.stringify(box)}`);
+    }
+    if (height === 900) await page.screenshot({ path: path.join(evidence, 'config-effective-dark-1440.png') });
+    if (height === 600) {
+      await page.locator('#config-body .cfx-inspector').evaluate((panel) => { panel.scrollTop = panel.scrollHeight; });
+      const scrolled = await geometry();
+      const saveBox = await page.getByRole('button', { name: 'Save', exact: true }).boundingBox();
+      evidenceLog.internalScroll = { ...scrolled, saveBox };
+      await page.screenshot({ path: path.join(evidence, 'config-effective-dark-1440-short.png') });
+      if (!(scrolled.overflowY === 'auto' && scrolled.scrollHeight > scrolled.clientHeight
+        && scrolled.scrollTop > 0 && saveBox.y >= scrolled.top && saveBox.y + saveBox.height <= scrolled.bottom)) {
+        scrollFailures.push(`a tall inspector scrolls internally to its Save button: ${JSON.stringify(evidenceLog.internalScroll)}`);
+      }
+    }
+  }
+  // Selection must reveal the stacked inspector even from the top of a long
+  // list. Clicking an already-selected row must reveal it again as well.
+  for (const width of [768, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await select('workflow.merge_method');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await row('workflow.max_active_runs').click();
+      await until('the selected inspector heading', async () => (await inspector()).key === 'workflow.max_active_runs');
+      const box = await geometry();
+      evidenceLog[`selection${width}_${attempt}`] = box;
+      const heading = await page.locator('#cfx-inspector-key').boundingBox();
+      if (!(box.top >= box.viewportTop - 1 && heading.y + heading.height <= box.viewportBottom + 1)) {
+        scrollFailures.push(`selection reveals the inspector at ${width}px (attempt ${attempt}): ${JSON.stringify(box)}`);
+      }
+      if (width === 375 && attempt === 0) await page.screenshot({ path: path.join(evidence, 'config-effective-dark-375.png') });
+    }
+  }
+  assert(scrollFailures.length === 0, scrollFailures.join('\n'));
+
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'config-effective-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -490,11 +570,14 @@ try {
       'browser-config-effective-finding-verification-switch',
       'browser-config-effective-44px-targets-and-focus',
       'browser-config-effective-phone-no-horizontal-scroll',
+      'browser-config-effective-sticky-inspector-list-bottom',
+      'browser-config-effective-tall-inspector-internal-scroll',
+      'browser-config-effective-narrow-selection-reveals-inspector',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard Settings › Effective browser checks passed at 1440px, 768px and 375px: layer counts, restates filter, inspector chains, save, remove override, crews, paths and the Review findings switch.');
+  console.log('Dashboard Settings › Effective browser checks passed at 1440px, 768px and 375px: layer counts, restates filter, inspector chains, save, remove override, crews, paths, the Review findings switch, sticky/internal inspector scrolling and narrow selection.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'config-effective-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'config-effective-failure.png'), fullPage: true }).catch(() => {});

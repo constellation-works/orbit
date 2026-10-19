@@ -641,11 +641,18 @@ function keyRow(info) {
   node.dataset.key = row.key;
   node.dataset.layer = info.layer;
   node.addEventListener("click", () => {
-    if (selectedKey === row.key) return;
-    selectedKey = row.key;
-    draft = null;
-    notice = null;
-    rerender();
+    if (selectedKey !== row.key) {
+      selectedKey = row.key;
+      draft = null;
+      notice = null;
+      rerender();
+    }
+    // Follow the CSS container breakpoint, including when the operator
+    // reselects a key whose inspector is already open below a long list.
+    const panel = lastRender?.body.querySelector(".cfx-inspector");
+    if (panel && getComputedStyle(panel).position === "static") {
+      panel.scrollIntoView({ block: "start" });
+    }
   });
   return node;
 }
