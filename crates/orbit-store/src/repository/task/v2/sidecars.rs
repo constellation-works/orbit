@@ -15,6 +15,7 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<TaskComment>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        let _span = comments_read_span(id);
         match self.read_sidecar_outside_boundary(id, TaskBundleStoreV2::read_comments_if_settled)? {
             Some(rows) => {
                 Ok(rows.map(|rows| rows.into_iter().map(task_comment_from_row).collect()))
@@ -93,6 +94,35 @@ impl TaskV2Store {
         self.settled_task_history(id)
     }
 
+    /// Filesystem evidence of a task's event and comment logs, taken without
+    /// reading them: each log's byte length, modification time, device and
+    /// inode, as the registry's envelope stamps record a `task.yaml`.
+    ///
+    /// The logs only grow by appends, a rollback truncates them and a bundle
+    /// rewrite renames new files over them, so any write that changes what
+    /// [`Self::read_task_history`] or [`Self::read_task_comments`] would
+    /// return changes the stamp. Taken before a read, it labels what that
+    /// read saw or something older, never newer: a racing write costs the
+    /// caller one more read later. `None` when no stamp can vouch for the
+    /// logs: the partition or the bundle has a write to settle, the task is
+    /// missing, there is no commit boundary, or the platform reports no file
+    /// identity.
+    pub(crate) fn task_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(boundary) = &self.coordination else {
+            return Ok(None);
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(None);
+        }
+        let Some([events, comments]) = self.bundle_store.settled_log_paths(id)? else {
+            return Ok(None);
+        };
+        Ok(persisted_file_stamp(&events)
+            .zip(persisted_file_stamp(&comments))
+            .map(|(events, comments)| format!("{events}/{comments}")))
+    }
+
     /// The history from the whole bundle, once the partition has settled.
     fn settled_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.ensure_recovered()?;
@@ -117,6 +147,16 @@ fn history_read_span(id: &str) -> orbit_common::tracing::span::EnteredSpan {
     orbit_common::tracing::trace_span!(
         target: "orbit.store.task_query",
         "task_history_read",
+        task_id = %id,
+    )
+    .entered()
+}
+
+/// [`history_read_span`] for a comment read.
+fn comments_read_span(id: &str) -> orbit_common::tracing::span::EnteredSpan {
+    orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query",
+        "task_comments_read",
         task_id = %id,
     )
     .entered()

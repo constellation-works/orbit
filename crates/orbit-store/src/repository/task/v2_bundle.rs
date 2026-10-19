@@ -18,12 +18,13 @@ use orbit_types::task::{
 };
 
 use crate::driver::file::task_bundle::bundle_lock_target;
-pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::{
-    append_jsonl_row, append_jsonl_rows, cleanup_partial_bundle_best_effort, is_unpublished_stub,
-    publish_envelope, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
-    read_envelope_at, read_events_at, read_search_docs_at, recover_pending_write, write_bundle_at,
+    PENDING_WRITE_FILE_NAME, append_jsonl_row, append_jsonl_rows,
+    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope, read_bundle_at,
+    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
+    read_search_docs_at, recover_pending_write, write_bundle_at,
 };
+pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
 
@@ -475,6 +476,26 @@ impl TaskBundleStoreV2 {
         task_id: &str,
     ) -> Result<Option<Vec<TaskCommentRowV2>>, OrbitError> {
         self.read_sidecar_if_settled(task_id, read_comments_at)
+    }
+
+    /// The event and comment logs the two reads above parse, for a caller
+    /// that stamps them instead of reading them. `None` when the logs alone
+    /// do not show what a read would return: an incomplete write is recorded
+    /// for the bundle, or an interrupted commit awaits replay.
+    pub(crate) fn settled_log_paths(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<[PathBuf; 2]>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if bundle_dir.join(PENDING_WRITE_FILE_NAME).try_exists()?
+            || has_interrupted_commit(&bundle_dir)?
+        {
+            return Ok(None);
+        }
+        Ok(Some([
+            bundle_dir.join(TASK_EVENTS_FILE_NAME),
+            bundle_dir.join(TASK_COMMENTS_FILE_NAME),
+        ]))
     }
 
     fn read_sidecar_if_settled<T>(

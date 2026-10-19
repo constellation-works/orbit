@@ -134,6 +134,22 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
     }
 
+    /// Evidence that a task's history and comments are unchanged since an
+    /// earlier stamp, taken without reading them; `None` when nothing can
+    /// vouch for them. A worker reads through its owner, so it has none.
+    pub(crate) fn task_history_stamp(&self, id: &str) -> Option<String> {
+        if self.worker_invocation().is_some() {
+            return None;
+        }
+        self.stores()
+            .task_history()
+            .task_history_stamp(id)
+            .unwrap_or_else(|error| {
+                tracing::debug!(task_id = %id, %error, "task history stamp unavailable");
+                None
+            })
+    }
+
     pub fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
             return self.read_owner("", "tasks");

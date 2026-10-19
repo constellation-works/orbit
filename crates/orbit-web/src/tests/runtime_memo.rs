@@ -110,3 +110,68 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
     .await
     .expect("single-flight interleaving must complete within the watchdog");
 }
+
+/// The codebase and agent scans: an entry past its TTL is answered at once
+/// while one background refresh replaces it, so a dashboard request after
+/// the first scan never waits on a scan, however slow.
+#[tokio::test]
+async fn stale_entry_is_served_while_one_refresh_replaces_it() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+        let memo = RuntimeMemo::new("stale-while-revalidate regression");
+        let stale_for = Duration::from_secs(3600);
+        let ttl = Duration::from_secs(60);
+        memo.get_or_refresh(&runtime, "key", Duration::ZERO, stale_for, || {
+            Ok(json!({"generation": 0}))
+        })
+        .await
+        .expect("first scan");
+
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let (started, refresh_started) = oneshot::channel();
+        let (release, refresh_released) = oneshot::channel();
+        let count = Arc::clone(&refreshes);
+        let stale = memo
+            .get_or_refresh(&runtime, "key", ttl, stale_for, move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                started.send(()).expect("signal refresh started");
+                refresh_released.blocking_recv().expect("release refresh");
+                Ok(json!({"generation": 1}))
+            })
+            .await
+            .expect("stale read");
+        assert_eq!(
+            *stale.body,
+            json!({"generation": 0}),
+            "the stale scan is served while the refresh is still blocked"
+        );
+        refresh_started.await.expect("refresh is in flight");
+
+        let count = Arc::clone(&refreshes);
+        let again = memo
+            .get_or_refresh(&runtime, "key", ttl, stale_for, move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"generation": "second refresh"}))
+            })
+            .await
+            .expect("second stale read");
+        assert_eq!(*again.body, json!({"generation": 0}));
+
+        release.send(()).expect("finish refresh");
+        // A miss waits on the refresh's gate and then finds its result.
+        let refreshed = memo
+            .get_or_compute(&runtime, "key", ttl, || {
+                Ok(json!({"generation": "recomputed"}))
+            })
+            .await
+            .expect("refreshed read");
+        assert_eq!(*refreshed.body, json!({"generation": 1}));
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            1,
+            "stale reads during a refresh must not start another"
+        );
+    })
+    .await
+    .expect("stale-while-revalidate must complete within the watchdog");
+}

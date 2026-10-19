@@ -558,6 +558,7 @@
         "tests/host_tunnels.rs::concurrent_first_requests_share_one_attached_ssh",
         "tests/host_tunnels.rs::shutdown_stops_every_child_and_refuses_new_tunnels",
         "tests/runtime_memo.rs::expired_entry_keeps_in_flight_refresh_single_flight",
+        "tests/runtime_memo.rs::stale_entry_is_served_while_one_refresh_replaces_it",
         "tests/serve.rs::early_signal_before_first_poll_is_not_a_lost_wakeup",
         "tests/serve.rs::grace_period_does_not_start_before_shutdown_is_signaled",
         "tests/serve.rs::teardown_returns_after_grace_period_with_blocking_work_in_flight",

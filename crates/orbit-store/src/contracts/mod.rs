@@ -1,5 +1,6 @@
 mod admission_load;
 mod audit;
+mod codebase_facts;
 mod compat;
 mod friction;
 pub(crate) mod incident;
@@ -17,6 +18,7 @@ mod v2_audit;
 
 pub use admission_load::*;
 pub use audit::*;
+pub use codebase_facts::*;
 pub use compat::*;
 pub use friction::*;
 pub use incident::*;

@@ -7,7 +7,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{
     AuditEventInsertParams, AuditEventStatus, JobRun, JobRunState, OrbitError, TaskStatus,
 };
@@ -1477,6 +1477,194 @@ fn codebase_window_rollup_and_cache_reuse_one_scan() {
             assert_eq!(refused.status().as_u16(), 400);
             let refused = server.get(&format!("/api/codebase/analytics?{WS}&rollup=module"));
             assert_eq!(refused.status().as_u16(), 400);
+        },
+    );
+}
+
+/// The task ids whose facts one server's scans computed, in order.
+fn computed_tasks(trace: &[Value]) -> Vec<String> {
+    let mut tasks: Vec<String> = trace
+        .iter()
+        .filter(|event| event["span"]["name"] == "codebase_task_facts_computed")
+        .map(|event| event["span"]["task_id"].as_str().unwrap().to_string())
+        .collect();
+    tasks.sort();
+    tasks
+}
+
+/// Every analytics field but when the scan ran.
+fn without_computed_at(mut body: Value) -> Value {
+    body.as_object_mut().unwrap().remove("computed_at");
+    body
+}
+
+/// A scan keeps each task's history-derived facts in the store, so a later
+/// scan by any server process reads no bundle and diffs no commit for an
+/// unchanged task; a new history event or a reopen recomputes that task
+/// alone, and only it; and a dropped table or rows in another fact format rebuild the
+/// same analytics.
+#[test]
+fn codebase_scan_reuses_stored_task_facts_until_a_task_changes() {
+    isolated(
+        "codebase::codebase_scan_reuses_stored_task_facts_until_a_task_changes",
+        || {
+            let fixture = Fixture::new();
+            let repo = init_repo(&fixture);
+            let now = Utc::now();
+            seed_pilot_run(
+                &fixture,
+                "jrun-pilot",
+                "opus",
+                "claude-opus",
+                now - Duration::hours(3),
+                now - Duration::hours(2),
+            );
+            let landed = add_with_status(
+                &fixture,
+                "landed",
+                &["src/landed.rs"],
+                vec![],
+                TaskStatus::Done,
+            );
+            pilot_receipt(
+                &fixture,
+                &landed,
+                now - Duration::minutes(150),
+                Some("jrun-pilot"),
+                &["file:src/landed.rs"],
+                &["file:src/landed.rs"],
+            );
+            land(
+                &fixture,
+                &repo,
+                &landed,
+                &["src/landed.rs", "src/partner.rs"],
+                now - Duration::hours(1),
+            );
+            let blocked = add(&fixture, "blocked", &["src/blocked.rs"], vec![]);
+            transition_and_return(
+                &fixture,
+                &blocked,
+                "workflow_run_failed",
+                Some("run_id=jrun-1 error_code=agent_failed".into()),
+                TaskStatus::Blocked,
+            );
+            let quiet = add(&fixture, "quiet", &["src/quiet.rs"], vec![]);
+            let rejected = add_with_status(
+                &fixture,
+                "rejected",
+                &["src/rejected.rs"],
+                vec![],
+                TaskStatus::Rejected,
+            );
+            for (event, status) in [
+                ("started", TaskStatus::InProgress),
+                ("review_rejected", TaskStatus::Rejected),
+            ] {
+                append_event(&fixture, &rejected, now, event, None, Some(status));
+            }
+            let mut all = vec![
+                landed.clone(),
+                blocked.clone(),
+                quiet.clone(),
+                rejected.clone(),
+            ];
+            all.sort();
+
+            // Each scan runs in a new server, so no in-process cache serves it.
+            let scan = |computed: &[String]| {
+                let server = fixture.counted_task_server();
+                let response = server.get(&format!(
+                    "/api/codebase/analytics?{WS}&window=all&min_support=1"
+                ));
+                assert_eq!(
+                    response.headers()["age"],
+                    "0",
+                    "a fresh scan reports its age"
+                );
+                let body = json_ok(response);
+                let trace = server.task_query_trace();
+                assert_eq!(computed_tasks(&trace), computed, "{trace:?}");
+                assert_eq!(
+                    operations(&trace, "task_history_read"),
+                    computed.len(),
+                    "only a recomputed task's history is read: {trace:?}"
+                );
+                (body, trace)
+            };
+
+            let (cold, trace) = scan(&all);
+            assert_eq!(operations(&trace, "codebase_landed_diff"), 1, "{trace:?}");
+            assert_eq!(cold["task_pilot"]["assessed"], 1, "{cold}");
+            assert!(row(&cold["blocked"], "src/blocked.rs").is_some(), "{cold}");
+            assert!(row(&cold["blocked"], "src/quiet.rs").is_none(), "{cold}");
+            assert!(
+                row(&cold["rejected"], "src/rejected.rs").is_some(),
+                "{cold}"
+            );
+
+            let (warm, trace) = scan(&[]);
+            for read in ["task_comments_read", "codebase_landed_diff"] {
+                assert_eq!(operations(&trace, read), 0, "{read}: {trace:?}");
+            }
+            assert_eq!(without_computed_at(warm), without_computed_at(cold.clone()));
+
+            transition_and_return(
+                &fixture,
+                &quiet,
+                "workflow_run_failed",
+                Some("run_id=jrun-2 error_code=agent_failed".into()),
+                TaskStatus::Blocked,
+            );
+            fixture
+                .runtime
+                .update_task_as_human(
+                    &rejected,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    "fixture".into(),
+                )
+                .unwrap();
+            let mut changed_tasks = vec![quiet.clone(), rejected.clone()];
+            changed_tasks.sort();
+            let (changed, _) = scan(&changed_tasks);
+            assert!(
+                row(&changed["blocked"], "src/quiet.rs").is_some(),
+                "{changed}"
+            );
+            assert!(
+                row(&changed["rejected"], "src/rejected.rs").is_none(),
+                "{changed}"
+            );
+            assert_eq!(changed["task_pilot"]["assessed"], 1, "{changed}");
+
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let connection = store.connection();
+            connection
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TABLE codebase_task_facts")
+                .unwrap();
+            let (rebuilt, _) = scan(&all);
+            assert_eq!(
+                without_computed_at(rebuilt),
+                without_computed_at(changed.clone())
+            );
+
+            let stale = connection
+                .lock()
+                .unwrap()
+                .execute("UPDATE codebase_task_facts SET format_version = 0", [])
+                .unwrap();
+            assert_eq!(stale, all.len(), "the dropped table was rebuilt");
+            let (reformatted, _) = scan(&all);
+            assert_eq!(
+                without_computed_at(reformatted),
+                without_computed_at(changed)
+            );
+            scan(&[]);
         },
     );
 }

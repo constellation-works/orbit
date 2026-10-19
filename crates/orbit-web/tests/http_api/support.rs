@@ -591,13 +591,14 @@ pub(super) fn walk_audit_pages(
 
 pub(super) fn serve_fixture() {
     let trace = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE")
-        .map(|path| (path, "orbit.store.task_query"))
+        .map(|path| (path, &["orbit.store.task_query", "orbit.core.codebase"][..]))
         .or_else(|| {
             std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
-                .map(|path| (path, "orbit.core.job_run.reconcile"))
+                .map(|path| (path, &["orbit.core.job_run.reconcile"][..]))
         });
-    if let Some((path, target)) = trace {
-        // Count task-store operations or stale-run scans across blocking threads.
+    if let Some((path, targets)) = trace {
+        // Count task-store operations (with the codebase scan's per-task
+        // computes and landed diffs) or stale-run scans across blocking threads.
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
@@ -606,7 +607,7 @@ pub(super) fn serve_fixture() {
                     .with_span_list(false)
                     .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
                     .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
-                        metadata.is_span() && metadata.target() == target
+                        metadata.is_span() && targets.contains(&metadata.target())
                     })),
             )
             .init();

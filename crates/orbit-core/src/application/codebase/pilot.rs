@@ -13,8 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_common::fs::path_glob::RelativePathGlob;
 use orbit_store::contracts::JobRunQuery;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::facts::{Anchor, CodebaseFacts, TaskFacts};
@@ -184,15 +186,27 @@ fn strings(value: &Value) -> Option<Vec<String>> {
     })
 }
 
+/// What a task's task-pilot receipts record, before the newest one is
+/// attributed to a run: kept with the task's stored facts, since only its
+/// comments change it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct PilotInputs {
+    /// The newest assessment's final selectors.
+    after: Vec<String>,
+    /// The filer's selectors before any pilot ran.
+    author: Vec<String>,
+    /// The pilot run the newest assessment names, when it names one.
+    run_id: Option<String>,
+    /// When the newest assessment was written, and its operation id: what a
+    /// receipt without a run id is matched by.
+    at: DateTime<Utc>,
+    operation_id: String,
+}
+
 /// Read a task's task-pilot receipts: `None` when no receipt carries the
-/// pilot's final selectors.
-pub(super) fn read(
-    runtime: &OrbitRuntime,
-    runs: &PilotRuns,
-    id: &str,
-    now: DateTime<Utc>,
-) -> Option<PilotFacts> {
-    let comments = runtime.get_task_comments(id).ok()?;
+/// pilot's final selectors, an error when the comments cannot be read.
+pub(super) fn inputs(runtime: &OrbitRuntime, id: &str) -> Result<Option<PilotInputs>, OrbitError> {
+    let comments = runtime.get_task_comments(id)?;
     // Comments are stored oldest first.
     let receipts: Vec<_> = comments
         .iter()
@@ -203,11 +217,16 @@ pub(super) fn read(
             Some((comment.at, receipt.operation_id, body))
         })
         .collect();
-    let (at, operation_id, newest) = receipts
+    let Some((at, operation_id, newest)) = receipts
         .iter()
         .rev()
-        .find(|(_, _, body)| body["assessment"]["context_files_after"].is_array())?;
-    let after = strings(&newest["assessment"]["context_files_after"])?;
+        .find(|(_, _, body)| body["assessment"]["context_files_after"].is_array())
+    else {
+        return Ok(None);
+    };
+    let Some(after) = strings(&newest["assessment"]["context_files_after"]) else {
+        return Ok(None);
+    };
     let author = receipts
         .first()
         .and_then(|(_, _, oldest)| {
@@ -215,14 +234,36 @@ pub(super) fn read(
                 .or_else(|| strings(&oldest["assessment"]["context_files_before"]))
         })
         .unwrap_or_default();
+    Ok(Some(PilotInputs {
+        after,
+        author,
+        run_id: newest["pilot_run_id"].as_str().map(str::to_string),
+        at: *at,
+        operation_id: operation_id.to_string(),
+    }))
+}
+
+/// Attribute a task's receipts to the pilot run behind its newest
+/// assessment. Runs are read at every scan, not stored with the task: a run
+/// still active when the receipt was written may finish later.
+pub(super) fn attribute(
+    runtime: &OrbitRuntime,
+    runs: &PilotRuns,
+    inputs: PilotInputs,
+    now: DateTime<Utc>,
+) -> PilotFacts {
     let run = runs.attribute(
         runtime,
-        newest["pilot_run_id"].as_str(),
-        *at,
-        operation_id,
+        inputs.run_id.as_deref(),
+        inputs.at,
+        &inputs.operation_id,
         now,
     );
-    Some(PilotFacts { after, author, run })
+    PilotFacts {
+        after: inputs.after,
+        author: inputs.author,
+        run,
+    }
 }
 
 /// One declared selector that can cover files.
