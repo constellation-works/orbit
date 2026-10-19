@@ -1,37 +1,112 @@
 //! Render the recorded forecast without recalculating or reserving admission.
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
+
+use super::format::format_duration;
+
+const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// The drain whose passes recorded a forecast, for labelling one that is
+/// history rather than this pass's.
+pub(super) struct ForecastOrigin<'a> {
+    pub(super) run_id: Option<&'a str>,
+    /// The drain has ended, so even its latest pass is history.
+    pub(super) ended: bool,
+    /// No drain, local or pull, is live in this workspace. `false` when the
+    /// caller cannot tell.
+    pub(super) none_live: bool,
+}
 
 pub(super) fn admission_lines(
     current: &Value,
     last_built: &Value,
+    origin: &ForecastOrigin<'_>,
     mut title: impl FnMut(&str) -> Option<String>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
+    // A finished drain's last pass is retained history like an older pass's
+    // forecast: an operator must not read its peaks as the host's load now.
+    let current_retained = origin.ended && !current["forecast_at"].is_null();
     if let Some(line) = admission_line(current, &mut title) {
-        lines.push(line);
+        lines.push(if current_retained {
+            retained_line(current, &line, origin)
+        } else {
+            line
+        });
     }
     if let Some(line) = stuck_head_line(current, &mut title) {
         lines.push(line);
     }
-    let forecast = if current["forecast_at"].is_null() {
-        if let Some(at) = last_built["forecast_at"].as_str() {
+    let (forecast, retained) = if current_retained {
+        (current, true)
+    } else if current["forecast_at"].is_null() {
+        if last_built["forecast_at"].is_string() {
             if lines.is_empty() {
                 lines.push("Admission: no forecast built this pass".to_string());
             }
             if let Some(line) = admission_line(last_built, &mut title) {
-                lines.push(format!(
-                    "Last forecast {at}: {}",
-                    line.trim_start_matches("Admission: ")
-                ));
+                lines.push(retained_line(last_built, &line, origin));
             }
         }
-        last_built
+        (last_built, true)
     } else {
-        current
+        (current, false)
     };
-    lines.extend(peak_lines(forecast));
+    lines.extend(peak_lines(forecast, retained));
     lines
+}
+
+/// `Last forecast <at> (<age> ago, from drain <run>[, which has ended][; no
+/// drain is live]): <decisions>`.
+fn retained_line(forecast: &Value, line: &str, origin: &ForecastOrigin<'_>) -> String {
+    let at = forecast["forecast_at"].as_str().unwrap_or("?");
+    let mut context = Vec::new();
+    if let Ok(recorded) = DateTime::parse_from_rfc3339(at) {
+        let age = Utc::now().signed_duration_since(recorded.with_timezone(&Utc));
+        let ms = u64::try_from(age.num_milliseconds()).unwrap_or(0);
+        context.push(format!("{} ago", format_duration(Some(ms))));
+    }
+    if let Some(run_id) = origin.run_id {
+        let ended = if origin.ended {
+            ", which has ended"
+        } else {
+            ""
+        };
+        context.push(format!("from drain {run_id}{ended}"));
+    }
+    let mut context = context.join(", ");
+    if origin.none_live {
+        if !context.is_empty() {
+            context.push_str("; ");
+        }
+        context.push_str("no drain is live");
+    }
+    let context = if context.is_empty() {
+        String::new()
+    } else {
+        format!(" ({context})")
+    };
+    format!(
+        "Last forecast {at}{context}: {}",
+        line.trim_start_matches("Admission: ")
+    )
+}
+
+/// `ORB-12 "title"`, the bare ID when its title is unreadable, or `fallback`
+/// when the record names no task.
+fn task_name(
+    task_id: Option<&str>,
+    title: &mut impl FnMut(&str) -> Option<String>,
+    fallback: &str,
+) -> String {
+    match task_id {
+        Some(id) => match title(id) {
+            Some(title) => format!("{id} \"{title}\""),
+            None => id.to_string(),
+        },
+        None => fallback.to_string(),
+    }
 }
 
 pub(super) fn admission_line(
@@ -51,25 +126,20 @@ pub(super) fn admission_line(
         let count = forecast["admitted"].as_array().map_or(0, Vec::len);
         decisions.push(format!("{count} candidate(s) fit"));
         for admitted in forecast["admitted"].as_array().into_iter().flatten() {
-            let name = admitted["task_id"]
-                .as_str()
-                .and_then(&mut title)
-                .unwrap_or_else(|| "task".to_string());
+            let name = task_name(admitted["task_id"].as_str(), &mut title, "task");
             decisions.push(format!("admitted {name}"));
         }
     }
     for skipped in forecast["skipped"].as_array().into_iter().flatten() {
-        let name = skipped["task_id"]
-            .as_str()
-            .and_then(&mut title)
-            .unwrap_or_else(|| "task".to_string());
+        let name = task_name(skipped["task_id"].as_str(), &mut title, "task");
         decisions.push(format!("skipped {name} ({})", skip_detail(skipped)));
     }
     if forecast["head"]["protected"].as_bool() == Some(true) {
-        let name = forecast["head"]["task_id"]
-            .as_str()
-            .and_then(&mut title)
-            .unwrap_or_else(|| "queue head".to_string());
+        let name = task_name(
+            forecast["head"]["task_id"].as_str(),
+            &mut title,
+            "queue head",
+        );
         decisions.push(format!("starvation guard protects {name}"));
     }
     Some(format!("Admission: {label} — {}", decisions.join("; ")))
@@ -87,10 +157,7 @@ fn stuck_head_line(
         return None;
     }
     let miss = &head["miss"];
-    let name = head["task_id"]
-        .as_str()
-        .and_then(&mut title)
-        .unwrap_or_else(|| "queue head".to_string());
+    let name = task_name(head["task_id"].as_str(), &mut title, "queue head");
     let resource = miss["resource"].as_str().unwrap_or("resource");
     let profile = match miss["profile_key"].as_str() {
         Some(key) => format!(
@@ -119,8 +186,8 @@ fn stuck_head_line(
     ))
 }
 
-// Derive the explanation from structured fields: a persisted starvation
-// detail names an internal task ID, which must not reach new text surfaces.
+// Derive the explanation from structured fields rather than the persisted
+// detail, whose starvation wording would name the head a second time.
 pub(super) fn skip_detail(skipped: &Value) -> String {
     match (
         skipped["resource"].as_str(),
@@ -134,14 +201,21 @@ pub(super) fn skip_detail(skipped: &Value) -> String {
     }
 }
 
-pub(super) fn peak_lines(forecast: &Value) -> Vec<String> {
+/// Peaks of a retained forecast are labelled `Last forecast peak:` so they
+/// do not read as the host's load now.
+pub(super) fn peak_lines(forecast: &Value, retained: bool) -> Vec<String> {
     let mut lines = Vec::new();
     for resource in ["cpu", "memory"] {
         let peak = &forecast[format!("{resource}_peak")];
         let Some(value) = peak["value"].as_f64() else {
             continue;
         };
-        let unit = if resource == "cpu" { "cores" } else { "bytes" };
+        // Memory is recorded in bytes and shown in GiB, as `run profiles` does.
+        let (value, unit) = if resource == "cpu" {
+            (value, "cores")
+        } else {
+            (value / GIB, "GiB")
+        };
         let percent = peak["percent"]
             .as_f64()
             .map(|percent| format!(" ({percent:.1}%)"))
@@ -155,8 +229,13 @@ pub(super) fn peak_lines(forecast: &Value) -> Vec<String> {
         } else {
             String::new()
         };
+        let label = if retained {
+            "Last forecast peak"
+        } else {
+            "Forecast peak"
+        };
         lines.push(format!(
-            "Forecast peak: {resource} {value:.1} {unit}{percent} at +{}m{headroom}.",
+            "{label}: {resource} {value:.1} {unit}{percent} at +{}m{headroom}.",
             peak["minute"]
         ));
     }

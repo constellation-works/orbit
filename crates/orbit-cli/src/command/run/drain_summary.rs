@@ -153,6 +153,16 @@ impl DrainLeafSummary {
         })
     }
 
+    /// The tasks this local drain's last pass left waiting for a host of
+    /// another OS.
+    pub(super) fn host_os_waiting_task_ids(&self) -> impl Iterator<Item = &str> {
+        self.waiting
+            .excluded
+            .iter()
+            .filter(|task| task.reason.as_deref() == Some("host_os_mismatch"))
+            .map(|task| task.task_id.as_str())
+    }
+
     /// The `Leaves:` line, then a warning per failed or starved outcome.
     pub(super) fn lines(
         &self,
@@ -474,7 +484,10 @@ fn waiting_line(
         )
     ) && let Some(detail) = &task.detail
     {
-        line.push_str(&format!(" ({detail})"));
+        match formatter.host_fleet(&task.task_id) {
+            Some(fleet) => line.push_str(&format!(" ({detail}; {fleet})")),
+            None => line.push_str(&format!(" ({detail})")),
+        }
     }
     line
 }

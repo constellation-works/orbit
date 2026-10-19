@@ -171,15 +171,20 @@ profile source (`exact`, `without_complexity`, `base_class`,
 `orbit run readiness` shows the same last-pass snapshot, CPU and memory peaks,
 and headroom in percentage points below the **current** configured admission
 limits. JSON adds `capacity.admission_forecast`, with the recorded fields,
-`task_titles`, and `headroom` (`cpu_percent`, `memory_percent`,
-`admit_cpu_percent`, `admit_memory_percent`). An unknown host capacity has
-unknown headroom; negative headroom means the peak exceeds the limit.
+`task_titles`, `headroom` (`cpu_percent`, `memory_percent`,
+`admit_cpu_percent`, `admit_memory_percent`), and the drain that recorded it
+(`drain_run_id`, with `drain_live` false once that drain has ended). An unknown
+host capacity has unknown headroom; negative headroom means the peak exceeds
+the limit. Text names each task as `ORB-12 "title"` and prints memory in GiB.
 A pass that builds a forecast also retains it in
 `pipeline_state.drain_last_forecast`; readiness exposes the same observation
 as `capacity.last_admission_forecast`, with titles and current-limit headroom.
 When later passes build none, both commands say so and show the retained
-forecast's timestamp, admitted and skipped candidate titles, and CPU and memory
-peaks. These historical decisions never change current task eligibility.
+forecast as `Last forecast <time> (<age> ago, from drain <run id>)`, with its
+admitted and skipped candidates, and its peaks as `Last forecast peak:`. A
+finished drain's last pass is labelled the same way, adding `which has ended`,
+and readiness adds `no drain is live` when neither a local nor a pull drain
+is running. These historical decisions never change current task eligibility.
 The current-pass keys keep their meaning; the retained forecast survives idle
 passes and terminalization until another built forecast replaces it.
 

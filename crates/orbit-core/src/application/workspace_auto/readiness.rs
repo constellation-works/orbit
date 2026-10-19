@@ -334,6 +334,9 @@ pub fn explain_workspace_auto_readiness(
         ids
     };
 
+    // Advisory: unreadable executor definitions only drop the OS wait that a
+    // dependency wait would otherwise hide.
+    let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
     let mut tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -373,6 +376,14 @@ pub fn explain_workspace_auto_readiness(
                         .map(|dependency| json!({ "task_id": dependency.id, "status": dependency.status }))
                         .collect::<Vec<_>>()),
                 );
+                // Admission checks dependencies first, so a task that also
+                // waits for another host's OS would show only its dependency.
+                if let Some(wait) = runtime.task_host_os_wait(task, &pools, &host_os_limits) {
+                    object.insert("host_os_wait".to_string(), json!(wait));
+                    if let Some(fleet) = runtime.task_host_fleet_note(task) {
+                        object.insert("host_fleet".to_string(), json!(fleet));
+                    }
+                }
                 return Value::Object(object.clone());
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
@@ -422,6 +433,15 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("reason".to_string(), Value::String("host_os_mismatch".to_string()));
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
+                        // Which registered hosts run the OS it needs, and
+                        // whether each is pulling here.
+                        let fleet = snapshot
+                            .task_lookup
+                            .get(&excluded.id)
+                            .and_then(|task| runtime.task_host_fleet_note(task));
+                        if let Some(fleet) = fleet {
+                            object.insert("host_fleet".to_string(), json!(fleet));
+                        }
                     }
                     BacklogTaskExclusionReason::BrowserKitMissing => {
                         // A verified kit on this host, or a host that has
@@ -642,6 +662,10 @@ pub fn explain_workspace_auto_readiness(
             }
         }
         view["task_titles"] = json!(titles);
+        // The drain whose passes recorded it, and whether that drain is still
+        // live: a finished drain's forecast is history, not this host's load.
+        view["drain_run_id"] = json!(status_run_id);
+        view["drain_live"] = json!(active_drain.is_some());
         view
     };
     let forecast_view = admission_forecast.map(&project_forecast);
