@@ -4,7 +4,7 @@ type: design
 title: "Host Registry — Overview"
 owner: codex
 last_updated: 2026-10-12
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Accepted
 feature: host-registry
 doc_role: overview
