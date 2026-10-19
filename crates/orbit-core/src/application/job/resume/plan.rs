@@ -1,70 +1,20 @@
-//! [ORB-10470] Resume planning: retry-lineage ownership + checkpoint reuse.
-//!
-//! A resumed run is not a fresh submission. It re-enters a workflow that a
-//! previous attempt already admitted, in a worktree that attempt created,
-//! against tasks that attempt stamped with its own `job_run_id`. Three durable
-//! facts therefore have to be reconciled *before* the resumed run reaches its
-//! delivery tail (F2026-07-121 / F2026-07-122):
-//!
-//! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
-//!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
-//!    or `workflow_run_interrupted`). The run's own failure handoff can block
-//!    the task first (`pr_failure_handoff`, `pr_conflict_blocked`,
-//!    `validation_environment_blocked`, `review_gate_escalation`), and
-//!    finalization then leaves that block in place because `blocked` is not
-//!    blockable again. `blocked` is also outside the workflow-admission
-//!    allowlist. If the resumed run replays `worktree_setup`, admission
-//!    rejects the very task the resume exists to recover — a catch-22.
-//!    Resume readmits a block only when that latest system entry attributes
-//!    itself to this lineage. An operator block stays untouched.
-//! 2. **Ownership drift.** When checkpoints *are* reused, `worktree_setup` is
-//!    skipped, so nothing re-claims the task. Downstream delivery steps keep
-//!    consuming the checkpointed `steps.<worktree>.output.job_run_id` as their
-//!    batch id, while the task record may have been re-stamped by an
-//!    intervening failed attempt in the same lineage. A task bound to a run
-//!    outside that lineage — including another machine's claim — is refused
-//!    here, before those checkpoints or a validation input are reused.
-//!
-//! 3. **Delivery stage.** A final-recovery escalation, or a failure-handoff
-//!    block attributed to this lineage, can block a task after promotion to
-//!    review. Reusing that promotion checkpoint must restore review, rather
-//!    than readmitting implementation that completion skips.
-//!
-//! These are repaired by reconciling against the run's **explicit retry
-//! lineage** — the source run, its `retry_source_run_id` ancestors, and the
-//! runs descended from them — and never against an unrelated run. A task
-//! whose binding (`job_run_id` and `job_run_machine`) is outside that lineage
-//! is not resumed and not re-stamped. Planning refuses before any step runs
-//! and names the current binding; the next action is to continue that binding
-//! on its machine, or to admit a new attempt after an authorized rebind.
-//! Resume does not rebind a foreign claim. A legitimate resume re-keys only
-//! the pipeline document's run id. Ownership ids inside checkpoints and the
-//! copied input stay the batch that created the worktree; rewriting them
-//! would make validation name a run that does not own the task. The attach
-//! guard in `runtime_host` stays fail-closed for a non-owning run.
-
-mod source_repair;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{ExecutionLocation, Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{
-    ActivityV2Spec, JobRun, JobRunState, JobV2, JobV2StepBody, PipelineState,
-};
-
+use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
 use serde_json::Value;
 
-use crate::OrbitRuntime;
-use crate::application::job::pipeline::{
-    PipelineInvokeResult, PipelineSubmission, SubmittedDefinition,
+use super::binding::{
+    blocking_run_id, checkpoint_ownership_id, foreign_binding_message, resume_binding_task_ids,
+    review_checkpoints, task_ids_from_input,
 };
+use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
-use crate::runtime::run_input::carried_task_ids;
 use crate::runtime::task::resumed_task_run_id;
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
@@ -73,13 +23,8 @@ use crate::runtime::task::resumed_task_run_id;
 const RESUME_LINEAGE_MAX_HOPS: usize = 64;
 
 /// How many of the job's most recent runs are scanned for lineage descendants.
-const RESUME_LINEAGE_SCAN_LIMIT: usize = 500;
+pub(super) const RESUME_LINEAGE_SCAN_LIMIT: usize = 500;
 
-/// Checkpointed output fields that carry the batch/ownership identity a
-/// resumed delivery tail keeps using (`worktree_setup` emits both).
-const OWNERSHIP_ID_FIELDS: [&str; 2] = ["job_run_id", "batch_id"];
-
-/// Everything `resume` resolves from the source run before a new run exists.
 pub(crate) struct ResumePlan {
     pub(crate) source: JobRun,
     pub(crate) input: Value,
@@ -90,9 +35,9 @@ pub(crate) struct ResumePlan {
     /// The source run, its retry ancestors, and their descendants.
     pub(crate) lineage: BTreeSet<String>,
     /// Ancestors only: a superseding descendant cannot donate review authority.
-    ancestors: BTreeSet<String>,
+    pub(super) ancestors: BTreeSet<String>,
     /// Successful host promotion checkpoints in the reused prefix.
-    review_checkpoints: BTreeMap<String, Value>,
+    pub(super) review_checkpoints: BTreeMap<String, Value>,
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
     pub(crate) checkpoint_batch_id: Option<String>,
@@ -311,7 +256,7 @@ impl OrbitRuntime {
     /// them. Descendants matter because a task is commonly re-stamped by a
     /// *later* short-lived attempt (F2026-07-121: the task ended up owned by
     /// `jrun-…-2343`, a grandchild of the run being resumed).
-    fn resume_lineage_run_ids(
+    pub(super) fn resume_lineage_run_ids(
         &self,
         source: &JobRun,
     ) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
@@ -570,294 +515,5 @@ impl OrbitRuntime {
             Ok(())
         })?;
         Ok(changed)
-    }
-}
-
-/// The run a system block attributes itself to, when resume may undo it.
-///
-/// Workflow failure and interruption notes carry `, run_id=<id>,`. Final
-/// recovery carries `run_id=` inside its escalation prefix. The run's own
-/// failure handoff (`pr_failure_handoff`, `pr_conflict_blocked`,
-/// `validation_environment_blocked`, `review_gate_escalation` in
-/// `executor::automation::vcs::failure`) carries `: run=<id>,`. Any other
-/// block, including an operator decision, returns `None` and stays put.
-fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
-    if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
-        return None;
-    }
-    let note = entry.note.as_deref()?;
-    match entry.event.as_str() {
-        orbit_engine::WORKFLOW_RUN_FAILED_EVENT | orbit_engine::WORKFLOW_RUN_INTERRUPTED_EVENT => {
-            note.split_once(", run_id=")?.1.split(',').next()
-        }
-        "final_recovery_escalated" => note
-            .strip_prefix("final recovery (run_id=")?
-            .split_once(") escalated:")
-            .map(|(id, _)| id),
-        "pr_failure_handoff"
-        | "pr_conflict_blocked"
-        | "validation_environment_blocked"
-        | "review_gate_escalation"
-        | orbit_types::workflow::FORGE_UNAVAILABLE_EXPIRED_EVENT => failure_handoff_run_id(note),
-        _ => None,
-    }
-}
-
-/// `run=<id>` in a failure-handoff note, bounded by the next comma or semicolon.
-fn failure_handoff_run_id(note: &str) -> Option<&str> {
-    let id = note
-        .split_once(": run=")?
-        .1
-        .split([',', ';'])
-        .next()?
-        .trim();
-    (!id.is_empty()).then_some(id)
-}
-
-/// Resolve host actions, never agent claims or a step name alone. A promotion
-/// must be in the reused prefix and name the task. Later failed steps and
-/// exhaustion of the job do not discard the stage already reached.
-fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Value> {
-    let mut promoted = BTreeMap::new();
-    for (index, step) in job.steps.iter().enumerate() {
-        let Ok(index) = u32::try_from(index) else {
-            break;
-        };
-        let action = match &step.body {
-            JobV2StepBody::Target(target) => match &target.spec {
-                ActivityV2Spec::Deterministic(spec) => Some(spec.action.as_str()),
-                _ => None,
-            },
-            _ => None,
-        };
-        let status = state.step_states.get(&index);
-        if action == Some("pr_complete") && status != Some(&JobRunState::Success) {
-            return promoted;
-        }
-        if !matches!(status, Some(JobRunState::Success | JobRunState::Skipped)) {
-            break;
-        }
-        if action != Some("pr_promote") || status != Some(&JobRunState::Success) {
-            continue;
-        }
-        let Some(output) = state.step_outputs.get(&index) else {
-            break;
-        };
-        // A false `when` is checkpointed as success with null output (for
-        // example the alternate no-diff promotion in the shipped pipeline).
-        if output.is_null() {
-            continue;
-        }
-        if state.pipeline.get(&step.id) != Some(output)
-            || output.get("phase").and_then(Value::as_str) != Some("promote")
-        {
-            break;
-        }
-        for field in ["performed_task_ids", "reused_task_ids"] {
-            for id in output
-                .get(field)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                promoted.insert(id.to_string(), output.clone());
-            }
-        }
-    }
-    promoted
-}
-
-/// The batch/ownership id embedded in the earliest successful checkpoint that
-/// carries one. `worktree_setup` is step 0 of every task pipeline and emits
-/// both `job_run_id` and `batch_id`, so this resolves to the run that actually
-/// owns the reused worktree — which is the id the resumed delivery tail keeps
-/// templating into `git_push` / `pr_open` / `pr_promote`.
-pub(super) fn checkpoint_ownership_id(state: &PipelineState) -> Option<String> {
-    state
-        .step_states
-        .iter()
-        .filter(|(_, step_state)| **step_state == JobRunState::Success)
-        .filter_map(|(index, _)| state.step_outputs.get(index))
-        .find_map(|output| {
-            OWNERSHIP_ID_FIELDS.iter().find_map(|field| {
-                output
-                    .get(field)
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-            })
-        })
-}
-
-/// Fields that name the tasks a reused delivery checkpoint will act on.
-const RESUME_TARGET_ID_FIELDS: &[&str] = &[
-    "task_id",
-    "task_ids",
-    "performed_task_ids",
-    "reused_task_ids",
-];
-
-/// Tasks this resume must compare with the lineage binding.
-///
-/// The run input always counts. Checkpoint outputs count only when they carry
-/// a batch id, which is the delivery tail that skips `worktree_setup`. A drain
-/// checkpoint without that id is left to its own admission.
-fn resume_binding_task_ids(
-    input: &Value,
-    resume_state: Option<&PipelineState>,
-) -> BTreeSet<String> {
-    let mut ids = task_ids_from_input(input).unwrap_or_default();
-    let Some(state) = resume_state else {
-        return ids;
-    };
-    if checkpoint_ownership_id(state).is_none() {
-        return ids;
-    }
-    collect_resume_task_ids(&state.initial_input, &mut ids);
-    collect_resume_task_ids(&state.pipeline, &mut ids);
-    for output in state.step_outputs.values() {
-        collect_resume_task_ids(output, &mut ids);
-    }
-    ids
-}
-
-fn collect_resume_task_ids(value: &Value, ids: &mut BTreeSet<String>) {
-    match value {
-        Value::Object(map) => {
-            for (key, child) in map {
-                if RESUME_TARGET_ID_FIELDS.contains(&key.as_str()) {
-                    push_resume_task_ids(child, ids);
-                } else {
-                    collect_resume_task_ids(child, ids);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_resume_task_ids(item, ids);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_resume_task_ids(value: &Value, ids: &mut BTreeSet<String>) {
-    match value {
-        Value::String(id) => insert_resume_task_id(id, ids),
-        Value::Array(items) => {
-            for item in items {
-                if let Some(id) = item.as_str() {
-                    insert_resume_task_id(id, ids);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn insert_resume_task_id(id: &str, ids: &mut BTreeSet<String>) {
-    let id = id.trim();
-    if !id.is_empty() {
-        ids.insert(id.to_string());
-    }
-}
-
-/// Why resume will not adopt `task_id`'s current binding.
-fn foreign_binding_message(
-    task_id: &str,
-    source_run_id: &str,
-    bound_run: Option<&str>,
-    machine: Option<&ExecutionLocation>,
-) -> String {
-    let binding = match (bound_run, machine) {
-        (Some(run_id), Some(location)) => {
-            let name = location.machine_name.as_deref().unwrap_or("unnamed");
-            format!("job run '{run_id}' on {name} ({})", location.machine_id)
-        }
-        (Some(run_id), None) => format!("job run '{run_id}'"),
-        (None, Some(location)) => {
-            let name = location.machine_name.as_deref().unwrap_or("unnamed");
-            format!("machine {name} ({})", location.machine_id)
-        }
-        (None, None) => "no run".to_string(),
-    };
-    let next = if machine.is_some() {
-        "Continue that binding on its machine, or admit a new attempt after an authorized rebind"
-    } else {
-        "Admit a new attempt after an authorized rebind"
-    };
-    format!(
-        "task '{task_id}' is bound to {binding}, not resume source '{source_run_id}'. \
-         Resume refuses before reusing this lineage's checkpoints or rendering its validation input. \
-         {next}; resume does not overwrite a foreign claim"
-    )
-}
-
-/// Task ids the run input explicitly targets, if any. An auto-discovery run
-/// names none, in which case lineage ownership is the only scope.
-pub(super) fn task_ids_from_input(input: &Value) -> Option<BTreeSet<String>> {
-    let ids = carried_task_ids(input);
-    (!ids.is_empty()).then_some(ids)
-}
-
-impl OrbitRuntime {
-    /// [ORB-10470] Submit a resume of a terminal run as a detached run.
-    ///
-    /// It persists the resumed run (seeded with the source's checkpoints),
-    /// reconciles the retry lineage's task ownership, spawns the detached
-    /// pipeline worker, and returns the new run id as soon as the run is
-    /// durable. Nothing about the resumed execution happens on the caller's
-    /// thread, so run list / status / cancel stay answerable for its whole
-    /// duration (F2026-07-122 defect 3) and the run is cancellable by pid like
-    /// any other submitted run.
-    ///
-    /// [ORB-10709] Resuming creates another managed run, so it is a governed
-    /// workflow operation and takes the same workspace-claim gate as
-    /// [`Self::submit_ship_run`] — checked here, on the shared path, rather than
-    /// in the adapters.
-    ///
-    /// At most one run per retry lineage is live. Every run in a lineage reuses
-    /// the same checkpointed worktree and task claims, so while one is pending
-    /// or running, a further resume of any member is refused with
-    /// [`OrbitError::ResumeRunInFlight`] naming it. The check is part of the
-    /// store insert, so concurrent requests from the dashboard, MCP, and CLI
-    /// admit exactly one. Once that run is terminal, resuming is allowed again
-    /// and chains from the run the caller names — its checkpoints and attempt
-    /// number — not from the lineage's latest attempt.
-    ///
-    /// [ORB-13559] A snapshot-backed source copies its pinned definition onto
-    /// the new run, so a later retry of that run keeps the same YAML. A
-    /// catalog-backed source still resolves its job name from the catalog.
-    pub fn submit_resume_run(
-        &self,
-        source_run_id: &str,
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.require_workspace_claim("orbit.workflow.run.resume", claim_token)?;
-        let plan = self.plan_job_run_resume(source_run_id)?;
-        let job_id = plan.source.job_id.clone();
-        // Settle orphans first: a lineage run whose worker died (a host reboot)
-        // still reads as running and would otherwise refuse the resume that
-        // exists to recover it.
-        self.reconcile_stale_job_runs(Some(&job_id))?;
-        let pinned = plan.pinned_definition.clone();
-        let input = plan.input.clone();
-        match &pinned {
-            Some(pinned) => self.submit_persisted_pipeline_run(PipelineSubmission {
-                definition: SubmittedDefinition::Snapshot {
-                    spec: &pinned.spec,
-                    yaml: &pinned.yaml,
-                },
-                resume: Some(&plan),
-                ..PipelineSubmission::catalog(&job_id, input, actor)
-            }),
-            None => self.submit_persisted_pipeline_run(PipelineSubmission {
-                resume: Some(&plan),
-                ..PipelineSubmission::catalog(&job_id, input, actor)
-            }),
-        }
     }
 }
