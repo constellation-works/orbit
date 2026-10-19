@@ -9,8 +9,9 @@ use super::{clear_inherited_authority, host_load, orphan_watchdog};
 /// summary prevents a nested child's result from hiding an empty outer run.
 /// A passing child's `DEFERRED:` and `SKIP:` notices are repeated on the parent's stderr,
 /// so a test that deferred its sandbox-confined path inside an isolated child
-/// still says so in the run's output [ORB-14334]. Completed `qa-scenario-pass:`
-/// rows are forwarded too, so consolidated cases expose each behavioral row.
+/// still says so in the run's output [ORB-14334]. `test-note:` diagnostics and
+/// completed `qa-scenario-pass:` rows are forwarded too, so conditional native
+/// probes and consolidated cases expose their result.
 pub fn assert_child_test_passed(
     test_name: &str,
     status: std::process::ExitStatus,
@@ -37,6 +38,7 @@ pub fn assert_child_test_passed(
         let line = line.trim_start();
         line.starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
             || line.starts_with("SKIP:")
+            || line.starts_with("test-note: ")
             || line.starts_with("qa-scenario-pass: ")
     });
     for line in deferrals {
