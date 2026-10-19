@@ -1,15 +1,15 @@
 ---
 title: Agent Scorecards — Overview
 owner: claude
-last_updated: 2026-10-18
-last_validated: 2026-10-18
+last_updated: 2026-10-19
+last_validated: 2026-10-19
 status: Draft
 feature: agent-scorecards
 doc_role: overview
 type: design
 summary: One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/src/api/orchestrators.rs", "crates/orbit-web/assets/dashboard/js/orchestrators.js"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/src/api/orchestrators.rs", "crates/orbit-web/assets/dashboard/js/orchestrators.js"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -38,15 +38,15 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 
 | Concern | File | Task |
 |---------|------|------|
-| Problem attribution and the shared score | [2_design.md §3–§4](./2_design.md#3-attribution-each-problem-has-one-owner) | — |
-| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | — |
-| API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | — |
+| Problem attribution and the shared score | [2_design.md §3–§4](./2_design.md#3-attribution-each-problem-has-one-owner) | ORB-16952 |
+| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | ORB-16952 (orchestrators) |
+| API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API) |
 | Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | — |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
 | Today's orchestrator scorecard, which this replaces | [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--orchestrators) | — |
 
 ## Task References
 
-No tasks are cited yet. The implementation tasks will be cited here as they land.
+- ORB-16952 — the core scan, attribution, shared score, Orchestrators role and `/api/agents` routes.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

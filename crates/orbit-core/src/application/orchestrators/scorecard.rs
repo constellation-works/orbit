@@ -9,6 +9,7 @@ use orbit_types::task::{TaskComplexity, TaskOrigin};
 use serde_json::{Map, Value, json};
 
 use super::facts::{Cause, Component, Occurrence, OrchestratorFacts, TaskFacts};
+use crate::application::agents::records::{COMPLEXITY_WEIGHTS, complexity_weight};
 
 /// The component groups, in the order the scorecard shows them.
 pub(super) const GROUPS: &[(&str, &str)] = &[
@@ -133,15 +134,6 @@ pub(super) const COMPONENTS: &[ComponentSpec] = &[
     },
 ];
 
-/// Complexity weights for weighted landed tasks; unassessed and unset weigh 1.
-pub(super) const COMPLEXITY_WEIGHTS: &[(&str, i64)] = &[
-    ("low", 1),
-    ("medium", 2),
-    ("hard", 4),
-    ("xhard", 8),
-    ("unassessed", 1),
-];
-
 /// The composite's terms: component key and weight. One table, shown with
 /// the scorecard.
 pub(super) const COMPOSITE_WEIGHTS: &[(&str, f64)] = &[
@@ -153,14 +145,6 @@ pub(super) const COMPOSITE_WEIGHTS: &[(&str, f64)] = &[
 
 /// Hours in one normalization window of active time.
 const WINDOW_HOURS: f64 = 8.0;
-
-fn complexity_weight(complexity: Option<TaskComplexity>) -> i64 {
-    let name = complexity.map_or("unassessed", TaskComplexity::as_str);
-    COMPLEXITY_WEIGHTS
-        .iter()
-        .find(|(key, _)| *key == name)
-        .map_or(1, |(_, weight)| *weight)
-}
 
 fn component_key(component: Component) -> &'static str {
     match component {

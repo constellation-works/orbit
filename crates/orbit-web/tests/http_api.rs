@@ -4,6 +4,8 @@
 #[path = "support/git.rs"]
 mod git_test_support;
 
+#[path = "http_api/agents.rs"]
+mod agents;
 #[path = "http_api/aggregate_pages.rs"]
 mod aggregate_pages;
 #[path = "http_api/audit.rs"]
