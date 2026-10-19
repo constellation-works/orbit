@@ -168,6 +168,8 @@ include!("git_argv.rs");
 #[cfg(unix)]
 include!("git_deadline.rs");
 include!("jsonl_exit_flush.rs");
+#[cfg(all(target_os = "linux", debug_assertions))]
+include!("jsonl_agent_feed.rs");
 include!("lock_wait.rs");
 include!("new_private_file.rs");
 include!("pricing.rs");
