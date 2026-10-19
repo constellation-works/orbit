@@ -577,17 +577,26 @@ def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded
 
 
 def finalize_result(evidence, assertions, candidate_id, failure=None, accept_nonzero=False):
+    """Classify one command without letting a capability notice hide a failure.
+
+    An exit-zero command whose evidence is otherwise valid is NOT_RUN when it
+    only lacks a capability. A nonzero exit (unless the caller accepts that
+    exit), a validation failure, or truncated output is FAIL. Notices and the
+    original diagnostics stay on the row in either case.
+    """
     evidence["assertions"] = assertions
     evidence["candidate_id"] = candidate_id
     notices = execution_notices(evidence)
-    if notices:
-        evidence["outcome"] = "NOT_RUN"
-        evidence["assertions"] = []
-        evidence["missing_capabilities"] = notices
-        return evidence
     if evidence.get("output_truncated"):
         failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
-    if (evidence["exit_code"] != 0 and not accept_nonzero) or failure:
+    failed = (evidence["exit_code"] != 0 and not accept_nonzero) or bool(failure)
+    if notices:
+        evidence["missing_capabilities"] = notices
+    if notices and not failed:
+        evidence["outcome"] = "NOT_RUN"
+        evidence["assertions"] = []
+        return evidence
+    if failed:
         evidence["outcome"] = "FAIL"
         evidence["assertions"] = []
         if failure:

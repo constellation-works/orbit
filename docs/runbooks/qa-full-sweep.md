@@ -223,10 +223,13 @@ requires both the wrapper's passing test and every required row completion;
 an unrelated aggregate pass cannot substitute for them. A `retired_cases`
 command is listed and executed the same way, as a second row of that scenario
 with no assertions of its own. Commands retain
-successful output with `--show-output`. Any `SKIP:`, `DEFERRED:` or `skipping`
+successful output with `--show-output`. A `SKIP:`, `DEFERRED:` or `skipping`
 notice across built-in, command, Cargo, browser, website or imported execution
-makes its coverage `NOT_RUN`, keeps the raw output, and records the missing
-capability. Required unavailable coverage makes sign-off `INCOMPLETE`.
+records the missing capability and keeps the raw output. An exit-zero command
+whose evidence is otherwise valid stays `NOT_RUN`. A nonzero exit, a failing
+outer suite, truncated output, or another validation failure stays `FAIL` and
+still keeps those notices. Required `NOT_RUN` or `FAIL` coverage makes sign-off
+`INCOMPLETE`.
 
 Rust execution evidence requires an outer libtest frame for each Cargo target
 announcement, complete named result rows, and matching suite counts. Captured
@@ -286,8 +289,10 @@ executable `command`; dispositions without a separate command may only
 reference `required_tests` or `required_rows` selected by the primary scenario.
 Its result is another row of the same scenario. A failure, a missing
 name, or a `SKIP:`, `DEFERRED:`, or `skipping` notice fails that scenario.
-Bubblewrap and other sandbox deferrals stay `NOT_RUN`. A macOS-only capability
-stays `NOT_RUN` in this harness, and Linux evidence never verifies macOS.
+Bubblewrap and other sandbox deferrals on an otherwise successful command stay
+`NOT_RUN`. A failed command that also prints a deferral stays `FAIL`, with the
+notice retained. A macOS-only capability stays `NOT_RUN` in this harness, and
+Linux evidence never verifies macOS.
 
 `mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio` is a row of
 `mcp_roundtrip::task_projection_search_and_audit`. Over stdio, tools/list

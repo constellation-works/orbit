@@ -48,15 +48,28 @@ elif mode.startswith("native-"):
     raise SystemExit(record.get("exit_code", 0))
 else:
     print("     Running tests/boundary.rs (target/debug/deps/boundary-fixture)", file=sys.stderr)
+    failed = mode in ("nonzero-notice", "suite-notice")
     print("running 1 test")
-    print("test boundary::contracts ... ok")
-    print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
-    if mode != "missing-row":
+    if failed:
+        print("test boundary::contracts ... FAILED")
+        print("")
+        print("failures:")
+        print("    boundary::contracts")
+        print("")
+        print("test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
+    else:
+        print("test boundary::contracts ... ok")
+        print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
+    if mode != "missing-row" and not failed:
         print("qa-scenario-pass: original_boundary", file=sys.stderr)
-    if mode == "seatbelt":
+    if mode in ("seatbelt", "nonzero-notice", "suite-notice", "truncated-notice"):
         print("SKIP: sandbox-exec cannot apply a profile: Operation not permitted", file=sys.stderr)
     if mode == "ps":
         print("DEFERRED: ps denied: Operation not permitted", file=sys.stderr)
+    if mode == "truncated-notice":
+        print("x" * (1_048_576 + 64))
+    if mode == "nonzero-notice":
+        raise SystemExit(101)
 '''
 
 LIBTEST_FRAMES = r'''
@@ -200,6 +213,25 @@ def self_test():
             result = row(report, "rust")
             assert report["decision"] == "INCOMPLETE" and result["outcome"] == "NOT_RUN", report
             assert result["missing_capabilities"] and not result["assertions"], result
+            assert result["exit_code"] == 0, result
+        for mode in ["nonzero-notice", "suite-notice", "truncated-notice"]:
+            report = sweep([rust], mode)
+            result = row(report, "rust")
+            assert report["decision"] == "INCOMPLETE" and result["outcome"] == "FAIL", (mode, result)
+            assert result["missing_capabilities"] and not result["assertions"], result
+            notice = "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"
+            assert notice in result["missing_capabilities"] and notice in result["stderr"], result
+            if mode == "nonzero-notice":
+                assert result["exit_code"] == 101, result
+                assert "test boundary::contracts ... FAILED" in result["stdout"], result
+                assert "test result: FAILED. 0 passed; 1 failed;" in result["stdout"], result
+            elif mode == "suite-notice":
+                assert result["exit_code"] == 0, result
+                assert "test boundary::contracts ... FAILED" in result["stdout"], result
+                assert "cargo test reported failing outer tests" in result["stderr"], result
+            else:
+                assert result["exit_code"] == 0 and result["output_truncated"], result
+                assert "command output was truncated" in result["stderr"], result
         report = sweep([rust], "missing-row")
         assert report["decision"] == "INCOMPLETE" and row(report, "rust")["outcome"] == "FAIL", report
         report = sweep([rust], "stale")
@@ -209,7 +241,10 @@ def self_test():
         builtin = {"id": "isolated-cli-lifecycle", "required": True, "kind": "builtin", "capability": "local",
                    "assertions": ["global-init-persists-isolated-root"]}
         report = sweep([builtin], "builtin-skip")
-        assert row(report, "isolated-cli-lifecycle")["outcome"] == "NOT_RUN" and report["decision"] == "INCOMPLETE", report
+        builtin_row = row(report, "isolated-cli-lifecycle")
+        assert builtin_row["outcome"] == "FAIL" and builtin_row["exit_code"] == 1, report
+        assert builtin_row["missing_capabilities"] and report["decision"] == "INCOMPLETE", builtin_row
+        assert "SKIP: sandbox-exec cannot apply a profile: init refused" in builtin_row["stderr"], builtin_row
         website = {"id": "website-build", "required": True, "kind": "command", "capability": "website-build",
                    "command": ["npm", "--prefix", "website", "run", "build"], "assertions": ["website-built"]}
         report = sweep([website], "website-preparation-skip", ["--website-build"])
