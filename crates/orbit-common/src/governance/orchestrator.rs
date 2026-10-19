@@ -1,6 +1,6 @@
-//! The read-only orchestrator scorecard operations: the rows the dashboard's
-//! Analytics › Orchestrators view shows, and one orchestrator's tasks behind
-//! each count.
+//! The read-only orchestrator scorecard operations behind `orbit orchestrator`
+//! and the `orbit.orchestrator.*` tools: the rows, and one orchestrator's
+//! tasks behind each count.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry, required,

@@ -30,7 +30,7 @@ const initializer = `
   import * as audit from '/js/audit.js';
   import * as codebase from '/js/codebase.js';
   let tab = 'tasks', diag = 'incidents', jobs = 'live', operations = 'routines', knowledge = 'frictions';
-  let incidentsView = 'incidents', analytics = 'metrics', reliabilityView = 'pipeline';
+  let incidentsView = 'incidents', analytics = 'metrics', reliabilityView = 'pipeline', agentsRole = 'orchestrators';
   initConfig();
   initRouter({
     getTab: () => tab, setTab: value => { tab = value; },
@@ -39,6 +39,7 @@ const initializer = `
     getIncidentsView: () => incidentsView, setIncidentsView: value => { incidentsView = value; },
     getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: value => { analytics = value; },
     getReliabilityView: () => reliabilityView, setReliabilityView: value => { reliabilityView = value; },
+    getAgentsRole: () => agentsRole, setAgentsRole: value => { agentsRole = value; },
     getOperationsSubtab: () => operations, setOperationsSubtab: value => { operations = value; },
     getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: value => { knowledge = value; },
     getConfigSubtab, setConfigSubtab,
@@ -149,8 +150,8 @@ try {
     nodes.map(node => node.dataset.tab || `${node.closest('nav').id}:${node.dataset.subtab}`)),
   ['diagnostics', 'diag-subtabs:incidents', 'diag-subtabs:doctor', 'analytics',
     'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:resources',
-    'analytics-subtabs:cost'],
-  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Resources, Cost)');
+    'analytics-subtabs:cost', 'agents'],
+  'Observe holds Health (Incidents, Doctor), Analytics (Metrics, Reliability, Codebase, Resources, Cost) and Agents');
   const mains = ['diagnostics-main', 'diagnostics-events-main', 'diagnostics-doctor-main', 'analytics-metrics-main',
     'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-cost-main'];
   const walk = [

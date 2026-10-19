@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/src/api/orchestrators.rs", "crates/orbit-web/assets/dashboard/js/orchestrators.js"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/assets/dashboard/js/agents.js"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -20,7 +20,7 @@ Agent scorecards rank the agents that do each part of Orbit's delivery work: the
 
 ## 1. Motivation
 
-Orbit already ranks orchestrators (Analytics › Orchestrators) and task pilots (one tile of Analytics › Codebase). Those two views use different shapes, and neither answers the question operators actually ask when choosing crew pools: which crew and model does this job best?
+Orbit ranked orchestrators (Analytics › Orchestrators, now Observe › Agents) and task pilots (one tile of Analytics › Codebase). Those two views use different shapes, and neither answers the question operators actually ask when choosing crew pools: which crew and model does this job best?
 
 The orchestrator composite also charges the orchestrator for crew-caused rework. On the 7-day data that motivated this feature, 22 of opus's 28 rework items had cause `crew`, so its score mostly measured its implementers. Separate implementer and reviewer scorecards can only be fair if every problem has one owner.
 
@@ -43,10 +43,11 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 | API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API) |
 | Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | — |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
-| Today's orchestrator scorecard, which this replaces | [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--orchestrators) | — |
+| The Agents dashboard view | [2_design.md §1](./2_design.md#1-destination-and-layout), [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents) | ORB-16953 |
 
 ## Task References
 
 - ORB-16952 — the core scan, attribution, shared score, Orchestrators role and `/api/agents` routes.
+- ORB-16953 — the Agents dashboard destination, which retired Analytics › Orchestrators and `/api/orchestrators/*`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

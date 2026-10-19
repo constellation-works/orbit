@@ -1,8 +1,8 @@
 //! Orchestrator scorecard: ranks the orchestrators named by tasks'
 //! `orchestrator` attribution (distinct from the execution crew) by the work
-//! they file and supervise. The dashboard's Analytics › Orchestrators view,
-//! `orbit orchestrator` and the `orbit.orchestrator.*` tools all read this one
-//! service.
+//! they file and supervise. `orbit orchestrator` and the
+//! `orbit.orchestrator.*` tools read this one service; the dashboard ranks
+//! orchestrators through the agent scorecards (`application::agents`).
 //!
 //! Per orchestrator, over the tasks it owns that were created in the window:
 //! throughput, proactivity from the typed origin, spec defects and rework,

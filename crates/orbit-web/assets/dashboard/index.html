@@ -89,10 +89,10 @@
               <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
               <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
-              <button class="subtab" data-subtab="orchestrators" type="button">Orchestrators</button>
               <button class="subtab" data-subtab="resources" type="button">Resources</button>
               <button class="subtab" data-subtab="cost" type="button">Cost</button>
             </nav>
+          <button class="tab" data-tab="agents" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="2.5"/><circle cx="14" cy="8" r="2"/><path d="M2.5 16c.5-3 2.3-4.5 4.5-4.5s4 1.5 4.5 4.5"/><path d="M12 12.2c.6-.4 1.3-.7 2-.7 1.8 0 3.1 1.3 3.5 4"/></svg><span class="rail-label">Agents</span></button>
           </div>
 
           <div class="rail-group">
@@ -551,39 +551,6 @@
           </div>
         </section>
       </main>
-      <!-- Analytics › Orchestrators: per-orchestrator throughput, proactivity,
-           spec defects and rework from recorded history, each count opening
-           the tasks behind it. Separate from Cost and /api/metrics/orchestrators. -->
-      <main id="analytics-orchestrators-main" style="grid-template-columns: minmax(0, 1fr); display: none;">
-        <section class="panel" id="orchestrators-panel">
-          <header>
-            <span>Orchestrators</span>
-            <span class="count" id="orchestrators-count">—</span>
-          </header>
-          <div class="scoreboard-controls orch-controls" id="orchestrators-controls">
-            <p class="orch-purpose">How well each orchestrator files and supervises work: what landed, what it started on its own initiative, how often its specifications were defective and how much rework followed. Every count comes from task history, relations, review comments and pull request references; cost is not measured.</p>
-            <div class="scoreboard-control-group">
-              <span class="scoreboard-control-label">window</span>
-              <div class="scoreboard-window-selector" id="orchestrators-window-selector" role="tablist" aria-label="Orchestrator scorecard window">
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
-                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1">all</button>
-              </div>
-            </div>
-            <div class="scoreboard-control-group" role="group" aria-labelledby="orchestrators-rate-label">
-              <span class="scoreboard-control-label" id="orchestrators-rate-label">rate</span>
-              <div class="scoreboard-window-selector orch-rate" id="orchestrators-rate">
-                <button type="button" class="scoreboard-window-seg on" data-value="per_100_tasks" aria-pressed="true">Per 100 tasks</button>
-                <button type="button" class="scoreboard-window-seg" data-value="per_8_hours" aria-pressed="false">Per 8 active hours</button>
-              </div>
-            </div>
-            <span class="scoreboard-controls-meta orch-meta" id="orchestrators-meta"></span>
-          </div>
-          <div class="body orch-body" id="orchestrators-body" tabindex="0" role="region" aria-label="Orchestrator scorecard"></div>
-        </section>
-      </main>
       <!-- Analytics › Resources: this host's delivery resource profiles, the
            per-minute curves admission forecasts with, for the selected workspace. -->
       <main id="analytics-resources-main" style="grid-template-columns: 1fr; display: none;">
@@ -620,6 +587,40 @@
               <div class="text">No managed execution cost data yet.</div>
             </div>
           </div>
+        </section>
+      </main>
+    </section>
+    <!-- Observe › Agents: one scorecard per agent role, ranked by crew and
+         model, with who each problem counts against. The role tabs carry
+         their ranked-row counts; js/agents.js renders every role. -->
+    <section class="tab-pane" data-tab="agents" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <nav class="subtabs view-tabs" id="agents-roles" aria-label="Agent roles">
+        <button class="subtab active" data-view="orchestrators" type="button">Orchestrators<span class="agents-role-count" id="agents-count-orchestrators"></span></button>
+        <button class="subtab" data-view="implementers" type="button">Implementers<span class="agents-role-count" id="agents-count-implementers"></span></button>
+        <button class="subtab" data-view="reviewers" type="button">Reviewers<span class="agents-role-count" id="agents-count-reviewers"></span></button>
+        <button class="subtab" data-view="pilots" type="button">Pilots<span class="agents-role-count" id="agents-count-pilots"></span></button>
+      </nav>
+      <main id="agents-main" style="grid-template-columns: minmax(0, 1fr);">
+        <section class="panel" id="agents-panel">
+          <header>
+            <span id="agents-title">Orchestrators</span>
+            <span class="count" id="agents-count">—</span>
+          </header>
+          <div class="scoreboard-controls agents-controls" id="agents-controls">
+            <p class="agents-purpose">One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it.</p>
+            <div class="scoreboard-control-group">
+              <span class="scoreboard-control-label">window</span>
+              <div class="scoreboard-window-selector" id="agents-window-selector" role="tablist" aria-label="Agent scorecard window">
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="24h" aria-selected="true" tabindex="0">24h</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1" title="all is served as 90 days, the scan's reach">all (90d)</button>
+              </div>
+            </div>
+            <span class="scoreboard-controls-meta" id="agents-meta"></span>
+          </div>
+          <div class="body agents-body" id="agents-body" tabindex="0" role="region" aria-label="Agent scorecard"></div>
         </section>
       </main>
     </section>
