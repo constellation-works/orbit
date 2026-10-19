@@ -64,6 +64,9 @@ pub(super) struct ValidatedTask {
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
     pub(super) applied_material: Option<AppliedTaskMaterial>,
+    /// The pilot job run that produced the assessment, persisted as the
+    /// audit's `pilot_run_id`.
+    pub(super) pilot_run_id: Option<String>,
 }
 
 /// The pilot's authorized output, sealed in the same atomic mutation as its

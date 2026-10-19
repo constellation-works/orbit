@@ -115,6 +115,7 @@ pub(super) fn settle_task(
         post_deploy: assessed.post_deploy,
         user_facing_ui: assessed.user_facing_ui,
         applied_material: None,
+        pilot_run_id: context.run_id.map(str::to_string),
     };
     write(context, applied, validated, snapshot)
 }

@@ -58,6 +58,9 @@ struct ApplyContext<'a> {
     authority: &'a PromotionAuthority<'a>,
     /// Tasks whose material the branch changed since preparation.
     source_superseded: &'a BTreeMap<String, String>,
+    /// The pilot job run applying these results, recorded on each receipt so
+    /// the assessment can be attributed to the run's crew and model.
+    run_id: Option<&'a str>,
 }
 
 /// What the applied tasks of every partition contribute to the report.
@@ -126,6 +129,7 @@ pub(crate) fn apply(
         policy: &policy,
         authority: &authority,
         source_superseded: &source_superseded,
+        run_id: envelope.authority.run_id.as_deref(),
     };
     let mut applied = Applied::default();
     let mut partition_decisions = partitions
