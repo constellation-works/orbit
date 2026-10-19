@@ -296,7 +296,10 @@ impl OrbitRuntime {
         apply: bool,
         retention_days: Option<u32>,
     ) -> Result<RunGcReport, OrbitError> {
-        let days = resolve_override(retention_days, self.retention_days()?.runs)?;
+        let days = match retention_days {
+            Some(days) => days,
+            None => self.retention_days()?.runs,
+        };
         if days < 30 {
             return Err(OrbitError::InvalidInput(
                 "run retention must be at least 30 days: Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state".to_string(),

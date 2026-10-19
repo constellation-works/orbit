@@ -239,7 +239,7 @@ pub struct RunGcArgs {
     #[arg(long)]
     pub apply: bool,
 
-    /// Retention window in days, overriding `retention.runs_days` (default 60)
+    /// Retention window in days, overriding `retention.runs_days` (default 60, minimum 30)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
 }
