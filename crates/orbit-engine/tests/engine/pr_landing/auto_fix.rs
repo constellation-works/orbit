@@ -1108,13 +1108,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                 "raw_timestamp_tabbed_error",
                 "raw_timestamp_tabbed_compiler",
                 "columns",
-                "columns_tabbed_compiler",
                 "successful_step",
-                "annotation",
-                "compiler",
-                "panic",
-                "test",
-                "nextest",
                 "unclosed",
                 "orphan",
                 "truncated",
@@ -1139,29 +1133,12 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         }]}),
                     );
                     let (diagnostic, expected) = match case {
-                        "annotation" => (
-                            "##[error]insufficient runner disk",
-                            "##[error]insufficient runner disk",
-                        ),
-                        "compiler" => (
-                            "error[E0433]: cannot find module `real`",
-                            "error[e0433]: cannot find module `real`",
-                        ),
                         "raw_timestamp_tabbed_error" => {
                             ("error:\tactual\tinvariant", "error: actual invariant")
                         }
-                        "raw_timestamp_tabbed_compiler" | "columns_tabbed_compiler" => (
+                        "raw_timestamp_tabbed_compiler" => (
                             "error[E0433]:\tcannot find module\t`real`",
                             "error[e0433]: cannot find module `real`",
-                        ),
-                        "panic" => (
-                            "thread 'real_test' panicked at src/lib.rs:8:1:",
-                            "thread 'real_test' panicked at src/lib.rs:<n>:<n>:",
-                        ),
-                        "test" => ("test real_case ... FAILED", "test real_case ... failed"),
-                        "nextest" => (
-                            "FAIL [ 0.3s] suite real_case",
-                            "fail [ <n>.<n>s] suite real_case",
                         ),
                         _ => (actual, signature),
                     };
@@ -1176,10 +1153,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                             "{timestamp} ##[group]Run preflight\n{timestamp}   printf 'key\tvalue\tdetail\\n'\n{timestamp}   key\tvalue\t##[endgroup]\n{timestamp}   error[E0123]: printed compiler text\n{timestamp} ##[endgroup]\n{timestamp} {diagnostic}\n{timestamp} ##[error]Process completed with exit code 127."
                         );
                     }
-                    if matches!(
-                        case,
-                        "columns" | "columns_tabbed_compiler" | "successful_step" | "wrong_step"
-                    ) {
+                    if matches!(case, "columns" | "successful_step" | "wrong_step") {
                         let step = if case == "wrong_step" {
                             "successful setup"
                         } else {

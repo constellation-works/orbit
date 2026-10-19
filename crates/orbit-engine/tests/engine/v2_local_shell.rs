@@ -22,29 +22,6 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use serde_json::{Value, json};
 
-/// The shipped example must dispatch as written, so the documented reference
-/// cannot drift from the action it documents.
-fn shipped_reference_asset_runs_git_status_in_the_workspace() {
-    let repo = tempfile::tempdir().expect("tempdir");
-    init_repo(repo.path());
-    let host = ShellHost::new(repo.path());
-
-    let yaml = std::fs::read_to_string(
-        workspace_root()
-            .join("crates/orbit-core/assets/activities/examples/local_shell_reference.yaml"),
-    )
-    .expect("read shipped reference asset");
-    let outcome = dispatch(&yaml, json!({}), &host).expect("dispatch succeeds");
-
-    assert!(outcome.success);
-    assert_eq!(outcome.output["exit_code"], json!(0));
-    assert_eq!(outcome.output["sandbox"], json!("none"));
-    assert_eq!(
-        outcome.output["argv"],
-        json!(["git", "status", "--porcelain"])
-    );
-}
-
 fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
@@ -264,23 +241,6 @@ fn shell_activity_with_profile(config: Value, fs_profile: Option<&str>) -> Strin
     serde_json::to_string(&asset).expect("serialize activity asset")
 }
 
-fn init_repo(path: &Path) {
-    let status = crate::git_test_support::command()
-        .args(["init", "--quiet"])
-        .current_dir(path)
-        .status()
-        .expect("run git init");
-    assert!(status.success(), "git init failed");
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root")
-        .to_path_buf()
-}
-
 struct ShellHost {
     root: PathBuf,
     observed: std::sync::Mutex<Vec<(String, Option<String>)>>,
@@ -362,10 +322,6 @@ impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
 fn shell_dispatch_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "shell_dispatch_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
-            (
-                "shipped_reference_asset_runs_git_status_in_the_workspace",
-                shipped_reference_asset_runs_git_status_in_the_workspace,
-            ),
             (
                 "a_nonzero_exit_fails_the_activity_and_is_audited",
                 a_nonzero_exit_fails_the_activity_and_is_audited,

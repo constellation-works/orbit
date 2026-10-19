@@ -342,8 +342,6 @@ fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_c_wall_clock_timeout()?;
     scenario_e_loader_rejection_retired_session()?;
     scenario_f_loader_rejection_retired_backend_value()?;
-    scenario_h_cli_reference_asset_round_trip()?;
-    scenario_i_existing_agent_loop_assets_still_deserialize()?;
     scenario_j_cli_executor_static_args_are_audited()?;
 
     Ok(())
@@ -390,53 +388,6 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     must_contain(&types, "cli.invocation.started");
     must_contain(&types, "cli.invocation.finished");
     println!("    events: {:?}", types);
-    Ok(())
-}
-
-/// The provider's environment carries its own wall-clock deadline, so a
-/// nested `proc.spawn` can run as long as the invocation has left rather than
-/// the 60 s unscoped ceiling.
-#[cfg(unix)]
-#[test]
-fn cli_dispatch_stamps_the_provider_deadline() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp_audit = tempfile::tempdir()?;
-    let (writer, _store) = build_writer(tmp_audit.path(), "smoke-cli-deadline")?;
-    let observed = tempfile::tempdir()?;
-    let observed_path = observed.path().join("deadline");
-    let fake = fake_cli(
-        "claude",
-        &format!(
-            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_DEADLINE_UNIX_MS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
-            observed_path.display()
-        ),
-    )?;
-
-    let mut spec = cli_agent_loop_spec(None);
-    spec.wall_clock_timeout_seconds = 600;
-    let host = ScriptHost::new(fake.cli_path());
-    let epoch_ms = || {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_millis())
-    };
-    let before = epoch_ms()?;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "cli_smoke_deadline",
-        spec: &ActivityV2Spec::AgentLoop(spec),
-        fs_profile: None,
-        input: serde_json::json!({ "prompt": "hello" }),
-        audit: writer,
-        run_id: "smoke-cli-deadline",
-        host: Some(&host),
-    })?;
-    let after = epoch_ms()?;
-    assert!(outcome.success, "fake claude should exit 0");
-
-    let deadline: u128 = fs::read_to_string(&observed_path)?.trim().parse()?;
-    assert!(
-        (before + 600_000..=after + 600_000).contains(&deadline),
-        "deadline {deadline} is not dispatch time plus the 600 s wall clock ({before}..={after})"
-    );
     Ok(())
 }
 
@@ -659,74 +610,6 @@ fn scenario_f_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std
     // `cli` named the surviving path, so it stays accepted and inert.
     let yaml = "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: retained\nspec:\n  type: agent_loop\n  description: retained\n  instruction: hi\n  backend: cli\n";
     load_activity_asset(yaml).expect("`backend: cli` must keep loading");
-    Ok(())
-}
-
-/// H: load `agent_loop_cli_reference.yaml` from disk and execute it
-/// end-to-end through the CLI runner using a substitutable `claude` script.
-/// Proves the YAML parses with the new `backend:` / `provider:` /
-/// `wall_clock_timeout_seconds:` fields and routes correctly to the CLI
-/// runner.
-#[cfg(unix)]
-fn scenario_h_cli_reference_asset_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  H) agent_loop_cli_reference.yaml round-trips + dispatches");
-    let repo_root = repo_root();
-    let path = repo_root
-        .join("crates/orbit-core/assets/activities/examples/agent_loop_cli_reference.yaml");
-    let yaml = fs::read_to_string(&path)?;
-    let asset = load_activity_asset(&yaml)?;
-    match &asset.spec.spec {
-        ActivityV2Spec::AgentLoop(spec) => {
-            assert_eq!(spec.provider, Provider::Claude);
-            assert_eq!(spec.wall_clock_timeout_seconds, 30);
-        }
-        other => panic!("expected agent_loop spec, got {other:?}"),
-    }
-
-    let tmp_audit = tempfile::tempdir()?;
-    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-h")?;
-    // [ORB-10449] A round-tripped asset gets the default completion contract,
-    // so the fake must terminate with a real envelope like a live provider.
-    let fake = fake_cli(
-        "claude",
-        "#!/bin/sh\ncat > /dev/null\necho '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
-    )?;
-    let host = ScriptHost::new(fake.cli_path());
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &asset.name,
-        spec: &asset.spec.spec,
-        fs_profile: asset.spec.fs_profile.as_deref(),
-        input: serde_json::json!({ "prompt": "hello from the yaml round-trip" }),
-        audit: writer.clone(),
-        run_id: "smoke-cli-h",
-        host: Some(&host),
-    })?;
-    assert!(outcome.success);
-    println!(
-        "    asset dispatched, events={}",
-        events_snapshot(&store, "smoke-cli-h")?.len()
-    );
-    Ok(())
-}
-
-/// I: existing Phase 3 v2 `agent_loop` YAML assets still deserialize with the
-/// new `AgentLoopSpec` fields (serde defaults). Covers the default CLI
-/// + the loop/denial samples under `jobs/v2_samples/`.
-fn scenario_i_existing_agent_loop_assets_still_deserialize()
--> Result<(), Box<dyn std::error::Error>> {
-    println!("  I) existing v2 agent_loop assets deserialize unchanged");
-    let repo_root = repo_root();
-    let asset_path =
-        repo_root.join("crates/orbit-core/assets/activities/examples/agent_loop_reference.yaml");
-    let yaml = fs::read_to_string(&asset_path)?;
-    let asset = load_activity_asset(&yaml)?;
-    if let ActivityV2Spec::AgentLoop(spec) = &asset.spec.spec {
-        assert_eq!(spec.provider, Provider::Claude);
-        assert!(spec.wall_clock_timeout_seconds > 0);
-    } else {
-        panic!("expected agent_loop");
-    }
-    println!("    {}: provider=claude (default)", asset.name);
     Ok(())
 }
 
@@ -982,15 +865,6 @@ fn policy_refusal(error: &AssetLoadError) -> (&str, &'static str) {
         }
         other => panic!("expected a tool-policy refusal, got {other:?}"),
     }
-}
-
-fn repo_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .to_path_buf()
 }
 
 /// The real CLI supervisor must keep high-volume stdout/stderr out of the

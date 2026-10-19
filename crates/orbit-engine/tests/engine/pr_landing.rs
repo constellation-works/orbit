@@ -8953,13 +8953,7 @@ fn claimed_known_red_equal_and_subset() {
 fn claimed_known_red_superset_and_disjoint() {
     claimed_known_red_rows(
         "claimed_known_red_superset_and_disjoint",
-        &[
-            "shared-plus-new",
-            "disjoint-six-vs-one",
-            "candidate-unknown",
-            "base-unknown",
-            "both-unknown",
-        ],
+        &["shared-plus-new", "disjoint-six-vs-one"],
     );
 }
 

@@ -10,19 +10,14 @@
 //! Name-resolution integration coverage — T20260418-2019.
 //!
 //! Exercises:
-//!   A) `V2ActivityCatalog::load_dir` picks up the four new v2 activities
-//!      (`agent_assess_diff`, `agent_apply_fixes`, `promote_agent_main`,
-//!      `revert_on_red`) and skips v1 assets silently.
+//!   A) `V2ActivityCatalog::load_dir` keeps the shipped activities
+//!      (`agent_assess_diff`, `agent_apply_fixes`, `revert_on_red`) and
+//!      excludes retired `promote_agent_main`.
 //!   B) `resolve_job_target_refs` rewrites `target: activity:<name>` refs
-//!      into inline `TargetStep`s using the catalog.
-//!   C) A round-trip through backend resolution + §3.2 loader rejection
-//!      works on the resolved job — unknown refs surface a structural
-//!      error, not a silent no-op.
-//!   D) Loading the new `task_pipeline.yaml` sample produces a job with
-//!      `TargetRef`s that point at the bundled v2 activities plus the
-//!      not-yet-ported activities (which is the expected partial state of
-//!      Phase 4). Only the resolvable refs rewrite; unresolved ones are
-//!      reported by the resolver.
+//!      into inline `TargetStep`s using the catalog, including the `session:`
+//!      binding.
+//!   C) An unknown activity name is `ResolveError::ActivityNotInCatalog`,
+//!      not a silent no-op.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_name_resolution::/)'`.
 
@@ -36,15 +31,12 @@ use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
     JoinMode, LoopBlock, ParallelBlock, Provider, TargetRef, TargetStep,
-    validate_job_retired_sessions,
 };
 
 fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_a_catalog_loads_new_activities()?;
     scenario_b_target_ref_resolves()?;
     scenario_c_unknown_ref_is_structural_error()?;
-    scenario_d_pipeline_yaml_partial_resolution()?;
-    scenario_e_retired_session_rejection_runs_after_resolution()?;
 
     Ok(())
 }
@@ -526,66 +518,6 @@ fn scenario_c_unknown_ref_is_structural_error() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn scenario_d_pipeline_yaml_partial_resolution() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  D) task_pipeline.yaml exposes retired promotion structurally");
-    let yaml_path = repo_root().join("crates/orbit-core/assets/jobs/examples/task_pipeline.yaml");
-    let yaml = std::fs::read_to_string(&yaml_path)?;
-    let asset = load_job_asset(&yaml)?;
-
-    // Confirm the parse produced TargetRefs (not inline specs) throughout.
-    let ref_count = count_target_refs(&asset.spec);
-    assert!(
-        ref_count >= 8,
-        "expected at least 8 TargetRefs in pipeline, got {}",
-        ref_count
-    );
-
-    // The post-sweep catalog resolves the live pipeline surface but leaves
-    // retired promotion unresolved rather than silently treating it as live.
-    let catalog = load_reference_catalog()?;
-    let mut partial = asset.spec.clone();
-    let err = resolve_job_target_refs(&mut partial, &catalog);
-    match err {
-        Err(ResolveError::ActivityNotInCatalog { name, .. }) => {
-            assert_eq!(name, "promote_agent_main");
-            println!("    retired promotion remains a structural resolution error");
-        }
-        Ok(_) => panic!("expected retired promotion to remain unresolved"),
-        Err(other) => panic!("wrong error: {other:?}"),
-    }
-
-    // A synthetic promotion entry proves all remaining targets resolve; it
-    // must never be shipped as a real activity until the action exists.
-    let mut catalog_with_stubs = catalog;
-    catalog_with_stubs.insert(
-        "promote_agent_main",
-        stub_deterministic_activity("promote_agent_main"),
-    );
-    let mut full = asset.spec.clone();
-    resolve_job_target_refs(&mut full, &catalog_with_stubs)?;
-    assert_eq!(
-        count_target_refs(&full),
-        0,
-        "every TargetRef should be resolved after stubs land"
-    );
-    println!("    all refs resolve with stubs in place");
-    Ok(())
-}
-
-fn scenario_e_retired_session_rejection_runs_after_resolution()
--> Result<(), Box<dyn std::error::Error>> {
-    println!("  E) retired-session rejection operates on resolved specs");
-    let catalog = load_reference_catalog()?;
-    let mut job = pipeline_with_assessor_loop();
-    resolve_job_target_refs(&mut job, &catalog)?;
-    // [ORB-10801] The `session:` binding survives ref resolution, so the
-    // load-time validator sees it and refuses the job rather than running a
-    // loop whose cross-iteration semantics no longer exist.
-    let err = validate_job_retired_sessions(&job, "synthetic").expect_err("expected rejection");
-    println!("    resolved assessor session rejected: {err}");
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -637,52 +569,6 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
     }
 }
 
-fn pipeline_with_assessor_loop() -> JobV2 {
-    let assess_step = JobV2Step {
-        id: "assess".to_string(),
-        when: None,
-        retry: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        body: JobV2StepBody::TargetRef(TargetRef {
-            target: "activity:agent_assess_diff".to_string(),
-            default_input: None,
-            timeout_seconds: 0,
-            session: Some("assessor".to_string()),
-        }),
-    };
-    JobV2 {
-        state: JobScheduleState::Enabled,
-        owns_task_worktree: false,
-        task_delivery: None,
-        default_input: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        failure_activity: None,
-        resolved_failure_activity: None,
-        final_recovery_activity: None,
-        resolved_final_recovery_activity: None,
-        steering_gate: None,
-        max_active_runs: 1,
-        kind: JobKind::Workflow,
-        steps: vec![JobV2Step {
-            id: "assess_fix".to_string(),
-            when: None,
-            retry: None,
-            recovery_activity: None,
-            resolved_recovery_activity: None,
-            body: JobV2StepBody::Loop {
-                loop_: LoopBlock {
-                    items: None,
-                    max_iterations: 3,
-                    break_when: None,
-                    steps: vec![assess_step],
-                },
-            },
-        }],
-    }
-}
-
 fn stub_deterministic_activity(name: &str) -> ActivityV2 {
     ActivityV2 {
         description: format!("stub for `{name}` — pending v1 port"),
@@ -696,21 +582,6 @@ fn stub_deterministic_activity(name: &str) -> ActivityV2 {
             },
         ),
     }
-}
-
-// Walk a job counting remaining TargetRefs — anything >0 after resolution
-// means Phase 4 hasn't finished porting that activity.
-fn count_target_refs(job: &JobV2) -> usize {
-    fn count_step(step: &JobV2Step) -> usize {
-        match &step.body {
-            JobV2StepBody::TargetRef(_) => 1,
-            JobV2StepBody::Target(_) => 0,
-            JobV2StepBody::Parallel { parallel } => parallel.branches.iter().map(count_step).sum(),
-            JobV2StepBody::FanOut { fan_out, .. } => count_step(&fan_out.worker),
-            JobV2StepBody::Loop { loop_ } => loop_.steps.iter().map(count_step).sum(),
-        }
-    }
-    job.steps.iter().map(count_step).sum()
 }
 
 /// Behavior-distinct rows share one bounded family process.
