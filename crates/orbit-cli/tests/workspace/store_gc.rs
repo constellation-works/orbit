@@ -898,8 +898,9 @@ fn run_retention_refuses_windows_shorter_than_analytics_history() {
         return;
     }
     let fixture = Fixture::new();
-    fs::write(fixture.work.join(".orbit/config.toml"), "").unwrap();
-    for value in ["0", "14", "29"] {
+    let config_path = fixture.work.join(".orbit/config.toml");
+    fs::write(&config_path, "").unwrap();
+    for value in ["0", "14", "29", "0x0e"] {
         fixture
             .orbit()
             .env("ORBIT_OPERATOR", "1")
@@ -907,6 +908,7 @@ fn run_retention_refuses_windows_shorter_than_analytics_history() {
             .assert()
             .failure()
             .stderr(predicates::str::contains("require 30 days"));
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), "");
         fixture
             .orbit()
             .env("ORBIT_OPERATOR", "1")
@@ -924,4 +926,67 @@ fn run_retention_refuses_windows_shorter_than_analytics_history() {
         fixture.json(&["gc", "runs", "--json"])["retention_days"],
         30
     );
+}
+
+/// Previously recommended persisted windows must not prevent startup or repair.
+#[test]
+fn stored_short_run_retention_loads_safely_and_can_be_repaired() {
+    const TEST: &str = "store_gc::stored_short_run_retention_loads_safely_and_can_be_repaired";
+    if !in_child(TEST) {
+        return;
+    }
+    for global in [false, true] {
+        let fixture = Fixture::new();
+        let config_path = if global {
+            fixture.home.join(".orbit/config.toml")
+        } else {
+            fixture.work.join(".orbit/config.toml")
+        };
+        let mut stored = fs::read_to_string(&config_path).unwrap_or_default();
+        stored.push_str("\n[retention]\nruns_days = 14\n");
+        fs::write(&config_path, &stored).unwrap();
+
+        let output = fixture
+            .orbit()
+            .env("ORBIT_OPERATOR", "1")
+            .env("RUST_LOG", "warn")
+            .args(["gc", "runs", "--json"])
+            .assert()
+            .success()
+            .stderr(predicates::str::contains("retention.runs_days"))
+            .get_output()
+            .stdout
+            .clone();
+        let plan: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(plan["retention_days"], 30);
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), stored);
+
+        let mut repair = fixture.orbit();
+        repair.env("ORBIT_OPERATOR", "1").args(["config", "set"]);
+        if global {
+            repair.arg("--global");
+        }
+        repair
+            .args(["retention.runs_days", "30"])
+            .assert()
+            .success();
+        let repaired = fs::read_to_string(&config_path).unwrap();
+        let document: toml::Value = toml::from_str(&repaired).unwrap();
+        assert_eq!(document["retention"]["runs_days"].as_integer(), Some(30));
+
+        let mut refused = fixture.orbit();
+        refused.env("ORBIT_OPERATOR", "1").args(["config", "set"]);
+        if global {
+            refused.arg("--global");
+        }
+        refused
+            .args(["retention.runs_days", "14"])
+            .assert()
+            .failure();
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), repaired);
+        assert_eq!(
+            fixture.json(&["gc", "runs", "--json"])["retention_days"],
+            30
+        );
+    }
 }
