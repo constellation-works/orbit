@@ -353,7 +353,7 @@ pub(super) fn all_job_runs_json(
         });
         match page {
             Ok((runs, count)) => {
-                let titles = match super::run_tasks::task_titles(&runtime, &runs) {
+                let titles = match super::runs::task_titles(&runtime, &runs) {
                     Ok(titles) => titles,
                     Err(error) => {
                         unavailable.push(json!({
@@ -369,11 +369,11 @@ pub(super) fn all_job_runs_json(
                     .iter()
                     .map(|run| {
                         let mut value = job_run_to_json(run, None);
-                        super::run_tasks::add_tasks(&mut value, run, &titles);
+                        super::runs::add_tasks(&mut value, run, &titles);
                         value
                     })
                     .collect::<Vec<_>>();
-                super::run_lineage::add_run_lineage(&runtime, &runs, &mut values);
+                super::runs::add_run_lineage(&runtime, &runs, &mut values);
                 candidates.extend(
                     runs.into_iter()
                         .zip(values)

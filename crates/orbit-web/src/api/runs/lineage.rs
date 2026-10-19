@@ -17,7 +17,11 @@ use serde_json::{Value, json};
 /// leaf a cascaded failure echoes, null for a run that failed on its own.
 /// When the states cannot be read the listing keeps its plain shape without
 /// `parent_run_id`, so History falls back to one group per task.
-pub(super) fn add_run_lineage(runtime: &OrbitRuntime, runs: &[JobRun], values: &mut [Value]) {
+pub(in crate::api) fn add_run_lineage(
+    runtime: &OrbitRuntime,
+    runs: &[JobRun],
+    values: &mut [Value],
+) {
     let mut run_ids = runs
         .iter()
         .map(|run| run.run_id.clone())

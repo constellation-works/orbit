@@ -216,16 +216,16 @@ fn job_runs_page(
     let runs = runtime.list_job_runs(params.clone())?;
     let total = runtime.count_job_runs_observed(params)?;
     let truncated = total > runs.len() as u64;
-    let titles = super::run_tasks::task_titles(runtime, &runs)?;
+    let titles = super::runs::task_titles(runtime, &runs)?;
     let mut items: Vec<Value> = runs
         .iter()
         .map(|run| {
             let mut value = job_run_to_json(run, None);
-            super::run_tasks::add_tasks(&mut value, run, &titles);
+            super::runs::add_tasks(&mut value, run, &titles);
             value
         })
         .collect();
-    super::run_lineage::add_run_lineage(runtime, &runs, &mut items);
+    super::runs::add_run_lineage(runtime, &runs, &mut items);
     Ok(json!({
         "items": items,
         "total": total,

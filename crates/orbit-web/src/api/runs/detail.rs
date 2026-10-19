@@ -39,18 +39,18 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         })
         .collect::<Vec<_>>();
     let titles = or_warn(
-        super::super::run_tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
+        super::tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
         run_id,
         "task titles",
     );
-    super::super::run_tasks::add_tasks(&mut full, run, &titles);
+    super::tasks::add_tasks(&mut full, run, &titles);
     if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
         for dispatch in dispatches {
             if let Some(child) = children
                 .iter()
                 .find(|child| dispatch["child_run_id"] == child.run_id)
             {
-                super::super::run_tasks::add_tasks(dispatch, child, &titles);
+                super::tasks::add_tasks(dispatch, child, &titles);
                 // A fire-and-forget dispatch can stay submitted forever. Its
                 // checkpoint is lineage, not the child's current outcome.
                 dispatch["state"] = json!(child.state);
@@ -77,7 +77,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     .unwrap_or(Value::Null);
     // The failure chain and the cancel record are detail-only. One response
     // carries both, so the page does not fetch each child to find the cause.
-    crate::api::run_failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
+    super::failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
     // Reshape into `{run, steps}` per the dashboard contract: the displayed
     // steps replace the record's own `steps` in the flat projection.
     if let Some(fields) = full.as_object_mut() {
