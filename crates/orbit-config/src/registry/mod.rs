@@ -151,14 +151,6 @@ impl ConfigKeyTier {
     }
 }
 
-/// Upper bound on a registry description, in Unicode scalar values.
-///
-/// `orbit config show` prints the description on the setting's row. A longer
-/// sentence makes that overview unscannable; the detail belongs in
-/// `docs/CONFIG.md`.
-#[cfg(test)]
-pub(crate) const CONFIG_SHOW_DESCRIPTION_MAX_CHARS: usize = 100;
-
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigKeyDescriptor {
