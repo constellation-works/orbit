@@ -47,6 +47,9 @@ impl OrbitRuntime {
         task: &Task,
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(None);
+        }
         let Some(source) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
@@ -80,6 +83,11 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Err(refuse(
+                "the task's failure handoff belongs to another machine",
+            ));
+        }
         let source_id = task
             .job_run_id
             .as_deref()
@@ -175,6 +183,9 @@ impl OrbitRuntime {
     /// candidate contract, as that admission does: a claim's kept candidate
     /// republishes through its own pull request.
     pub(crate) fn unbound_publication_on_record(&self, task: &Task) -> Result<bool, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(false);
+        }
         if let Some(run_id) = task.job_run_id.as_deref() {
             let owner_pr = self.get_job_run_backend(run_id)?.is_some_and(|run| {
                 run.job_id == "task_pr_pipeline"
@@ -238,6 +249,9 @@ impl OrbitRuntime {
         source_id: Option<&str>,
     ) -> Result<Option<SourceRepairBinding>, OrbitError> {
         let task = self.get_task(task_id)?;
+        if !self.task_run_is_local(&task) {
+            return Ok(None);
+        }
         let current = match &task.job_run_id {
             Some(id) => self.get_job_run_backend(id)?,
             None => None,
