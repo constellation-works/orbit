@@ -34,12 +34,26 @@ globalThis.review = {
     responseError = null;
   },
 };`;
+// The Start-card switches for the Tasks dock check: each window POST succeeds,
+// is refused with HTTP 500, or loses its response, and can be held in flight.
+const dockHarness = `
+globalThis.dockReview = {
+  next: (kind) => {
+    responseError = kind === 'refusal' ? 'fixture submission refused' : null;
+    loseAutoResponse = kind === 'lost';
+  },
+  posts: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').length,
+  hold: () => { delayPost = true; releasePost = null; },
+  held: () => releasePost !== null,
+  release: () => { delayPost = false; const resolve = releasePost; releasePost = null; resolve?.(); },
+};`;
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
     : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
     : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
     : name === '/feedback-timer.mjs' ? { data: fs.readFileSync(test) + '\n' + feedbackHarness, type: 'text/javascript' }
+    : name === '/dock-feedback.mjs' ? { data: fs.readFileSync(test) + '\n' + dockHarness, type: 'text/javascript' }
     : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -69,7 +83,7 @@ try {
   const pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
-  await page.addScriptTag({ type: 'module', url: '/test.mjs' });
+  await page.addScriptTag({ type: 'module', url: '/dock-feedback.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
   await page.evaluate(() => {
     const workspace = document.getElementById('rail-workspace');
@@ -91,7 +105,7 @@ try {
   });
   await page.evaluate(async () => {
     const { initRouter, initTabs } = await import('/js/router.js');
-    const { setDockMode } = await import('/js/log-tail.js');
+    const { setDockMode, placeDock } = await import('/js/log-tail.js');
     let tab = 'operations';
     let diag = 'incidents';
     let jobs = 'live';
@@ -115,7 +129,7 @@ try {
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
-      fitLogPanelToViewport: () => {}, setDrainView: (mode) => setDockMode(mode),
+      fitLogPanelToViewport: () => {}, placeDock, setDrainView: (mode) => setDockMode(mode),
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
@@ -188,6 +202,66 @@ try {
     await fullWidthView(`Analytics › Reliability › Tools at ${width}px`, ['#analytics-subtabs .subtab[data-subtab="reliability"]', '#reliability-views .subtab[data-view="tools"]'], 'analytics-tools-main', 'audit-summary-panel');
   }
 
+  // ORB-16962: a Start from the Tasks dock keeps its result beside the Start
+  // card, on Tasks and again on Drain. The router places the shipped dock, as
+  // app.js does, and the harness holds, refuses or loses the window's POST.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.click('.tab[data-tab="tasks"]');
+  const dockStart = page.locator('#tasks-dock #auto-drain-start button.drain-start');
+  const dockStatus = page.locator('#tasks-dock #auto-drain-operation-feedback');
+  await dockStart.waitFor({ state: 'visible' });
+  await page.evaluate(() => globalThis.dockReview.next('success'));
+  const postsBeforeSuccess = await page.evaluate(() => globalThis.dockReview.posts());
+  await page.evaluate(() => globalThis.dockReview.hold());
+  await dockStart.click();
+  await page.waitForFunction(() => globalThis.dockReview.held());
+  await page.locator('#tasks-dock #auto-drain-operation-feedback.pending').waitFor({ state: 'visible' });
+  await page.evaluate(() => globalThis.dockReview.release());
+  await page.locator('#tasks-dock #auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+  const receipt = await dockStatus.textContent();
+  if (!receipt.includes('submitted') || !receipt.includes('Warning: Admissions throttled')) {
+    throw new Error(`Tasks dock receipt lost its confirmation or warnings: ${receipt}`);
+  }
+  if (await page.evaluate(() => globalThis.dockReview.posts()) !== postsBeforeSuccess + 1) {
+    throw new Error('A Start from Tasks must send exactly one POST');
+  }
+  await page.screenshot({ path: path.join(evidence, 'tasks-dock-feedback-success-dark-1440.png') });
+  // An HTTP refusal and a lost response each name their remedy beside Start,
+  // send one POST and keep the operator on Tasks.
+  for (const [kind, expected] of [
+    ['refusal', ['Auto-delivery window failed to start', 'fixture submission refused']],
+    ['lost', ['Submission outcome unknown', 'Check the window and run history before starting again', 'this request was not retried']],
+  ]) {
+    await page.evaluate(kind => globalThis.dockReview.next(kind), kind);
+    const before = await page.evaluate(() => globalThis.dockReview.posts());
+    await dockStart.click();
+    await page.locator('#tasks-dock #auto-drain-operation-feedback.error').waitFor({ state: 'visible' });
+    const text = await dockStatus.textContent();
+    if (!expected.every(part => text.includes(part))) throw new Error(`Tasks dock ${kind} feedback lacks its remedy: ${text}`);
+    await page.waitForTimeout(300);
+    if (await page.evaluate(() => globalThis.dockReview.posts()) !== before + 1) throw new Error(`A ${kind} from Tasks must not repeat the POST`);
+    if (await page.evaluate(() => location.hash.startsWith('#drain'))) throw new Error(`A ${kind} from Tasks navigated to Drain`);
+    await page.screenshot({ path: path.join(evidence, `tasks-dock-feedback-${kind}-dark-1440.png`) });
+  }
+  // Drain shows the same status line under its Start card, so the unknown
+  // outcome and its remedy stay visible after the dock moves there.
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('auto-drain'));
+  await page.waitForFunction(() => location.hash.startsWith('#drain'));
+  const drainStatus = page.locator('#drain-main #auto-drain-operation-feedback.error');
+  await drainStatus.waitFor({ state: 'visible' });
+  const drainText = await drainStatus.textContent();
+  if (!drainText.includes('Submission outcome unknown') || !drainText.includes('not retried')) {
+    throw new Error(`Drain lost the unknown-outcome remedy: ${drainText}`);
+  }
+  await drainStatus.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'drain-feedback-lost-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await drainStatus.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'drain-feedback-lost-dark-375.png'), animations: 'disabled' });
+  await page.evaluate(() => globalThis.dockReview.next('success'));
+
   await page.click('.tab[data-tab="tasks"]');
   for (const width of [1251, 1250, 1073, 901, 900]) {
     await page.setViewportSize({ width, height: 730 });
@@ -198,12 +272,18 @@ try {
       return {
         tracks: style.gridTemplateColumns.trim().split(/\s+/).length,
         listWidth: list.width,
+        dockWidth: document.getElementById('tasks-dock').getBoundingClientRect().width,
+        gap: parseFloat(style.columnGap) || 0,
         mainWidth: main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-        hasDrain: Boolean(main.querySelector('#auto-drain-panel')),
+        drainStatusShown: document.getElementById('auto-drain-panel').getClientRects().length > 0,
       };
     });
-    if (tasks.tracks !== 1 || Math.abs(tasks.listWidth - tasks.mainWidth) > 1 || tasks.hasDrain) {
-      throw new Error(`Tasks should fill its page without Drain at ${width}px: ${JSON.stringify(tasks)}`);
+    // The Tasks dock sits beside the list above 1000px and gives way below it;
+    // the Drain status card stays hidden on Tasks at every width.
+    const docked = width > 1000;
+    const dockSpace = docked ? tasks.gap + tasks.dockWidth : 0;
+    if (tasks.tracks !== (docked ? 2 : 1) || (tasks.dockWidth > 0) !== docked || tasks.drainStatusShown || Math.abs(tasks.listWidth + dockSpace - tasks.mainWidth) > 1) {
+      throw new Error(`Tasks should fill its page beside the dock above 1000px and alone below it, with no Drain status card, at ${width}px: ${JSON.stringify(tasks)}`);
     }
   }
   await page.click('.tab[data-tab="operations"]');
