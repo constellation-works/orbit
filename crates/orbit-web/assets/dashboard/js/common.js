@@ -190,6 +190,29 @@ export function setWorkspace(id) {
   for (const listener of workspaceListeners) listener();
 }
 
+// Workspace ids belong to a host. Keep each host's choice separately so a
+// remembered local workspace cannot become a remote host's default.
+function rememberedWorkspaceKey() {
+  const host = findRegisteredHost(currentHost) || servingHost;
+  return `orbit.dashboard.workspace.${host?.machine_id || currentHost || "local"}`;
+}
+
+export function getRememberedWorkspace() {
+  try {
+    return window.localStorage.getItem(rememberedWorkspaceKey());
+  } catch (_) {
+    return null;
+  }
+}
+
+export function rememberWorkspace() {
+  try {
+    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || ALL_WORKSPACES_TOKEN);
+  } catch (_) {
+    // Storage refusal only disables remembering the choice.
+  }
+}
+
 // ORB-10872: workspace + time window are one dashboard scope. Events,
 // Metrics, Reliability, and Cost either honor this window or show
 // an equally prominent independent-scope label. Seeded from `?window=` or the

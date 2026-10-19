@@ -14,12 +14,16 @@ const initializer = `
   globalThis.EventSource = class { close() {} };
   globalThis.fleetRequests = [];
   const budget = new URLSearchParams(location.search).get('budget') === '1';
+  const liveLocal = new URLSearchParams(location.search).has('liveLocal');
+  const noLive = new URLSearchParams(location.search).has('noLive');
+  const fleetFailure = new URLSearchParams(location.search).has('fleetFailure');
   const holdFleet = new URLSearchParams(location.search).get('holdFleet') === '1';
   globalThis.remoteFleetPending = false;
   const remoteFleetReady = new Promise(resolve => { globalThis.releaseRemoteFleet = resolve; });
+  const inactive = new URLSearchParams(location.search).has('inactive');
   const workspaces = [
     { id: 'idle', name: 'Idle workspace with ready work', status: 'active', is_default: true },
-    { id: 'busy', name: 'BusyWorkspaceWithAVeryLongUnbrokenNameForMobileLayout', status: 'active' },
+    { id: 'busy', name: 'BusyWorkspaceWithAVeryLongUnbrokenNameForMobileLayout', status: inactive ? 'inactive' : 'active' },
   ];
   const row = (id, phase, eligible) => ({ workspace_id: id, workspace_name: workspaces.find(w => w.id === id).name,
     phase, slots_used: 2, slots_ceiling: 4, eligible_count: eligible,
@@ -40,13 +44,14 @@ const initializer = `
     }
     if (api.endsWith('/connection')) return json({ reachable: true, forward_writes: { authorized: false } });
     if (api === '/api/fleet/drains') {
+      if (fleetFailure) return json({ error: 'Fleet unavailable' }, 503);
       if (host.startsWith('Unreachable')) return json({ error: 'Host unreachable' }, 502);
       if (holdFleet && host === 'remote') {
         globalThis.remoteFleetPending = true;
         await remoteFleetReady;
         globalThis.remoteFleetPending = false;
       }
-      return json({ items: host === 'remote' ? [row('busy', 'draining', 0)] : [row('idle', 'idle', 4), row('busy', 'idle', 0)] });
+      return json({ items: host === 'remote' ? [row('busy', noLive ? 'idle' : 'draining', 0)] : [row('idle', 'idle', 4), row('busy', liveLocal && !noLive ? 'pulling' : 'idle', 0)] });
     }
     if (api === '/api/workspaces') return json(workspaces);
     if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: [] });
@@ -120,7 +125,7 @@ async function assertIndependentWarmup(browser, port) {
         `${label} warmup and initial view share one in-flight request per host`);
       await page.screenshot({ path: path.join(evidence, `warmup-${route.split('/')[0]}-held.png`), fullPage: true });
       await page.evaluate(() => globalThis.releaseRemoteFleet());
-      await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+      await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('1 of 3 workspaces draining'));
       await settleDashboard(page);
       const after = await snapshot();
       assert.equal(after.pending, false);
@@ -169,7 +174,7 @@ async function assertPollBudget(browser, port) {
     await page.goto(`http://127.0.0.1:${port}/?budget=1&workspace=idle#tasks`);
     await page.waitForFunction(() => globalThis.fleetReady);
     await settleDashboard(page);
-    await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+    await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('1 of 3 workspaces draining'));
     const fleetReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')).length);
     assert.equal(await fleetReads(), 2, 'two registered hosts are read once at startup; the first panel poll does not read the fleet');
     const polls = [];
@@ -215,6 +220,85 @@ async function assertPollBudget(browser, port) {
   }
 }
 
+// Public page navigation, selection and reload exercise defaults through the
+// shipped app, including a browser that refuses both storage reads and writes.
+async function assertWorkspaceDefaults(browser, port) {
+  const observations = [];
+  for (const scenario of [
+    { name: 'live drain before registry default', query: 'liveLocal=1', expected: 'busy' },
+    { name: 'registry default without live drains', query: 'noLive=1', expected: 'idle' },
+    { name: 'fleet failure retains registry fallback', query: 'fleetFailure=1', expected: 'idle' },
+    { name: 'URL before remembered and live', query: 'liveLocal=1&workspace=idle', remembered: 'busy', expected: 'idle' },
+    { name: 'aggregate URL before remembered', query: 'liveLocal=1&workspace=all', remembered: 'busy', expected: '' },
+    { name: 'remembered before live', query: 'liveLocal=1', remembered: 'idle', expected: 'idle' },
+    { name: 'stale remembered falls back to live', query: 'liveLocal=1', remembered: 'removed', expected: 'busy' },
+    { name: 'inactive remembered workspace uses registry default', query: 'inactive=1&liveLocal=1', remembered: 'busy', expected: 'idle' },
+    { name: 'stale URL falls back to remembered', query: 'workspace=removed', remembered: 'busy', expected: 'busy' },
+    { name: 'remembered aggregate', query: 'liveLocal=1', remembered: 'all', expected: '' },
+    { name: 'storage denied with live drain', query: 'liveLocal=1', denied: true, expected: 'busy' },
+    { name: 'storage denied without live drain', query: 'noLive=1', denied: true, expected: 'idle' },
+    { name: 'remote remembered workspace', query: 'host=remote&noLive=1', remoteRemembered: 'busy', expected: 'busy' },
+    { name: 'local memory cannot select remote workspace', query: 'host=remote&noLive=1', remembered: 'busy', expected: 'idle' },
+  ]) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.addInitScript(({ remembered, remoteRemembered, denied }) => {
+        if (remembered) localStorage.setItem('orbit.dashboard.workspace.owner-id', remembered);
+        if (remoteRemembered) localStorage.setItem('orbit.dashboard.workspace.remote-id', remoteRemembered);
+        if (denied) {
+          for (const method of ['getItem', 'setItem']) {
+            Storage.prototype[method] = () => { throw new DOMException('Storage denied', 'SecurityError'); };
+          }
+        }
+      }, scenario);
+      await page.goto(`http://127.0.0.1:${port}/?${scenario.query}#tasks`);
+      await page.waitForFunction(() => globalThis.fleetReady);
+      assert.equal(await page.locator('#workspace-select').inputValue(), scenario.expected, scenario.name);
+      assert.equal(new URL(page.url()).searchParams.get('workspace'), scenario.expected || 'all', scenario.name);
+      // Explicit operator changes must still work when storage writes fail.
+      const chosen = scenario.query.includes('inactive=1') ? 'idle' : 'busy';
+      await page.locator('#workspace-select').selectOption(chosen);
+      await page.reload();
+      await page.waitForFunction(() => globalThis.fleetReady);
+      assert.equal(await page.locator('#workspace-select').inputValue(), chosen, `${scenario.name}: reload keeps URL scope`);
+      assert.deepEqual(errors, [], scenario.name);
+      observations.push({ ...scenario, passed: true });
+    } finally {
+      await context.close();
+    }
+  }
+  // A fresh bare URL must restore choices made through the picker and fleet
+  // row (not merely inherit the scope left in the URL by a reload).
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    const bare = `http://127.0.0.1:${port}/?noLive=1#tasks`;
+    await page.goto(bare);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    await page.locator('#workspace-select').selectOption('busy');
+    await page.goto(bare);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    assert.equal(await page.locator('#workspace-select').inputValue(), 'busy', 'picker choice restored on a bare URL');
+    await page.locator('#workspace-select').selectOption('');
+    await page.goto(bare);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    assert.equal(await page.locator('#workspace-select').inputValue(), '', 'aggregate picker choice restored');
+    await page.locator('#global-drain-state').click();
+    await page.getByRole('button', { name: 'Show Idle workspace with ready work on owner', exact: true }).click();
+    await page.goto(bare);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    assert.equal(await page.locator('#workspace-select').inputValue(), 'idle', 'fleet row choice restored');
+    observations.push({ name: 'picker, aggregate and fleet row choices restored on bare URLs', passed: true });
+  } finally {
+    await context.close();
+  }
+  fs.writeFileSync(path.join(evidence, 'workspace-defaults.json'), JSON.stringify(observations, null, 2));
+  return observations;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   const served = url.pathname === '/fixture.mjs' ? { data: initializer, type: 'text/javascript' } : dashboardFile(url.pathname);
@@ -227,23 +311,29 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+  const workspaceDefaults = await assertWorkspaceDefaults(browser, server.address().port);
   const warmup = await assertIndependentWarmup(browser, server.address().port);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=idle#auto-drain`);
   await page.waitForFunction(() => globalThis.fleetReady);
-  await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+  await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('1 of 3 workspaces draining'));
   const startupFleet = await page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')));
   assert.equal(startupFleet.length, 3, 'startup reads each registered host once; the first panel poll does not read the fleet again');
   assert.equal(await page.locator('#global-drain-state').isVisible(), true, 'an idle default workspace still shows a live fleet drain');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `header-after-dark-${width}.png`), animations: 'disabled' });
+  }
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
+  assert.equal(new URL(page.url()).searchParams.get('workspace'), 'all', 'header chip opens All workspaces');
   assert.equal(await page.locator('.fleet-drains tbody tr').count(), 4);
   assert.match(await page.locator('.fleet-drains').textContent(), /Host unreachable/);
   assert.equal(await page.locator('#auto-drain-start').isVisible(), false, 'fleet inspection exposes no workspace write controls');
   const measurements = [];
-  for (const width of [1280, 375]) {
+  for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => document.fonts.ready);
     const layout = await page.evaluate(() => ({ viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
@@ -283,7 +373,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle');
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup,
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults,
     guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
