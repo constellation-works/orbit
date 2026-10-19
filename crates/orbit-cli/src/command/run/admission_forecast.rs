@@ -27,15 +27,22 @@ pub(super) fn admission_lines(
     let mut lines = Vec::new();
     // A finished drain's last pass is retained history like an older pass's
     // forecast: an operator must not read its peaks as the host's load now.
-    let current_retained = origin.ended && !current["forecast_at"].is_null();
+    let current_has_forecast = !current["forecast_at"].is_null();
+    let previous_forecast_retained = !current_has_forecast && last_built["forecast_at"].is_string();
+    let current_retained = origin.ended && current_has_forecast;
     if let Some(line) = admission_line(current, &mut title) {
-        lines.push(if current_retained {
-            retained_line(current, &line, origin)
-        } else {
-            line
-        });
+        if current_retained {
+            lines.push(retained_line(current, &line, origin));
+        } else if !previous_forecast_retained {
+            lines.push(line);
+        }
     }
-    if let Some(line) = stuck_head_line(current, &mut title) {
+    // This sentence claims admission is blocked now. Keep it only for a live
+    // current pass, never for a terminal drain or a pass showing older history.
+    if !origin.ended
+        && !previous_forecast_retained
+        && let Some(line) = stuck_head_line(current, &mut title)
+    {
         lines.push(line);
     }
     let (forecast, retained) = if current_retained {
