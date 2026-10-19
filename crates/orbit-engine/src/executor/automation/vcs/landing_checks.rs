@@ -828,6 +828,12 @@ fn same_job_passes<H: RuntimeHost + ?Sized>(
 /// current base tip. A green tip needs no historical fork-point logs. A red
 /// tip needs the same emitted diagnostic; sharing a job name alone is not
 /// enough to suppress a candidate repair.
+///
+/// A green tip is not proof that the base fixed the failure: when the
+/// latest push run of the head's fork point with that tip passed the same
+/// job, the base was never red there and the failure is the candidate's, so
+/// this returns `None` and the ordinary repair path decides. An unreadable or
+/// missing fork-point run keeps the green-tip refresh.
 pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -837,32 +843,32 @@ pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     failed: &[(Option<String>, String)],
 ) -> Option<Value> {
     let jobs = commit_jobs(host, workspace, head).ok()?;
-    let response = host
-        .run_private_vcs_operation(
-            operations::CI_COMMIT_JOBS,
-            json!({"commit":tip,"workspace_path":workspace,"latest_push_branch":base_branch}),
-        )
-        .ok()?;
-    let tip_jobs = response["jobs"].as_array()?;
+    let tip_jobs = latest_push_jobs(host, workspace, tip, base_branch)?;
+    let mut fork_point_jobs = None;
     let mut evidence = Vec::new();
     let mut red = false;
     for check in failed {
         let job = jobs
             .iter()
             .find(|job| unsuccessful(job) && answers(job, check))?;
-        let matching = tip_jobs
-            .iter()
-            .filter(|candidate| same_job(candidate, job))
-            .collect::<Vec<_>>();
         // Ambiguous workflow names, incomplete jobs and pending jobs prove
         // neither a passing base nor an inherited failure.
-        let [base_job] = matching.as_slice() else {
-            return None;
-        };
-        if base_job["status"] != "completed" {
-            return None;
-        }
+        let base_job = single_completed_job(&tip_jobs, job)?;
         if base_job["conclusion"] == "success" {
+            let fork_point_jobs = fork_point_jobs.get_or_insert_with(|| {
+                git_output(workspace, &["merge-base", head, tip])
+                    .ok()
+                    .and_then(|fork_point| {
+                        latest_push_jobs(host, workspace, fork_point.trim(), base_branch)
+                    })
+            });
+            if fork_point_jobs
+                .as_deref()
+                .and_then(|fork_point_jobs| single_completed_job(fork_point_jobs, job))
+                .is_some_and(|fork_point_job| fork_point_job["conclusion"] == "success")
+            {
+                return None;
+            }
             evidence.push(json!({"failed_job":job,"passing_job":base_job}));
             continue;
         }
@@ -906,6 +912,35 @@ pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
         json!({"failed_head":head,"landed_base":tip,"base_branch":base_branch,"source":"latest_push","checks":evidence,
         "path":if red {"known_red_base"} else {"base_refresh"}}),
     )
+}
+
+/// The jobs of the latest push run of each workflow on `commit` of
+/// `base_branch`; `None` when they could not be read.
+fn latest_push_jobs<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    commit: &str,
+    base_branch: &str,
+) -> Option<Vec<Value>> {
+    let response = host
+        .run_private_vcs_operation(
+            operations::CI_COMMIT_JOBS,
+            json!({"commit":commit,"workspace_path":workspace,"latest_push_branch":base_branch}),
+        )
+        .ok()?;
+    response["jobs"].as_array().cloned()
+}
+
+/// The one completed job in `jobs` that is `job`'s same job.
+fn single_completed_job<'a>(jobs: &'a [Value], job: &Value) -> Option<&'a Value> {
+    let matching = jobs
+        .iter()
+        .filter(|candidate| same_job(candidate, job))
+        .collect::<Vec<_>>();
+    let [found] = matching.as_slice() else {
+        return None;
+    };
+    (found["status"] == "completed").then_some(*found)
 }
 
 /// The step a failed job's signature falls back to naming.
