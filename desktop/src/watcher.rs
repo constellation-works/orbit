@@ -84,7 +84,7 @@ impl AttentionItem {
 /// Where a click opens the dashboard, relative to the server's origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardRoute {
-    /// Registered remote host. `None` is the serving host.
+    /// Registered remote host. `None` explicitly selects the serving host.
     pub host: Option<String>,
     /// Workspace the task or run belongs to.
     pub workspace: String,
@@ -102,6 +102,38 @@ pub enum RouteTarget {
 }
 
 impl DashboardRoute {
+    /// Stable native menu action carrying this route. Rebuilding or reordering
+    /// the menu cannot reinterpret a queued click as a different task or run.
+    #[must_use]
+    pub fn menu_id(&self) -> String {
+        let (kind, id) = match &self.target {
+            RouteTarget::Run(id) => ("run", id),
+            RouteTarget::Task(id) => ("task", id),
+        };
+        format!(
+            "attention-{}",
+            serde_json::json!([self.host, self.workspace, kind, id])
+        )
+    }
+
+    /// Recover the route from a native menu action; global menu actions and
+    /// malformed route actions are ignored.
+    #[must_use]
+    pub fn from_menu_id(id: &str) -> Option<Self> {
+        let (host, workspace, kind, id): (Option<String>, String, String, String) =
+            serde_json::from_str(id.strip_prefix("attention-")?).ok()?;
+        let target = match kind.as_str() {
+            "run" => RouteTarget::Run(id),
+            "task" => RouteTarget::Task(id),
+            _ => return None,
+        };
+        Some(Self {
+            host,
+            workspace,
+            target,
+        })
+    }
+
     /// `base` with this host, workspace and hash route.
     ///
     /// The query uses the same encoding as the dashboard's address bar. The
@@ -113,9 +145,9 @@ impl DashboardRoute {
         {
             let mut query = url.query_pairs_mut();
             query.clear();
-            if let Some(host) = &self.host {
-                query.append_pair("host", host);
-            }
+            // A missing host lets the dashboard restore its remembered remote.
+            // An empty host explicitly selects the serving host instead.
+            query.append_pair("host", self.host.as_deref().unwrap_or(""));
             if !self.workspace.is_empty() {
                 query.append_pair("workspace", &self.workspace);
             }
@@ -661,10 +693,31 @@ fn failed_runs(body: &Value, host: &PollHost) -> Listing {
             unavailable: unavailable_scopes(body, &host.name),
         };
     };
+    // An auto pipeline may have discovered its tasks after submission, so
+    // its own API row has no task labels. Keep the task title from a matching
+    // leaf or gate even when the unlabeled parent is the newest row.
+    let titles: HashMap<(&str, &str), &str> = rows
+        .iter()
+        .flat_map(|run| {
+            run["tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(move |task| {
+                    Some((
+                        (
+                            non_empty(run.get("workspace_id"))?,
+                            non_empty(task.get("id"))?,
+                        ),
+                        non_empty(task.get("title"))?,
+                    ))
+                })
+        })
+        .collect();
     let mut items: Vec<Item> = Vec::new();
     let mut index: HashMap<ItemKey, usize> = HashMap::new();
     for run in rows {
-        let Some(item) = failure_item(host, run) else {
+        let Some(item) = failure_item(host, run, &titles) else {
             continue;
         };
         if let Some(slot) = index.get(&item.key).copied() {
@@ -685,7 +738,11 @@ fn failed_runs(body: &Value, host: &PollHost) -> Listing {
 
 /// One failed run folded into the task and the leaf it actually failed on.
 /// A parent that records `root_cause` shares that leaf's identity.
-fn failure_item(host: &PollHost, run: &Value) -> Option<Item> {
+fn failure_item(
+    host: &PollHost,
+    run: &Value,
+    titles: &HashMap<(&str, &str), &str>,
+) -> Option<Item> {
     let run_id = non_empty(run.get("run_id"))?;
     let workspace_id = non_empty(run.get("workspace_id"))?;
     let root = run.get("root_cause").filter(|value| value.is_object());
@@ -695,8 +752,13 @@ fn failure_item(host: &PollHost, run: &Value) -> Option<Item> {
     let task_id = root
         .and_then(|cause| non_empty(cause.get("task_id")))
         .or_else(|| task_id_of(run));
-    let label =
-        task_title(run, task_id).or_else(|| non_empty(run.get("job_id")).map(str::to_string))?;
+    let label = task_title(run, task_id)
+        .or_else(|| {
+            titles
+                .get(&(workspace_id, task_id?))
+                .map(|title| (*title).to_string())
+        })
+        .or_else(|| non_empty(run.get("job_id")).map(str::to_string))?;
     let identity = match task_id {
         Some(task) => format!("{task}\n{leaf}"),
         None => leaf.to_string(),
@@ -743,14 +805,12 @@ fn task_id_of(run: &Value) -> Option<&str> {
 
 fn task_title(run: &Value, task_id: Option<&str>) -> Option<String> {
     let tasks = run.get("tasks")?.as_array()?;
-    if let Some(task_id) = task_id
-        && let Some(title) = tasks.iter().find_map(|task| {
+    if let Some(task_id) = task_id {
+        return tasks.iter().find_map(|task| {
             (non_empty(task.get("id")) == Some(task_id))
-                .then(|| non_empty(task.get("title")))
+                .then(|| non_empty(task.get("title")).map(str::to_string))
                 .flatten()
-        })
-    {
-        return Some(title.to_string());
+        });
     }
     tasks
         .iter()

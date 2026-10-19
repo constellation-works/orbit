@@ -880,6 +880,12 @@ fn one_failed_task_counts_and_notifies_once_and_opens_its_leaf_run() {
         Some("jrun-leaf"),
         "2026-10-19T02:00:00Z",
     ));
+    // Auto-dispatch can discover backlog tasks after submission, leaving its
+    // own input task_ids (and therefore API task labels) empty. Its root cause
+    // still names the failed task; the gate row supplies that task's title.
+    dashboard.failed[0]["job_id"] = json!("task_auto_pipeline");
+    dashboard.failed[0]["task_ids"] = Value::Null;
+    dashboard.failed[0]["tasks"] = Value::Null;
     dashboard.failed_total = Some(2);
     let (notes, summary) = dashboard.poll_detailed(&mut watcher);
     assert_eq!(notes.len(), 1, "gate and auto pipeline notify once");
@@ -903,6 +909,16 @@ fn one_failed_task_counts_and_notifies_once_and_opens_its_leaf_run() {
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].menu_label(), "Failed: Fix the tray");
     assert_eq!(failed[0].route, notes[0].2.clone().unwrap());
+
+    // A parent can carry a bundle that does not label the root-cause task.
+    // Its first task is unrelated and must not replace the known leaf title.
+    dashboard.failed[0]["tasks"] = json!([{"id": "ORB-other", "title": "Unrelated task"}]);
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert!(notes.is_empty(), "label enrichment is not another failure");
+    assert_eq!(
+        attention(&summary, AttentionKind::Failed)[0].menu_label(),
+        "Failed: Fix the tray"
+    );
 
     dashboard.failed.insert(
         0,
@@ -1053,7 +1069,15 @@ fn dashboard_route_opens_the_task_or_run_on_that_host_and_workspace() {
         target: RouteTarget::Run("jrun-leaf".into()),
     };
     let opened = run.location(&base);
-    assert!(opened.query_pairs().all(|(key, _)| key != "host"));
+    assert_eq!(
+        opened
+            .query_pairs()
+            .find(|(key, _)| key == "host")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        Some(""),
+        "a local click explicitly selects the serving host over a remembered remote"
+    );
     assert_eq!(
         opened
             .query_pairs()
@@ -1063,4 +1087,58 @@ fn dashboard_route_opens_the_task_or_run_on_that_host_and_workspace() {
         Some("workspace-a")
     );
     assert_eq!(opened.fragment(), Some("runs?run_id=jrun-leaf"));
+}
+
+#[test]
+fn queued_tray_click_keeps_its_route_when_a_refresh_reorders_the_menu() {
+    let mut dashboard = Dashboard::new(0);
+    dashboard.failed.push(pipeline_run(
+        "jrun-original",
+        "ORB-1",
+        "Original failure",
+        None,
+        "2026-10-19T01:00:00Z",
+    ));
+    dashboard.review.push(task(0));
+    let mut watcher = Watcher::default();
+    let (_, before) = dashboard.poll_detailed(&mut watcher);
+    let failed = attention(&before, AttentionKind::Failed)[0];
+    let old_failure_click = failed.route.menu_id();
+    let old_review_click = attention(&before, AttentionKind::Review)[0].route.menu_id();
+
+    // Pause a click from the old menu until a poll inserts a newer failure
+    // ahead of it and removes the review item. No timing or native UI needed.
+    dashboard.failed.push(pipeline_run(
+        "jrun-newest",
+        "ORB-2",
+        "Newer failure",
+        None,
+        "2026-10-19T02:00:00Z",
+    ));
+    dashboard.review.clear();
+    let (_, after) = dashboard.poll_detailed(&mut watcher);
+    let newest = attention(&after, AttentionKind::Failed)[0];
+    assert_ne!(newest.route.menu_id(), old_failure_click);
+    assert_eq!(
+        DashboardRoute::from_menu_id(&old_failure_click),
+        Some(failed.route.clone()),
+        "a queued menu click opens its original run, not the new item at index zero"
+    );
+    assert_eq!(
+        DashboardRoute::from_menu_id(&old_review_click),
+        Some(attention(&before, AttentionKind::Review)[0].route.clone()),
+        "a removed row keeps its original task route"
+    );
+
+    let remote = DashboardRoute {
+        host: Some("host \"with\" / delimiters".into()),
+        workspace: "workspace &/+".into(),
+        target: RouteTarget::Task("task \"quoted\"".into()),
+    };
+    assert_eq!(
+        DashboardRoute::from_menu_id(&remote.menu_id()),
+        Some(remote)
+    );
+    assert_eq!(DashboardRoute::from_menu_id("open"), None);
+    assert_eq!(DashboardRoute::from_menu_id("attention-0"), None);
 }

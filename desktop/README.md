@@ -34,7 +34,8 @@ dashboard's own host switcher.
   newest 200 failed runs fetched per host, not the endpoint's raw run total, so a failure older
   than that page is not included. The menu also lists up to 8 `Failed: <task title>` rows and 8
   `Review: <task title>` rows, newest first. Choosing one opens the dashboard at that run (a
-  failure opens the root-cause leaf) or task. The rest of the menu is **Open Orbit**, **Restart
+  failure opens the root-cause leaf) or task on its host, even when the window last showed a
+  different host. The rest of the menu is **Open Orbit**, **Restart
   Dashboard Server**, **Check for Updates…** (see [Auto-update](#auto-update)), **Launch at Login**
   and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failures),
   and closing the window keeps the app in the menu bar; **Quit Orbit** or ⌘Q ends it. On Linux,
@@ -322,4 +323,3 @@ release has no desktop assets.
 
 - A Homebrew cask.
 - A monochrome template icon for the macOS menu bar; the tray uses the app icon.
-- Clicking a notification doesn't open the run or task; desktop notifications have no click action.

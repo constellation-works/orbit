@@ -7,7 +7,7 @@
 //! holds the app's global actions: open the window, restart the server, check
 //! for or install an update, launch at login and quit.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use orbit_desktop::watcher::{AttentionItem, DashboardRoute};
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -87,8 +87,6 @@ pub(crate) struct Tray {
     update: MenuItem<Wry>,
     login: CheckMenuItem<Wry>,
     quit: MenuItem<Wry>,
-    /// Routes for `attention-<index>` menu ids, replaced on each refresh.
-    routes: Arc<Mutex<Vec<DashboardRoute>>>,
 }
 
 impl Tray {
@@ -108,15 +106,13 @@ impl Tray {
     /// The status line is already updated; a menu that fails to build keeps
     /// the previous rows.
     fn install_menu(&self, attention: &[AttentionItem]) {
-        let mut routes = Vec::new();
         let mut rows = Vec::new();
-        for (index, item) in attention.iter().enumerate() {
-            let id = format!("attention-{index}");
+        for item in attention {
+            let id = item.route.menu_id();
             let Ok(row) = MenuItem::with_id(&self.app, &id, item.menu_label(), true, None::<&str>)
             else {
                 continue;
             };
-            routes.push(item.route.clone());
             rows.push(row);
         }
         let Ok(separator_attention) = PredefinedMenuItem::separator(&self.app) else {
@@ -150,12 +146,8 @@ impl Tray {
         let Ok(menu) = Menu::with_items(&self.app, &entries) else {
             return;
         };
-        // Publish routes before the menu that names them, so a click cannot
-        // land on a new row whose route is not stored yet.
-        match self.routes.lock() {
-            Ok(mut guard) => *guard = routes,
-            Err(poisoned) => *poisoned.into_inner() = routes,
-        }
+        // Each row carries its route, so queued clicks from an older menu
+        // still open that row even if this refresh reorders or replaces it.
         let _ = self.icon.set_menu(Some(menu));
     }
 }
@@ -194,8 +186,6 @@ pub(crate) fn build(
             &quit,
         ],
     )?;
-    let routes = Arc::new(Mutex::new(Vec::new()));
-    let clicked_routes = Arc::clone(&routes);
     let clicked_sidecar = Arc::clone(&sidecar);
     let clicked_login = login.clone();
     let mut builder = TrayIconBuilder::with_id("orbit")
@@ -208,17 +198,7 @@ pub(crate) fn build(
             LOGIN => toggle_launch_at_login(app, &clicked_login),
             QUIT => app.exit(0),
             id => {
-                let Some(index) = id
-                    .strip_prefix("attention-")
-                    .and_then(|rest| rest.parse::<usize>().ok())
-                else {
-                    return;
-                };
-                let route = match clicked_routes.lock() {
-                    Ok(guard) => guard.get(index).cloned(),
-                    Err(poisoned) => poisoned.into_inner().get(index).cloned(),
-                };
-                if let Some(route) = route {
+                if let Some(route) = DashboardRoute::from_menu_id(id) {
                     open_route(app, &clicked_sidecar, Some(&route));
                 }
             }
@@ -237,7 +217,6 @@ pub(crate) fn build(
             update: update.clone(),
             login,
             quit,
-            routes,
         },
         update,
     ))
