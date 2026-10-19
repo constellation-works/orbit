@@ -18,6 +18,7 @@ const RESET: &str = "Get \"https://api.github.com/repos/orbit/test/pulls/42\": r
 const BAD_CREDENTIALS: &str = "gh: Bad credentials (HTTP 401)";
 /// Only the PR status read carries this field list.
 const STATUS_READ: &str = "--json number,state,isDraft";
+const REQUIRED_READ: &str = "isRequired(pullRequestNumber";
 const MERGE_WRITE: &str = "pulls/42/merge";
 const INTENT: &str = "accepted-fixture:42";
 
@@ -26,16 +27,27 @@ const INTENT: &str = "accepted-fixture:42";
 /// backoffs, which a retry must start within. Returns the run's outcome and
 /// the backoff waits it asked for, in seconds.
 fn land(host: &AcceptedLanding) -> (Result<Value, OrbitError>, Vec<u64>) {
+    land_with_wait(host, 120, |_| {})
+}
+
+fn land_with_wait(
+    host: &AcceptedLanding,
+    max_wait_seconds: u64,
+    on_wait: impl Fn(Duration) + 'static,
+) -> (Result<Value, OrbitError>, Vec<u64>) {
     let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let captured = waits.clone();
     let outcome = orbit_engine::test_support::with_vcs_retry_wait(
-        move |wait| captured.borrow_mut().push(wait.as_secs()),
+        move |wait| {
+            captured.borrow_mut().push(wait.as_secs());
+            on_wait(wait);
+        },
         || {
             execute_deterministic_action(
                 host,
                 "handoff_land",
                 &json!({}),
-                &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":120}),
+                &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":max_wait_seconds}),
                 false,
                 &HashMap::new(),
                 None,
@@ -44,6 +56,119 @@ fn land(host: &AcceptedLanding) -> (Result<Value, OrbitError>, Vec<u64>) {
     );
     let waits = waits.borrow().clone();
     (outcome, waits)
+}
+
+#[test]
+fn required_check_transport_preserves_retry_budget_and_merge_authority() {
+    isolated(
+        "landing_transport::required_check_transport_preserves_retry_budget_and_merge_authority",
+        |sandbox| {
+            // The first status is BLOCKED. Only the required-check GraphQL
+            // read fails, then recovers with pending exact-head evidence.
+            // The same accepted head becomes clean on the normal check poll.
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, REQUIRED_READ, TLS, false);
+                fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
+                let pending = fx.forge.join("gates-pending");
+                let (outcome, waits) = land_with_wait(&host, 120, move |wait| {
+                    if wait == Duration::from_secs(30) {
+                        fs::remove_file(&pending).unwrap();
+                    }
+                });
+
+                assert_eq!(
+                    waits,
+                    [20, 30],
+                    "owner retry followed by normal check polling"
+                );
+                assert_eq!(
+                    outcome.expect("recovered exact-head checks land")["phase"],
+                    "landed"
+                );
+                assert_eq!(
+                    calls(&fx, REQUIRED_READ),
+                    2,
+                    "required-check evidence recovers before landing"
+                );
+                assert_eq!(mutations(&fx), "merge\n");
+                assert_eq!(steps(&host), landed_steps());
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, REQUIRED_READ, TLS, true);
+                fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("persistent required-check transport failure stops");
+                assert_eq!(calls(&fx, REQUIRED_READ), 3);
+                assert_eq!(calls(&fx, STATUS_READ), 3);
+                assert_eq!(waits, [20, 60]);
+                assert!(mutations(&fx).is_empty());
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+                let evidence = host.updates.lock().unwrap()[0].evidence.clone();
+                assert!(
+                    evidence.contains("after 3 tries")
+                        && evidence.contains("TLS handshake timeout"),
+                    "{evidence}"
+                );
+            });
+
+            for refusal in [
+                BAD_CREDENTIALS,
+                "gh: Resource not accessible by integration (HTTP 403)",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = faulty_landing(row, REQUIRED_READ, refusal, true);
+                    fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
+                    let (outcome, waits) = land(&host);
+
+                    outcome.expect_err("permanent required-check refusal stops immediately");
+                    assert_eq!(calls(&fx, REQUIRED_READ), 1);
+                    assert!(waits.is_empty());
+                    assert!(mutations(&fx).is_empty());
+                    assert_eq!(
+                        steps(&host),
+                        [HandoffLandingStep::Stop { repairable: false }]
+                    );
+                    assert!(host.updates.lock().unwrap()[0].evidence.contains(refusal));
+                });
+            }
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
+                fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
+                fs::write(fx.forge.join("policy-unreadable"), "invalid evidence").unwrap();
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("invalid required-check evidence grants no authority");
+                assert_eq!(calls(&fx, REQUIRED_READ), 1);
+                assert!(waits.is_empty());
+                assert!(mutations(&fx).is_empty());
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, REQUIRED_READ, TLS, true);
+                fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
+                let (outcome, waits) = land_with_wait(&host, 10, |_| {});
+
+                outcome.expect_err("the backoff cannot extend the overall deadline");
+                assert_eq!(calls(&fx, REQUIRED_READ), 1);
+                assert!(waits.is_empty());
+                assert!(mutations(&fx).is_empty());
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+            });
+        },
+    );
 }
 
 fn steps(host: &AcceptedLanding) -> Vec<HandoffLandingStep> {
