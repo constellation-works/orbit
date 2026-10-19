@@ -1,11 +1,15 @@
 //! Shared JSON projection for persisted job runs.
 
+use std::collections::HashMap;
+
+use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, JobRunStep, PipelineState,
     run_id_role,
 };
 use serde_json::{Value, json};
 
+use crate::OrbitRuntime;
 use crate::runtime::run_input::carried_task_ids;
 
 use super::display_steps::RunDisplayStep;
@@ -220,6 +224,63 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     // failed on its own.
     value["root_cause"] = json!(state_for_agent_result.and_then(|state| state.root_cause.as_ref()));
     value
+}
+
+/// Pipeline states for one run-list page, read in one store round-trip.
+///
+/// Every surface that lists runs projects each row with its own state, so a
+/// listing reports the same child dispatches, waiting reasons, trigger and
+/// drain controls as the run itself. The read also covers each listed run's
+/// retry source, whose dispatches a lineage view needs even when that source
+/// is not on the page.
+#[derive(Debug, Default)]
+pub struct JobRunListStates {
+    states: HashMap<String, Option<PipelineState>>,
+}
+
+impl JobRunListStates {
+    /// The persisted state of a run the page read, if it has one.
+    pub fn state(&self, run_id: &str) -> Option<&PipelineState> {
+        self.states.get(run_id).and_then(Option::as_ref)
+    }
+
+    /// Each listed run's state, in listing order.
+    pub fn for_runs<'a>(&'a self, runs: &[JobRun]) -> Vec<Option<&'a PipelineState>> {
+        runs.iter().map(|run| self.state(&run.run_id)).collect()
+    }
+
+    /// The shared row for a listed run, projected with its state.
+    pub fn row(&self, run: &JobRun) -> Value {
+        job_run_to_json(run, self.state(&run.run_id))
+    }
+}
+
+impl OrbitRuntime {
+    /// Read the pipeline states a run-list page projects: the listed runs'
+    /// and their retry sources'. An empty page reads nothing. A failed read
+    /// is returned, so each surface keeps its own policy for a listing
+    /// without states.
+    pub fn read_job_run_list_states(
+        &self,
+        runs: &[JobRun],
+    ) -> Result<JobRunListStates, OrbitError> {
+        let mut run_ids = runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .chain(
+                runs.iter()
+                    .filter_map(|run| run.retry_source_run_id.clone()),
+            )
+            .collect::<Vec<_>>();
+        if run_ids.is_empty() {
+            return Ok(JobRunListStates::default());
+        }
+        run_ids.sort_unstable();
+        run_ids.dedup();
+        Ok(JobRunListStates {
+            states: self.read_run_states(&run_ids)?,
+        })
+    }
 }
 
 /// Add activity-level provider/model evidence to the stable job-run projection.

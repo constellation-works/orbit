@@ -3,6 +3,10 @@
 use chrono::Utc;
 use orbit_core::application::job::job_run_to_json;
 use orbit_core::{JobRun, JobRunState};
+use orbit_types::workflow::{
+    ChildDispatch, DrainAdmissionsStop, DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit,
+    JobRunTrigger, PipelineState,
+};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -377,6 +381,141 @@ fn job_run_badge_latency_with_26_active_runs() {
                     "measurements": measurements,
                 });
                 std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+            }
+        },
+    );
+}
+
+/// A live drain whose pipeline state names a dispatched child, lock and
+/// dependency waits, its trigger and every operator drain control.
+fn drain_state(drain: &JobRun, child: &JobRun) -> PipelineState {
+    let now = Utc::now();
+    let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+    state.record_child_dispatch(ChildDispatch::submitted(
+        child.run_id.clone(),
+        child.job_id.clone(),
+        "leaf_invoke".into(),
+        false,
+        false,
+        now,
+    ));
+    state.waiting_on_locks = Some(vec!["file:src/lib.rs".into()]);
+    state.waiting_on_deps = Some(vec!["ORB-1".into()]);
+    state.trigger = Some(JobRunTrigger::dashboard());
+    let drain_state = &mut state.pull_drain;
+    drain_state.drain_worker_limit = Some(DrainWorkerLimit {
+        max_active_leaf_runs: 3,
+        previous_max_active_leaf_runs: 2,
+        revision: 1,
+        actor: "operator".into(),
+        reason: None,
+        updated_at: now,
+    });
+    drain_state.drain_admissions_stop = Some(DrainAdmissionsStop {
+        actor: "operator".into(),
+        reason: Some("maintenance".into()),
+        stopped_at: now,
+    });
+    drain_state.drain_window_extension = Some(DrainWindowExtension {
+        deadline: now + chrono::Duration::hours(2),
+        previous_deadline: now + chrono::Duration::hours(1),
+        revision: 1,
+        actor: "operator".into(),
+        reason: None,
+        extended_at: now,
+    });
+    drain_state.drain_cancel = Some(DrainCancelRequest {
+        actor: "operator".into(),
+        source: "dashboard".into(),
+        reason: None,
+        requested_at: now,
+    });
+    state
+}
+
+/// Both run lists project each row with its pipeline state, so a drain reads
+/// the same dispatches, waits, trigger and drain controls as `orbit run
+/// history --json`, which projects through the same shared row. When the
+/// states cannot be read, the rows keep their stateless shape without
+/// `parent_run_id`.
+#[test]
+fn run_list_rows_carry_their_pipeline_state() {
+    isolated(
+        "job_run_lists::run_list_rows_carry_their_pipeline_state",
+        || {
+            let fixture = Fixture::new();
+            let child = seed_live_run(&fixture, "jrun-state-child", JobRunState::Running);
+            let mut drain = seed_live_run(&fixture, "jrun-state-drain", JobRunState::Running);
+            drain.job_id = "workspace_pull_pipeline".into();
+            fixture.save_run(&drain);
+            let state = drain_state(&drain, &child);
+            fixture
+                .runtime
+                .write_run_state(&drain.run_id, &state)
+                .unwrap();
+            let expected = job_run_to_json(&drain, Some(&state));
+            let server = fixture.server(false);
+            let row = |page: &Value, id: &str| {
+                page["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["run_id"] == id)
+                    .unwrap_or_else(|| panic!("{id} is listed: {page}"))
+                    .clone()
+            };
+            for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
+                let page = json_ok(server.get(path));
+                let listed = row(&page, &drain.run_id);
+                for key in [
+                    "child_dispatches",
+                    "waiting_on_deps",
+                    "waiting_on_locks",
+                    "trigger",
+                    "drain_worker_limit",
+                    "drain_admissions_stop",
+                    "drain_window_extension",
+                    "drain_cancel",
+                    "agent_invocation",
+                    "activity_crew_draws",
+                    "env_pass_unset",
+                    "root_cause",
+                ] {
+                    assert_eq!(listed[key], expected[key], "{path} {key}");
+                }
+                assert_eq!(
+                    listed["child_dispatches"][0]["child_run_id"], child.run_id,
+                    "{path}"
+                );
+                assert_eq!(listed["waiting_on_locks"], json!(["file:src/lib.rs"]));
+                assert_eq!(listed["trigger"]["kind"], "dashboard", "{path}");
+                assert_eq!(listed["drain_worker_limit"]["max_active_leaf_runs"], 3);
+                assert_eq!(listed["drain_cancel"]["source"], "dashboard", "{path}");
+                assert_eq!(
+                    row(&page, &child.run_id)["parent_run_id"],
+                    drain.run_id,
+                    "{path}"
+                );
+            }
+
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .connection()
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TABLE job_run_states")
+                .unwrap();
+            for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
+                let page = json_ok(server.get(path));
+                let listed = row(&page, &drain.run_id);
+                assert_eq!(listed["child_dispatches"], json!([]), "{path}");
+                assert_eq!(listed["drain_worker_limit"], Value::Null, "{path}");
+                assert!(
+                    row(&page, &child.run_id).get("parent_run_id").is_none(),
+                    "{path} omits lineage without states: {page}"
+                );
             }
         },
     );
