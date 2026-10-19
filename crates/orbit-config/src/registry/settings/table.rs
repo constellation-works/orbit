@@ -17,7 +17,7 @@ use super::resolve::{
     DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
     resolve_agent_stall_minutes, resolve_bounded_count, resolve_bounded_minutes,
-    resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
+    resolve_bounded_range, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_generated_paths, resolve_host_shutdown_hold_minutes,
     resolve_light_delivery_paths, resolve_machine_id, resolve_machine_name,
     resolve_material_fields, resolve_memory_limit, resolve_mid_run_steering_max_rounds,
@@ -567,7 +567,7 @@ define_config_settings! {
         description: "Largest explorer answer, in bytes, returned to the calling agent.",
         section: ConfigSection::Delivery, order: 165,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 16_384, 262_144, "workflow.explore.max_answer_bytes"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 16_384, 167, 262_144, "workflow.explore.max_answer_bytes"),
     },
     workflow_explore_max_calls_per_run: u32 => u32 {
         key: "workflow.explore.max_calls_per_run", value_type: "integer",
