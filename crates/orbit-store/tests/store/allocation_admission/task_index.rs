@@ -280,7 +280,6 @@ fn cold_selection(root: &Path, filter: &TaskListFilter) -> (usize, usize, Durati
 /// answers the status predicate, and the freshness scan accepts recorded
 /// envelope stamps without parsing.
 #[test]
-#[allow(clippy::print_stderr)]
 fn open_task_selection_reads_only_open_envelopes() {
     const CLOSED: usize = 2000;
     const OPEN: usize = 20;
@@ -351,22 +350,6 @@ fn open_task_selection_reads_only_open_envelopes() {
     let (all, baseline_reads, _) = cold_selection(root.path(), &TaskListFilter::default());
     assert_eq!(all, OPEN + CLOSED);
     assert!(baseline_reads >= OPEN + CLOSED, "read {baseline_reads}");
-
-    // Timing evidence, not an assertion: the best of three cold runs each.
-    let best = |filter: &TaskListFilter| {
-        (0..3)
-            .map(|_| cold_selection(root.path(), filter).2)
-            .min()
-            .unwrap()
-    };
-    let baseline = best(&TaskListFilter::default());
-    let selection = best(&open_filter);
-    eprintln!(
-        "open-task selection over {CLOSED} closed + {OPEN} open tasks: \
-         baseline (every task) {baseline:?}, open statuses {selection:?}, \
-         {:.1}x faster",
-        baseline.as_secs_f64() / selection.as_secs_f64().max(f64::EPSILON)
-    );
 }
 
 /// A restored envelope can move a child without changing scalar metadata.

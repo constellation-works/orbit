@@ -1,7 +1,7 @@
 //! Host-forward tunnel lifecycle [ORB-14679]: single-flight establish,
-//! re-establish after a dead child, idle teardown, shutdown, and the spawned
-//! remote command. Identity, authority and HTTP failures are covered through
-//! the router in `tests/http_api/host_forward.rs`.
+//! re-establish after a dead child, idle teardown, and shutdown. Identity,
+//! authority, the spawned remote's operator argv, and HTTP failures are
+//! covered through the router in `tests/http_api/host_forward.rs`.
 //!
 //! Admitted as unit tests (deterministic interleaving and child-process
 //! fault injection): the HTTP surface cannot shorten the idle timer, count
@@ -313,38 +313,6 @@ fn shutdown_stops_every_child_and_refuses_new_tunnels() {
         .expect("no tunnel after shutdown");
     assert_eq!(refused.code, "unreachable_destination");
     assert_eq!(pids(&stub).len(), 2, "no ssh starts after shutdown");
-}
-
-#[test]
-fn a_spawned_remote_gets_operator_exactly_when_the_session_has_it() {
-    let remote = fake_dashboard(MACHINE_ID);
-    for operator in [false, true] {
-        let stub = Stub::new(json!({"remote": {"attach": null, "spawn": remote}}));
-        let tunnels = HostTunnels::new(config(&stub, remote));
-        let lease = tunnels
-            .acquire(&target("remote"), operator)
-            .expect("spawned tunnel");
-        assert_eq!(lease.origin, crate::ssh_tunnel::TunnelOrigin::Spawned);
-        drop(lease);
-        let calls = stub.calls();
-        assert_eq!(calls.len(), 2, "attach probe, then spawn: {calls:?}");
-        assert_eq!(calls[0]["mode"], "attach");
-        assert_eq!(calls[1]["mode"], "spawn");
-        let expected = if operator {
-            format!("orbit web serve --no-open --operator --port {remote}")
-        } else {
-            format!("orbit web serve --no-open --port {remote}")
-        };
-        assert_eq!(
-            calls[1]["command"],
-            expected.as_str(),
-            "operator={operator}"
-        );
-        tunnels.shutdown_all();
-        for pid in pids(&stub) {
-            assert!(!alive(pid));
-        }
-    }
 }
 
 /// Identity body bytes arrive faster than the probe's per-read socket timeout,

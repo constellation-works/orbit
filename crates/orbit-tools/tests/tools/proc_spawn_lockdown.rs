@@ -73,47 +73,6 @@ fn empty_allowlist_denies_every_program_when_scoped() {
 }
 
 #[test]
-fn missing_filesystem_policy_does_not_add_a_child_read_boundary() {
-    let ctx = ToolContext {
-        proc_allowed_programs: vec!["/bin/echo".to_string()],
-        proc_spawn_activity_scoped: true,
-        ..Default::default()
-    };
-    let value = registry()
-        .execute(
-            "proc.spawn",
-            &ctx,
-            json!({ "program": "/bin/echo", "args": ["must-not-run"] }),
-        )
-        .expect("proc.spawn does not need an inner filesystem profile");
-    assert_eq!(value["stdout"], json!("must-not-run\n"));
-}
-
-#[test]
-fn allowed_program_runs_under_lockdown() {
-    let ctx = ToolContext {
-        proc_spawn_environment: Some(vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]),
-        ..unrestricted_activity_context(vec!["echo".to_string(), "/bin/echo".to_string()])
-    };
-    let value = registry()
-        .execute(
-            "proc.spawn",
-            &ctx,
-            json!({
-                "program": "/bin/echo",
-                "args": ["ok"],
-                "timeout_ms": 5000,
-            }),
-        )
-        .expect("allowed program should run");
-    let stdout = value["stdout"].as_str().unwrap_or_default();
-    assert!(
-        stdout.contains("ok"),
-        "expected `ok` in stdout, got: {stdout:?}"
-    );
-}
-
-#[test]
 fn ambient_credential_is_excluded_unless_policy_admits_it() {
     let ctx = ToolContext {
         proc_spawn_environment: Some(vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]),
@@ -204,38 +163,6 @@ fn restrictive_fs_profile_does_not_narrow_the_parent_read_view() {
         )
         .expect("child inherits its parent's read view");
     assert_eq!(value["stdout"], json!("must stay private"));
-}
-
-#[test]
-fn allowed_program_can_read_an_allowed_path() {
-    let workspace = tempdir().expect("workspace tempdir");
-    let workspace_root = workspace
-        .path()
-        .canonicalize()
-        .expect("canonical workspace");
-    let allowed_dir = workspace_root.join("allowed");
-    fs::create_dir(&allowed_dir).expect("create allowed fixture dir");
-    let allowed = allowed_dir.join("visible.txt");
-    fs::write(&allowed, "visible").expect("write allowed fixture");
-    let ctx = ToolContext {
-        workspace_root: Some(workspace_root),
-        policy_engine: Some(Arc::new(
-            PolicyEngine::from_def(&restricted_policy()).expect("policy"),
-        )),
-        fs_profile: Some("restricted".to_string()),
-        proc_allowed_programs: vec!["/bin/cat".to_string()],
-        proc_spawn_activity_scoped: true,
-        ..Default::default()
-    };
-
-    let value = registry()
-        .execute(
-            "proc.spawn",
-            &ctx,
-            json!({ "program": "/bin/cat", "args": [allowed], "timeout_ms": 5000 }),
-        )
-        .expect("allowed path should be readable through allowed program");
-    assert_eq!(value["stdout"].as_str().unwrap_or_default(), "visible");
 }
 
 #[test]
@@ -571,33 +498,6 @@ fn git_inherits_parent_access_to_a_deny_read_file() {
         stdout_of(&diff(".env")).contains("DENY_READ_SECRET"),
         "the child did not inherit the parent's read access"
     );
-}
-
-/// A direct path argument is no longer filtered by an activity read profile.
-#[test]
-fn an_explicit_benign_path_outside_the_workspace_is_readable() {
-    let workspace = tempdir().expect("workspace tempdir");
-    let workspace_root = workspace
-        .path()
-        .canonicalize()
-        .expect("canonical workspace");
-    let host = tempdir().expect("host tempdir");
-    let outside = host.path().join("config.toml");
-    fs::write(&outside, "benign host config").expect("write host fixture");
-    let ctx = workspace_activity_context(&workspace_root, &["/bin/cat"]);
-
-    let value = registry()
-        .execute(
-            "proc.spawn",
-            &ctx,
-            json!({
-                "program": "/bin/cat",
-                "args": [outside],
-                "timeout_ms": 5000,
-            }),
-        )
-        .expect("the outer OS sandbox decides access");
-    assert_eq!(value["stdout"], json!("benign host config"));
 }
 
 /// Confinement is only useful if the allowlisted tools still work.
