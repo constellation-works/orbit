@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Vision"
 owner: codex
 last_updated: 2026-10-15
-last_validated: 2026-10-15
+last_validated: 2026-10-19
 status: Draft
 feature: auditability
 doc_role: vision
