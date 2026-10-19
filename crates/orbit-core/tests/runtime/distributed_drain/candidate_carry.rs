@@ -408,9 +408,9 @@ fn owner_run_named(pair: &Pair, run_id: &str, task: &str) {
     owner.write_run_state(run_id, &state).unwrap();
 }
 
-/// The owner's own `task_pr_pipeline` run of `task`: its checkout, then its
-/// `resume_candidate` step, with the inputs the pipeline passes them.
-fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+/// The owner's own `task_pr_pipeline` run through worktree setup, which stamps
+/// its binding even if the run stops before its candidate-resume step.
+fn owner_local_setup(pair: &Pair, task: &str) -> (String, Value) {
     let owner = &pair.wire.owner;
     let run = owner_jobs(pair)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
@@ -428,8 +428,13 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
             "dependency_delivery": "ignore",
         }),
     );
+    (run, setup)
+}
+
+fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+    let (run, setup) = owner_local_setup(pair, task);
     let resumed = engine_action(
-        owner,
+        &pair.wire.owner,
         "candidate_resume",
         &json!({
             "job_run_id": run,
@@ -441,6 +446,92 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
         }),
     );
     (setup, resumed)
+}
+
+/// A stopped local attempt that kept nothing does not inherit an older claim's
+/// candidate. Requeue must distinguish that route from the next claim's offer.
+fn a_candidateless_local_attempt_reports_distinct_requeue_routes() {
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let follower = host_checkout(&pair, &pair);
+    let (_, leaf, head, carry) = committed_then_stopped(&pair, &follower, &base, true);
+    assert_eq!(carry["carry"], "durable", "{carry}");
+    pair.wire
+        .owner
+        .requeue_blocked_task(&task, "keep claim A", false)
+        .unwrap();
+
+    // B stamps its owner-local binding, then stops before candidate_resume.
+    let (local, _) = owner_local_setup(&pair, &task);
+    assert_eq!(pair.owner_task(&task)["job_run_id"], local);
+    owner_jobs(&pair)
+        .finalize_job_run(&local, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+    pair.wire
+        .owner
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let report = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "local attempt stopped without a candidate", false)
+        .unwrap();
+
+    // C actually starts fresh; its source must agree with the public report.
+    let (setup, resumed) = owner_local_run(&pair, &task);
+    assert_eq!(setup["prior_job_run_id"], local);
+    assert_eq!(resumed["outcome"], "fresh", "{resumed}");
+    assert_eq!(resumed["reason_code"], "no_candidate", "{resumed}");
+    assert_eq!(report["resumes"]["owner_local"], false, "{report:#}");
+    assert_eq!(report["resumes"]["source"], "claim", "{report:#}");
+    assert_eq!(report["resumes"]["source_run_id"], leaf, "{report:#}");
+    assert_eq!(report["resumes"]["machine_id"], FOLLOWER, "{report:#}");
+    assert_eq!(report["resumes"]["head_sha"], head, "{report:#}");
+    let next = report["next_step"].as_str().unwrap();
+    assert!(
+        next.contains("owner-local run implements fresh") && next.contains("claimed run continues"),
+        "{report:#}"
+    );
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_ne!(
+        std::fs::read_to_string(checkout.join("src/f0.rs")).unwrap(),
+        CARRIED
+    );
+
+    // Stopping C still leaves A available to a subsequent claimed attempt.
+    let current = pair.owner_task(&task)["job_run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    owner_jobs(&pair)
+        .finalize_job_run(&current, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+    pair.wire
+        .owner
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    pair.wire
+        .owner
+        .requeue_blocked_task(&task, "use the claim route", false)
+        .unwrap();
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    let offered = claim_candidate(&pair, &next).expect("claim admission retains A");
+    assert_eq!(offered.head_sha, head);
+    assert_eq!(offered.source_run_id.as_deref(), Some(leaf.as_str()));
 }
 
 /// The note of the owner's latest `candidate_resume` event for `task`.
@@ -1227,7 +1318,8 @@ crate::scenario_table!(
     an_owner_local_run_records_why_it_sets_a_kept_candidate_aside,
     a_red_base_hold_carries_its_candidate_to_another_hosts_claim,
     a_red_base_hold_whose_push_is_refused_stays_host_local,
-    a_requeued_claim_continues_its_published_branch_and_pull_request
+    a_requeued_claim_continues_its_published_branch_and_pull_request,
+    a_candidateless_local_attempt_reports_distinct_requeue_routes
 );
 
 crate::scenario_table!(

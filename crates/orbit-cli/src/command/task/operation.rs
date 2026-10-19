@@ -427,15 +427,20 @@ pub(crate) fn requeue_text(value: &Value) -> String {
     let mut lines = vec![format!("Requeued {id} to backlog.")];
     if let Some(resumes) = value.get("resumes").filter(|v| v.is_object()) {
         let field = |key: &str| resumes.get(key).and_then(Value::as_str).unwrap_or("-");
+        let verb = if resumes.get("owner_local").and_then(Value::as_bool) == Some(false) {
+            "A claimed run resumes"
+        } else {
+            "Resumes"
+        };
         // A claim's kept candidate may not have reached a pull request yet.
         lines.push(match resumes.get("pull_request").and_then(Value::as_str) {
             Some(pull_request) => format!(
-                "Resumes pull request #{pull_request} on {} at {}.",
+                "{verb} pull request #{pull_request} on {} at {}.",
                 field("branch"),
                 field("head_sha")
             ),
             None => format!(
-                "Resumes the candidate on {} at {}.",
+                "{verb} the candidate on {} at {}.",
                 field("branch"),
                 field("head_sha")
             ),
