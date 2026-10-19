@@ -6,6 +6,8 @@
 #   docs  every changed path is Markdown outside crates/ and plugin/. Markdown
 #         under crates/ is compiled in (include_str! assets) and plugin/ is the
 #         generated skill mirror, so either one needs the full gate.
+#         A push also requires a successful completed full check on BEFORE;
+#         a previous push may have been replaced while pending.
 #   skip  a push whose commit has exactly the tree of the merged pull request's
 #         head, and that head's latest `Check / Clippy / Test` succeeded: the
 #         same bytes already passed the full gate.
@@ -64,8 +66,15 @@ elif [ "${EVENT:-}" = push ]; then
     if [ "$(jq -r '.status // empty' <<<"$compare" 2>/dev/null)" = ahead ] &&
       [[ "$(jq -r '.files | length' <<<"$compare" 2>/dev/null)" =~ ^([1-9]|[1-9][0-9]|[12][0-9][0-9])$ ]] &&
       docs_only <<<"$(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$compare" 2>/dev/null)"; then
-      mode=docs
-      reason="every path pushed since $BEFORE is Markdown outside crates/ and plugin/"
+      before_passed=$(api "repos/$GH_REPO/commits/$BEFORE/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest" |
+        jq -r '[.check_runs[] | select(.status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length' 2>/dev/null)
+      # BEFORE is only the previous tip, not necessarily a tested commit:
+      # branch concurrency can replace its pending run. Skipped or unfinished
+      # checks do not establish a safe base for a Markdown-only delta.
+      if [[ "$before_passed" =~ ^[1-9][0-9]*$ ]]; then
+        mode=docs
+        reason="every path pushed since tested commit $BEFORE is Markdown outside crates/ and plugin/"
+      fi
     fi
   fi
 fi

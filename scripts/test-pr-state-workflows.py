@@ -634,7 +634,7 @@ else:
             "repos/o/r/pulls/7/files?per_page=100": files,
         }, PR="7")
 
-    def push(self, *paths, same_tree=False, head_passed=True):
+    def push(self, *paths, same_tree=False, head_passed=True, before_check="success"):
         routes = {
             f"repos/o/r/git/commits/{self.SHA}": {"tree": {"sha": "t1"}},
             f"repos/o/r/commits/{self.SHA}/pulls": [
@@ -646,6 +646,15 @@ else:
             f"repos/o/r/compare/{self.BEFORE}...{self.SHA}":
                 {"status": "ahead", "files": [{"filename": path} for path in paths]},
         }
+        if before_check != "api_error":
+            pending = before_check in ("queued", "in_progress")
+            routes[f"repos/o/r/commits/{self.BEFORE}/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest"] = {
+                "check_runs": [] if before_check is None else [{
+                    "status": before_check if pending else "completed",
+                    "conclusion": None if pending else before_check,
+                    "app": {"slug": "github-actions"},
+                }],
+            }
         return self.classify("push", routes, SHA=self.SHA, BEFORE=self.BEFORE)
 
     def test_pull_request_scope(self):
@@ -665,6 +674,20 @@ else:
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True, head_passed=False), "full")
         self.assertEqual(self.push("docs/guide.md"), "docs")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
+
+    def test_docs_push_after_untested_before_runs_full_gate(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+        # A pending code push may be replaced before its checks even exist.
+        # Incomplete, cancelled and skipped checks cannot establish a tested base.
+        for check in (None, "queued", "in_progress", "cancelled", "skipped", "failure", "api_error"):
+            with self.subTest(before_check=check):
+                mode = self.push("docs/guide.md", before_check=check)
+                self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
+                admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
+                    job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
+                self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"})
+        self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
+                         "an exact tree that passed on the PR head is safe independently of BEFORE")
 
     def test_modes_admit_the_matching_jobs(self):
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
