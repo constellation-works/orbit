@@ -84,14 +84,18 @@ const withoutLimits = () => ({
   readiness: (({ provider_limits: _limits, ...rest }) => ({ ...rest, tasks: [{ task_id: 'ORB-101', status: 'backlog', eligible: false, reason: 'provider_limit' }] }))(READINESS),
 });
 
-// One-shot hold on the next readiness response: `arrived` resolves once the
-// request is in, `release()` lets the response go out.
-let readinessHold = null;
-const holdReadiness = () => {
+// Hold only this page's next readiness response. Other pages keep receiving
+// their responses even if they reach the server after this hold is armed.
+const holdReadiness = async (page) => {
   const hold = {};
   hold.arrived = new Promise((resolve) => { hold.signal = resolve; });
   hold.released = new Promise((resolve) => { hold.release = resolve; });
-  readinessHold = hold;
+  await page.route((url) => url.pathname === '/api/workflows/auto/readiness', async (route) => {
+    const response = await route.fetch();
+    hold.signal();
+    await hold.released;
+    await route.fulfill({ response });
+  }, { times: 1 });
   return hold;
 };
 
@@ -99,13 +103,6 @@ let routeLog = [];
 function api(req, rest, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   if (req.method !== 'GET') return json({ ok: true });
-  if (rest === 'workflows/auto/readiness' && readinessHold) {
-    const hold = readinessHold;
-    readinessHold = null;
-    hold.signal();
-    hold.released.then(() => json(legacy ? withoutLimits().readiness : READINESS));
-    return;
-  }
   if (rest === 'workspaces') return json(WORKSPACES);
   if (rest === 'tasks') return json({ items: TASKS, total: TASKS.length, limit: 50, offset: 0, next_cursor: null });
   if (rest === 'tasks/all') return json({ items: [], total: 0 });
@@ -294,6 +291,17 @@ try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'America/Los_Angeles' });
     const page = await context.newPage();
     page.on('pageerror', (error) => pageErrors.push(`legacy: ${error.message}`));
+    // Keep Settings' independent readiness request out of the server until the
+    // Drain control is armed, while allowing config/effective to render.
+    let releaseSettings;
+    let settingsArrived;
+    const settingsReleased = new Promise((resolve) => { releaseSettings = resolve; });
+    const settingsRequest = new Promise((resolve) => { settingsArrived = resolve; });
+    await page.route((url) => url.pathname === '/api/workflows/auto/readiness', async (route) => {
+      settingsArrived();
+      await settingsReleased;
+      await route.continue();
+    }, { times: 1 });
     await page.goto(`${origin}/#config/crews`);
     await page.locator('[data-key="crews.opus"] .config-crew-limit').waitFor({ state: 'visible' });
     const cells = await page.evaluate(() => [...document.querySelectorAll('.config-crew-limit')].map((cell) => cell.textContent));
@@ -304,7 +312,13 @@ try {
     // it is pending, and only the released legacy response completes it.
     const drainPage = await context.newPage();
     drainPage.on('pageerror', (error) => pageErrors.push(`legacy drain: ${error.message}`));
-    const hold = holdReadiness();
+    await settingsRequest;
+    const hold = await holdReadiness(drainPage);
+    releaseSettings();
+    // This competing response must finish while Drain's hold remains armed.
+    // A global one-shot hold would be stolen here by the Settings page.
+    await page.waitForFunction(`${DRAIN_RENDERED}.rendered`);
+    const competingSettings = await page.evaluate(DRAIN_RENDERED);
     await drainPage.goto(`${origin}/#auto-drain`);
     await hold.arrived;
     const pending = await drainPage.evaluate(DRAIN_RENDERED);
@@ -327,7 +341,7 @@ try {
       label: document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot').getAttribute('aria-label'),
     }));
     assert(legacyTask.label.includes('provider limit'), `a task with no detail names its wait: ${legacyTask.label}`);
-    evidenceLog.legacy = { cells, ...legacyDrain, ...legacyTask };
+    evidenceLog.legacy = { cells, competingSettings, pending, ...legacyDrain, ...legacyTask };
     await context.close();
   }
 
@@ -342,6 +356,7 @@ try {
       'browser-task-dot-names-provider-limit-wait-with-detail',
       'browser-provider-limits-legible-in-light-and-dark-schemes',
       'browser-provider-limits-absent-on-older-server',
+      'browser-legacy-drain-hold-isolated-from-competing-settings-readiness',
     ],
     ...evidenceLog,
   }, null, 2)}\n`);
