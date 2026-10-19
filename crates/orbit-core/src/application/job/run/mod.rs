@@ -61,7 +61,7 @@ pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_disp
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
-    ActivityInvocationEvidence, job_run_task_ids, job_run_to_json,
+    ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub use root_cause::{RunIncident, fold_run_incidents};

@@ -2,7 +2,9 @@
 //! are visible through the built CLI without scraping persisted input.
 use super::*;
 use chrono::{Duration, Utc};
+use orbit_core::application::job::job_run_to_json;
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::workflow::{ChildDispatch, DrainWorkerLimit, JobRunTrigger, PipelineState};
 use serde_json::json;
 
 /// V2 worker diagnostics name the job; the failing YAML step comes from the
@@ -676,6 +678,85 @@ fn history_failures_reports_one_row_per_task_and_root_cause() {
     fixture
         .orbit()
         .args(["run", "history", "--failures", "--incidents"])
+        .assert()
+        .failure();
+}
+
+/// History rows carry each run's pipeline state through the shared list row
+/// the dashboard lists also use, and history fails rather than listing rows
+/// without it when the states cannot be read.
+#[test]
+fn history_rows_carry_pipeline_state_and_fail_when_it_is_unreadable() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_rows_carry_pipeline_state_and_fail_when_it_is_unreadable",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let now = Utc::now().to_rfc3339();
+    let db = fixture.db();
+    for (id, job) in [
+        ("jrun-history-drain", "workspace_pull_pipeline"),
+        ("jrun-history-leaf", "task_pr_pipeline"),
+    ] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, created_at)
+             VALUES (?1, ?2, ?3, 1, 'running', ?4, ?4, ?4)",
+            params![id, fixture.workspace_id(), job, now],
+        )
+        .unwrap();
+    }
+    let drain = runtime.show_job_run("jrun-history-drain").unwrap();
+    let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+    state.record_child_dispatch(ChildDispatch::submitted(
+        "jrun-history-leaf".into(),
+        "task_pr_pipeline".into(),
+        "leaf_invoke".into(),
+        false,
+        false,
+        Utc::now(),
+    ));
+    state.waiting_on_locks = Some(vec!["file:src/lib.rs".into()]);
+    state.trigger = Some(JobRunTrigger::cli());
+    state.pull_drain.drain_worker_limit = Some(DrainWorkerLimit {
+        max_active_leaf_runs: 3,
+        previous_max_active_leaf_runs: 2,
+        revision: 1,
+        actor: "operator".into(),
+        reason: None,
+        updated_at: Utc::now(),
+    });
+    runtime.write_run_state(&drain.run_id, &state).unwrap();
+    let expected = job_run_to_json(&drain, Some(&state));
+
+    let history = fixture.json(&["run", "history", "--no-reconcile", "--json"]);
+    let row = history["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["run_id"] == drain.run_id)
+        .unwrap_or_else(|| panic!("history lists the drain: {history}"));
+    for key in [
+        "child_dispatches",
+        "waiting_on_locks",
+        "trigger",
+        "drain_worker_limit",
+    ] {
+        assert_eq!(row[key], expected[key], "{key}");
+    }
+    assert_eq!(
+        row["child_dispatches"][0]["child_run_id"],
+        "jrun-history-leaf"
+    );
+
+    db.execute_batch("DROP TABLE job_run_states").unwrap();
+    fixture
+        .orbit()
+        .args(["run", "history", "--no-reconcile", "--json"])
         .assert()
         .failure();
 }

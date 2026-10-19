@@ -101,15 +101,8 @@ pub(crate) fn run_history_payload(
     let include_job_id = params.job_id.is_none();
     let state_filtered = params.state.is_some() || !params.states.is_empty();
     let runs = read.list(runtime, params)?;
-    let run_ids = runs
-        .iter()
-        .map(|run| run.run_id.clone())
-        .collect::<Vec<_>>();
-    let states = runtime.read_run_states(&run_ids)?;
-    let states = runs
-        .iter()
-        .map(|run| states.get(&run.run_id).and_then(Option::as_ref))
-        .collect::<Vec<_>>();
+    let list_states = runtime.read_job_run_list_states(&runs)?;
+    let states = list_states.for_runs(&runs);
 
     if failures {
         return failure_history_payload(runtime, read, &runs, &states);

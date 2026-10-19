@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
+use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -217,15 +217,7 @@ fn job_runs_page(
     let total = runtime.count_job_runs_observed(params)?;
     let truncated = total > runs.len() as u64;
     let titles = super::runs::task_titles(runtime, &runs)?;
-    let mut items: Vec<Value> = runs
-        .iter()
-        .map(|run| {
-            let mut value = job_run_to_json(run, None);
-            super::runs::add_tasks(&mut value, run, &titles);
-            value
-        })
-        .collect();
-    super::runs::add_run_lineage(runtime, &runs, &mut items);
+    let items = super::runs::run_list_rows(runtime, &runs, &titles);
     Ok(json!({
         "items": items,
         "total": total,

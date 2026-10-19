@@ -222,6 +222,20 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
         "capability_denied"
     );
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
+    // The run list projects each row with its pipeline state, and still lists
+    // the run, without that state, when the states cannot be read.
+    drop(client);
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    assert_eq!(listed["items"][0]["run_id"], id);
+    assert_eq!(listed["items"][0]["drain_worker_limit"]["revision"], 1);
+    Connection::open(workspace.home.join(".orbit/orbit.db"))
+        .unwrap()
+        .execute_batch("DROP TABLE job_run_states")
+        .unwrap();
+    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    assert_eq!(listed["items"][0]["run_id"], id);
+    assert_eq!(listed["items"][0]["drain_worker_limit"], Value::Null);
 }
 
 /// A start window longer than the drain itself accepts is refused before any

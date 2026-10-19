@@ -69,8 +69,8 @@ pub use run::{
     DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWindowExtensionChange,
     DrainWindowExtensionOutcome, DrainWindowExtensionRequest, DrainWorkerLimitChange,
     DrainWorkerLimitOutcome, DrainWorkerLimitRequest, JobRunCancelOutcome, JobRunCancelResult,
-    JobRunListParams, JobRunOrder, RemainingDrainChild, RunDisplayStep, RunDisplaySteps,
-    RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf, fold_run_incidents,
+    JobRunListParams, JobRunListStates, JobRunOrder, RemainingDrainChild, RunDisplayStep,
+    RunDisplaySteps, RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf, fold_run_incidents,
     job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_display_steps,
     run_error_step,
 };

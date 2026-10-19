@@ -283,7 +283,7 @@ fn project_workflow_run_list(
         .iter()
         .map(|run| run.run_id.clone())
         .collect::<Vec<_>>();
-    let states = runtime.read_run_states(&run_ids).unwrap_or_default();
+    let states = runtime.read_job_run_list_states(runs).unwrap_or_default();
     let recoveries = runtime
         .collect_run_recovery_attempts_for_runs(&run_ids)
         .map(|page| page.by_run_id)
@@ -294,7 +294,7 @@ fn project_workflow_run_list(
             run_json_enriched(
                 runtime,
                 run,
-                states.get(&run.run_id).and_then(Option::as_ref),
+                states.state(&run.run_id),
                 None,
                 recoveries.get(&run.run_id),
             )

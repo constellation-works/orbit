@@ -12,7 +12,7 @@ use std::path::Path;
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
+use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
@@ -365,15 +365,7 @@ pub(super) fn all_job_runs_json(
                     }
                 };
                 total = total.saturating_add(count);
-                let mut values = runs
-                    .iter()
-                    .map(|run| {
-                        let mut value = job_run_to_json(run, None);
-                        super::runs::add_tasks(&mut value, run, &titles);
-                        value
-                    })
-                    .collect::<Vec<_>>();
-                super::runs::add_run_lineage(&runtime, &runs, &mut values);
+                let values = super::runs::run_list_rows(&runtime, &runs, &titles);
                 candidates.extend(
                     runs.into_iter()
                         .zip(values)
