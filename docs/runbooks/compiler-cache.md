@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off.
+summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, validate before/after builds with it off, and see why hosted CI caches only dependencies.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-18
+last_validated: 2026-10-19
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -36,112 +36,103 @@ a host that can create Linux mount namespaces.
   the first namespace's mounts and the second fails with a missing rlib.
   The wrapper defaults prevent this (see [Daemon ownership](#daemon-ownership)).
 
-## Ordinary Linux CI compiler objects
+## Ordinary Linux CI
 
-The ordinary **Check / Clippy / Test** and **Test build** jobs in
-`.github/workflows/ci.yml` each install the existing SHA-256-pinned sccache through `scripts/compiler-cache.sh`. This
-installation is confined to the ephemeral hosted runner. It restores a separate
-`orbit-ci-compiler-v1` archive into `$RUNNER_TEMP/orbit-ci-compiler-v1`, with a
-2 GiB local LRU limit. The existing `Swatinem/rust-cache` dependency archive and
-its failure-save policy are unchanged. Compiler-object archives contain neither
-source files nor Cargo `target/`, fingerprints, test binaries or installer binaries.
-The job exports `SCCACHE_DIR` through `GITHUB_ENV` from `RUNNER_TEMP` at runtime,
-before computing the identity, restoring objects or setting up the wrapper.
-Runner context is unavailable in job-level `env`.
+Hosted CI keeps no compiler-object cache. The Rust build caches in
+`.github/workflows/ci.yml` are the `Swatinem/rust-cache` dependency archives:
+`rust-1.98.1` for **Test build**, `rust-1.98.1-checks` for **Check / Clippy /
+Test**, and the MSRV job's entry for its own toolchain. rust-cache keys each on
+the toolchain, `Cargo.lock`, the manifests and the `CARGO*`/`RUST*`
+environment, and prunes `target/` to dependency artifacts before it saves.
+Workspace members are never cached: each run compiles them from the checkout,
+and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
 
-`actions/cache/restore` has no post-job save. PR runs can modify their restored
-local copy but never upload it. The explicit `actions/cache/save` step runs only
-after the job's own work succeeds: in the Check job, its checks and the awaited
-test build, nextest shards and Linux sandbox gate; in the Test build job, the
-test build and archive. It runs on a `push` to
-`refs/heads/agent-main` in `constellation-works/orbit`, with usable cache setup
-and without an exact archive hit. Failed, cancelled, fork, release-branch and PR
-runs cannot publish compiler objects. No privileged PR workflow or additional
-cache service is involved. GitHub's branch scoping allows PRs targeting
-`agent-main` to restore its caches; it does not share caches with arbitrary
-sibling branches. See the [Actions cache contract](https://github.com/actions/cache)
-and [cache scope and eviction reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+- **Who writes.** Every rust-cache step has
+  `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
+  `agent-main` saves, after the job's work, on failure too
+  (`cache-on-failure`), and only when it missed the exact key. A PR run
+  restores and never writes, so no PR-built entry exists for another PR or an
+  `agent-main` run to restore. A PR can restore the base branch's entries
+  ([GitHub cache scope](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)).
+  `python3 scripts/test-pr-state-workflows.py` evaluates every cache writer's
+  condition for each event and fails on an `actions/cache` step, whose
+  implicit post-job save runs on every event.
+- **Misses and failures.** A missed key restores the newest entry that shares
+  its toolchain and environment prefix, or nothing, and Cargo rebuilds every
+  dependency the restored `target/` lacks or holds stale. A restore error is
+  logged and the job continues uncached. Either way the result is an ordinary
+  cold build.
+- **Test build** sets `ORBIT_COMPILER_CACHE=0`. The repository wrapper
+  (`.cargo/config.toml`) then execs `rustc` directly, and no sccache is
+  installed.
+- **Check / Clippy / Test** installs the pinned sccache only because the
+  guardrails' live enabled-cache namespace regression
+  (`scripts/test-compiler-cache-namespaces.sh` with
+  `ORBIT_COMPILER_CACHE_REQUIRE_NS=1`) needs a real binary. While it is
+  installed, the wrapper is enabled for that job's compiles too, through a
+  fresh `$HOME/.orbit/cache/compiler` that nothing restores or saves.
+  `SCCACHE_IGNORE_SERVER_IO_ERROR=1` compiles locally if the sccache server
+  fails. If the installation fails, the job exports `ORBIT_COMPILER_CACHE=0`
+  and the regression reports itself not applicable.
 
-The archive compatibility digest includes actual `rustc -vV`, Cargo and Clippy
-versions, machine architecture and runner image identity; root and member
-manifests (including profiles), lockfiles, toolchain files, all tracked `.cargo`
-configuration, user Cargo configuration, the workflow, all setup/build scripts
-(including installer and wrapper), and the effective Cargo/Rust/sccache cache
-environment, and the job id: the two jobs compile different units, so each
-keeps its own archive. Hashing all scripts covers flags, feature selections and build
-commands inside helpers. Both the exact key and the sole restore prefix contain
-this digest: incompatible configurations never use a broader restore prefix.
-Only the weekly suffix may differ on a compatible restore.
+The workspace test build (`scripts/check-ci-macos.sh --workspace-build`)
+compiles `--lib --bins --tests --examples` with
+`RUSTC_WORKSPACE_WRAPPER=clippy-driver` and the all-targets lint flags
+(`-D warnings`, allowing `clippy::disallowed_methods`). `clippy-driver` splits
+`CLIPPY_ARGS` on `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those
+arguments, so a space-separated value is one rustc argument and does not apply
+the flags. `scripts/with-test-build-lint.sh` holds that environment. The
+nextest listing and archive, the doctests and the Linux sandbox gate run
+through it too: Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and the
+`CLIPPY_ARGS` value `clippy-driver` tracks, so under any other environment
+each would recompile every workspace member. `make ci-lint` still runs
+production Clippy and `cargo clippy --all-targets`. Keep the four native
+delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
+`make ci-test-affected`) and the ordinary hosted required checks.
 
-There is at most one immutable snapshot per compatibility digest per UTC week,
-filled by an ordinary successful build, with compatible older snapshots as
-seeds. This limits upload frequency rather than creating an archive per commit
-or PR. Each local cache is bounded to 2 GiB; GitHub evicts archives unused for
-seven days and applies the repository's cache storage quota. Different identities
-share that quota with dependency caches, so monitor eviction pressure. No cleanup
-token or cache deletion workflow is needed. A cache miss builds normally.
+### Why CI caches only dependencies
 
-Rust source files are deliberately absent from the archive identity: Cargo still
-decides freshness and sccache hashes compiler inputs, including source contents,
-flags and compiler identity. No source mtimes are restored and no validation is
-skipped on an archive hit. Production Clippy, executed tests, doctests,
-documentation and native sandbox controls remain required. The CI guardrails
-job no longer runs a separate all-targets Clippy phase. Its workspace test
-list-build (`scripts/check-ci-macos.sh --workspace-build`) compiles
-`--lib --bins --tests --examples` with `RUSTC_WORKSPACE_WRAPPER=clippy-driver`
-and the same flags that pass used: `-D warnings` while allowing
-`clippy::disallowed_methods`. `clippy-driver` splits `CLIPPY_ARGS` on
-`__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those arguments. A
-space-separated value is one rustc argument and does not apply the flags.
-`scripts/with-test-build-lint.sh` holds that environment. The nextest
-listing, doctests and the Linux sandbox gate run through it too: Cargo
-fingerprints `RUSTC_WORKSPACE_WRAPPER` and the `CLIPPY_ARGS` value
-`clippy-driver` tracks, so under any other environment each would recompile
-every workspace member before running.
-`make ci-lint` is unchanged and still runs production Clippy and
-`cargo clippy --all-targets`, because that gate does not build the test
-binaries. Clippy analysis itself remains unsupported by sccache. Cargo invokes
-the configured rustc wrapper for dependencies, and chains that wrapper in
-front of `clippy-driver` for workspace members. sccache records the
-clippy-driver calls as non-cacheable and still executes them, so the lint
-runs on every such build; dependency rustc invocations can still hit. Hosted
-CI requires the existing
-enabled-cache namespace control to execute with real Bubblewrap namespaces;
-worker-sandbox deferral is not evidence of native correctness. Keep the four
-native delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
-`make ci-test-affected`) and ordinary hosted required checks.
+Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
+2026-10-18 17:13 to 2026-10-19 05:03 UTC (78 PR and 22 push runs):
 
-Restore/save have two-minute step limits; each restore segment has a one-minute
-limit. Installation has a 60-second bound and startup/stat operations ten-second
-bounds. Setup failure disables the wrapper through `ORBIT_COMPILER_CACHE=0`;
-missing/unwritable cache uses the wrapper's ordinary rustc fallback. CI sets
-`SCCACHE_IGNORE_SERVER_IO_ERROR=1` so sccache server I/O failure can compile
-locally ([pinned sccache implementation](https://github.com/mozilla/sccache/blob/v0.17.0/src/commands.rs)).
-Restore/save service failures do not grant validation success or suppress builds.
-
-Logs retain the compatibility digest and exact/matched keys, configured capacity
-and disk size, up to 80 lines of native sccache statistics (hits, misses,
-non-cacheable/unsupported requests and errors), and whole restore, setup,
-statistics-report and save elapsed seconds. Stats are zeroed before ordinary
-compilation. Unavailable statistics and skipped saves are explicit. Restore timing
-also includes identity computation and action startup; save timing includes action
-startup, compression and upload. GitHub's complete job duration, including all
-setup, post actions and cache costs, remains the performance authority.
-
-Run the offline workflow controls with `python3 scripts/test-pr-state-workflows.py`:
-they resolve job environment contexts and execute the runtime environment handoff,
-identity/setup snippets and writer condition, exercising trusted
-pushes, PR no-upload, incompatible inputs and setup fallback. Also run the existing
-`scripts/test-compiler-cache.sh` and enabled-cache
-`scripts/test-compiler-cache-namespaces.sh`; the latter must be replayed on the
-Linux host when the worker cannot create namespaces.
-
-After merge, the landing owner must verify one **ordinary** successful trusted
-`agent-main` run publishes this namespace and retain its key, setup/restore/save
-costs and stats. A subsequent ordinary PR consumer supplies whole-job performance
-evidence separately. A pre-merge PR cannot populate the trusted namespace. Do not
-run warming loops, weaken checks, or claim this infrastructure alone meets the
-600-second job budget.
+- **Where Test build time goes.** In full-mode PR runs the
+  `Build and archive workspace tests` step took median 186 s (p90 213 s, 62
+  runs), and 142 s (p90 174 s, 16 runs) in `affected:` runs. Almost all of it is the
+  `workflow-test-list-build` phase: the workspace compile (median 175 s in
+  full mode), against 7 s for `workspace-test-archive`. The partition guard
+  (median 27 s) runs after the upload, beside the shards. rust-cache hit fully
+  in every run. A local `cargo --timings` of the same build at `-j4`, with
+  dependencies fresh and every workspace source touched, compiled 68
+  workspace units for 288 CPU-seconds in 85 s of wall time. `orbit-core`
+  alone took 86 CPU-seconds: 25 s for its library and 34 s for its library
+  test, which waits for the library because of the crate's
+  `test-support` self dev-dependency. The critical path runs
+  `orbit-types` → `orbit-common` → `orbit-store` → `orbit-engine` →
+  `orbit-core` → the `orbit-core` library test. The build is CPU-bound at
+  four jobs. Without the folded Clippy lint it took 81 s instead of 85 s.
+- **Why sccache did nothing.** The removed `orbit-ci-compiler-v1` archive held
+  4 KiB, and every sampled run reported 0 compile requests. A full Test build
+  made 72 non-cacheable calls (68 `multiple input files`), an `affected:` one
+  40–72, and the Check job 40. rust-cache already restores every dependency,
+  so Cargo runs the compiler only for workspace members. For those it runs
+  `<RUSTC_WRAPPER> <RUSTC_WORKSPACE_WRAPPER> rustc <args>`, so sccache
+  receives `clippy-driver rustc … src/lib.rs` and reads `rustc` as a second
+  input file. The rest are Cargo's target-information probes:
+  `rustc - --print …` (`-`) and `rustc -vV` (`missing input`,
+  `missing output_dir`). The heaviest units are test executables, which
+  sccache never caches (see [When sccache is ineffective or slower](#when-sccache-is-ineffective-or-slower)).
+- **Why there is no workspace-member cache.** Caching the workspace's own
+  artifacts per `agent-main` tip would take about 0.5 GiB (zstd) of cache
+  quota per push. A PR would restore it and reset the mtimes of files
+  unchanged since that tip, so that Cargo keeps those units fresh. Simulated
+  locally, a PR that changes only `orbit-cli` rebuilt in 22 s, `orbit-web` in
+  31 s, `orbit-engine` or `orbit-core` in 77 s and `orbit-store` in about
+  100 s, against 85–118 s from scratch. For the 39 sampled PRs, the newest
+  layer an `agent-main` push had saved before each PR built differed from
+  the PR head in `orbit-types`, `orbit-common` or `orbit-store` for the median
+  PR, which then rebuilds everything (mean −14%). Even a layer at each PR's
+  own merge base saves a median 23%, short of 30%, because most PRs change
+  `orbit-core` or a crate below it.
 
 ## Ownership and location
 
@@ -510,7 +501,7 @@ remap the provider agent cwd.
 
 | Workload | What sccache 0.17.0 does | What to do |
 | --- | --- | --- |
-| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. The CI list-build chains this wrapper in front of `clippy-driver` the same way. | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
+| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#why-ci-caches-only-dependencies)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
 | Incremental (`CARGO_INCREMENTAL=1` / `-C incremental`) | Pinned sccache `0.17.0` **rejects** the invocation (`incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue`) instead of compiling uncached. | Keep `CARGO_INCREMENTAL=0` on workers. To run incremental rustc, set `ORBIT_COMPILER_CACHE=0`. |
 | Cache cold fill | Extra wrapper/daemon/hash work; measured slower than uncached `ORBIT_COMPILER_CACHE=0` on the same crate | Expected. Judge effectiveness on a *warm* second worktree vs uncached, not vs cold fill. |
 | Tiny crates | Daemon startup can dominate wall time | Hits without a wall-clock drop are not a win. |
