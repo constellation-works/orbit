@@ -7,8 +7,8 @@ on:
 
 # Superseded PR heads must not compete with their replacement. Pushes share
 # one group per branch without cancellation, as in ci-macos.yml: one run
-# executes and one waits, and a newer push replaces the waiting run, so the
-# branch tip is always tested and merges never queue a backlog of full runs.
+# executes and one waits, and a newer push replaces the waiting run. Scope
+# narrowing must account for an untested previous tip (see the scope job).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.ref) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -80,7 +80,9 @@ jobs:
 
   # Narrows the run before allocating build runners (scripts/ci-change-scope.sh).
   # `docs`: every changed path is Markdown outside crates/ and plugin/, so only
-  # `Docs guards` runs. `skip`: a push whose tree is exactly a merged PR head
+  # `Docs guards` runs; a push also requires a successful completed full check
+  # on its BEFORE commit, since that commit's pending run may be replaced.
+  # `skip`: a push whose tree is exactly a merged PR head
   # that already passed `Check / Clippy / Test`, so nothing reruns. The build
   # and test jobs then report as skipped under their unchanged check names,
   # which required checks and Orbit's landing treat as passing. The job never
