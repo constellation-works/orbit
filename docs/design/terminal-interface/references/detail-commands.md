@@ -2,7 +2,7 @@
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
 last_updated: 2026-10-18
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
@@ -22,13 +22,13 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit auto-task list` | `TITLE` | `orbit auto-task show <name>` |
 | `orbit task list` | `TITLE` | `orbit task show <id>` |
 | `orbit job list` | `TARGET_ID` | `orbit job show <job_id>` |
-| `orbit run history` | — (fixed columns) | `orbit run show <run_id>` (task titles, full errors), `orbit run show <run_id> -s <step>` |
+| `orbit run history` | `ERROR` (shown when a listed run failed) | `orbit run show <run_id>` (task titles, full errors), `orbit run show <run_id> -s <step>` |
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
 | `orbit run show` (step summary) | `TARGET`, `ERROR MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
-| `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
+| `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
 | `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs |
 
 ## Gaps
@@ -41,8 +41,7 @@ These views can truncate a column and have no detail command. Listed rather than
 | `orbit tool doctor` | `DETAILS` | As above. |
 | `orbit skill doctor` | `DETAILS` | As above. |
 | `orbit tool show` (parameters) | `DESCRIPTION` | Already the detail view; the parameter description has no deeper surface than `--json`. |
-
-`orbit migrate status` is absent from both tables: every column it renders is fixed or numeric.
+| `orbit migrate` (inspection readout) | `COMPONENT` | Lists every component, but the column is flexible, so a narrow sink can cut it. `--json` carries the full report. |
 
 ## Run history
 

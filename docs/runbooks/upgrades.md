@@ -289,7 +289,7 @@ are not handed over; they finish on the image they started with.
 `orbit update --contract --json` reports protocol support without opening state:
 
 ```json
-{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":43,"writer_floor":38,"reader_floor":38},"task_registry":{"version":1,"writer_floor":0,"reader_floor":0},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":53,"writer_floor":38,"reader_floor":38},"task_registry":{"version":1,"writer_floor":0,"reader_floor":0},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":5,"local_pull":1,"review":4},"feature_floors":{"automation":{"version":4,"name":"release_stale_source_failures"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":4,"name":"reconciliation_landed_delivery_binding"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
 ```
 
 `contract` stays `executable-generation-v1` because every v2 binary still honours it
