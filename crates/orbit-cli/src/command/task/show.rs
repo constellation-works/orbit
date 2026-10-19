@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use orbit_cmd::task_owner::bound_workspace_identity;
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_types::task::{TaskComment, TaskHistoryEntry};
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskComment, TaskHistoryEntry};
 use serde_json::{Map, Value};
 
 use super::output::{
@@ -80,6 +80,13 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         bold("Status:"),
         text(field("status").unwrap_or_default(), Domain::TaskStatus)
     );
+    if let Some(run) = run_summary(runtime, task) {
+        let _ = writeln!(out, "{run}");
+    }
+    let pr = pr_summary(task);
+    if let Some(pr) = &pr {
+        let _ = writeln!(out, "{pr}");
+    }
     let _ = writeln!(
         out,
         "{} {}",
@@ -166,8 +173,17 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
     if !artifacts.is_empty() {
-        let _ = writeln!(out, "{}", bold("Artifacts:"));
-        for artifact in artifacts {
+        if artifacts.len() > 5 {
+            let _ = writeln!(
+                out,
+                "{} {} total (showing first 5)",
+                bold("Artifacts:"),
+                artifacts.len()
+            );
+        } else {
+            let _ = writeln!(out, "{} {}", bold("Artifacts:"), artifacts.len());
+        }
+        for artifact in artifacts.iter().take(5) {
             let _ = writeln!(out, "  - {}", artifact_label(artifact));
         }
     }
@@ -204,9 +220,17 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         .get("external_refs")
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
-    if !external_refs.is_empty() {
+    let visible_external_refs = external_refs
+        .iter()
+        .filter(|external_ref| {
+            pr.is_none()
+                || external_ref.get("system").and_then(Value::as_str)
+                    != Some(GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        })
+        .collect::<Vec<_>>();
+    if !visible_external_refs.is_empty() {
         let _ = writeln!(out, "{}", bold("External refs:"));
-        for external_ref in external_refs {
+        for external_ref in visible_external_refs {
             let part = |key: &str| {
                 external_ref
                     .get(key)
@@ -284,7 +308,9 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             let _ = writeln!(out, "  {line}");
         }
     }
-    if let Some(pr_status) = field("pr_status") {
+    if pr.is_none()
+        && let Some(pr_status) = field("pr_status")
+    {
         let _ = writeln!(out, "{} {}", bold("PR Status:"), pr_status);
     }
     if let Some(review) = task.get("review") {
@@ -306,6 +332,82 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         dimmed(&timestamp(field("updated_at").unwrap_or_default()))
     );
     Ok(Payload::blocks(doc, vec![Block::text(out)]).into())
+}
+
+/// The operator-facing run summary belongs only on active and review tasks.
+/// The observed read avoids reconciling or changing a stale run while showing a task.
+fn run_summary(runtime: &OrbitRuntime, task: &Map<String, Value>) -> Option<String> {
+    let status = task.get("status").and_then(Value::as_str)?;
+    if !matches!(status, "in-progress" | "in_progress" | "review") {
+        return None;
+    }
+    let run_id = task
+        .get("job_run_id")
+        .and_then(Value::as_str)
+        .filter(|run_id| !run_id.is_empty())?;
+
+    let run = match runtime.show_job_run_observed(run_id) {
+        Ok(run) => Some(run),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.cli.task",
+                %run_id,
+                %error,
+                "task run state could not be read"
+            );
+            None
+        }
+    };
+    let state = run
+        .as_ref()
+        .map(|run| format!("{:?}", run.state).to_ascii_lowercase())
+        .unwrap_or_else(|| "unknown".to_string());
+    let task_machine = task.get("job_run_machine").and_then(location_label);
+    let run_machine = run
+        .as_ref()
+        .and_then(|run| run.executed_on.as_ref())
+        .and_then(|location| {
+            location_label_parts(
+                Some(location.machine_id.as_str()),
+                location.machine_name.as_deref(),
+            )
+        });
+    let machine = task_machine
+        .or(run_machine)
+        .unwrap_or_else(|| "unknown host".to_string());
+    Some(format!("Run: {run_id} on {machine} ({state})"))
+}
+
+fn location_label(location: &Value) -> Option<String> {
+    location_label_parts(
+        location.get("machine_id").and_then(Value::as_str),
+        location.get("machine_name").and_then(Value::as_str),
+    )
+}
+
+fn location_label_parts(machine_id: Option<&str>, machine_name: Option<&str>) -> Option<String> {
+    machine_name
+        .filter(|name| !name.is_empty())
+        .or_else(|| machine_id.filter(|id| !id.is_empty()))
+        .map(ToOwned::to_owned)
+}
+
+/// The PR's stored review status moves beside its number in the summary.
+fn pr_summary(task: &Map<String, Value>) -> Option<String> {
+    let pull_request = task
+        .get("external_refs")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|external_ref| {
+            external_ref.get("system").and_then(Value::as_str)
+                == Some(GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        })?;
+    let number = pull_request.get("id").and_then(Value::as_str)?;
+    let state = task
+        .get("pr_status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    Some(format!("PR: #{number} ({state})"))
 }
 
 /// The text of a `--fields` projection: one field's value bare, several each
