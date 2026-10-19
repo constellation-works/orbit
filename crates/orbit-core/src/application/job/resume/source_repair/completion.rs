@@ -74,14 +74,41 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("completion state missing"))?;
         if orbit_types::workflow::pr_completion_has_mutation_provenance(
             &self.get_task_history(task_id)?,
-        ) || !state.rebase_recovery_checkpoints.is_empty()
-            || state.failure_activity_checkpoint.is_some()
-        {
+        ) {
             return Err(refuse(
-                "repair or mutation provenance requires governed candidate recovery",
+                "PR completion repair or mutation provenance requires governed candidate recovery",
+            ));
+        }
+        if state.failure_activity_checkpoint.is_some() {
+            return Err(refuse(
+                "failure_activity_checkpoint requires governed candidate recovery",
             ));
         }
         let job = self.source_repair_definition(&source)?;
+        let publication = job.steps.iter().position(|step| {
+            matches!(&step.body, JobV2StepBody::Target(t)
+                if matches!(&t.spec, ActivityV2Spec::Deterministic(s) if s.action == "git_push"))
+        });
+        for (step_id, checkpoint) in &state.rebase_recovery_checkpoints {
+            // Routine preparation predates the published candidate, whose head,
+            // base and validation receipts are still authenticated below.
+            // Unknown steps, rewrite recovery and post-publication checkpoints
+            // retain the governed candidate recovery route.
+            let preparation = checkpoint["kind"] == "delivery_preparation"
+                && publication.is_some_and(|index| {
+                    job.steps[..index].iter().any(|step| {
+                        step.id == *step_id
+                            && matches!(&step.body, JobV2StepBody::Target(t)
+                                if matches!(&t.spec, ActivityV2Spec::Deterministic(s)
+                                    if s.action == "pr_prepare"))
+                    })
+                });
+            if !preparation {
+                return Err(refuse(format!(
+                    "rebase recovery checkpoint at `{step_id}` requires governed candidate recovery"
+                )));
+            }
+        }
         let index = job
             .steps
             .iter()

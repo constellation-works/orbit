@@ -62,7 +62,7 @@ fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
     std::fs::write(
         &hook,
         format!(
-            "#!/bin/sh\nprintf 'push\\n' >> '{}'\n",
+            "#!/bin/sh\nwhile read -r old new ref; do\n  if [ \"$ref\" != refs/heads/main ]; then printf 'push\\n' >> '{}'; fi\ndone\n",
             f._root.path().join("pushes").display()
         ),
     )
@@ -213,9 +213,23 @@ fn unchanged_publication_tail(auto_fix: bool, review: bool) {
     }
     let calls = tail_forge(&f, "lost_read");
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let preparation = &state.rebase_recovery_checkpoints["prepare_branch"];
+    assert_eq!(preparation["kind"], "delivery_preparation");
+    assert_eq!(preparation["decision"], "rebase_required");
+    assert_eq!(preparation["commits_behind"], 1);
+    assert_ne!(state.pipeline["sync_base"]["head_sha_before"], f.head);
     let prefix = state.step_outputs.clone();
     let artifacts = f.runtime.get_task_artifact_manifest(&f.task).unwrap();
-    let outcome = run_tail(&f).unwrap();
+    let outcome = run_tail(&f).unwrap_or_else(|error| {
+        panic!(
+            "{error}; recovery: {:?}",
+            f.runtime
+                .read_run_state(&f.source.run_id)
+                .unwrap()
+                .unwrap()
+                .final_recovery
+        )
+    });
     assert!(outcome.success, "{outcome:?}");
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
     assert_eq!(
@@ -257,6 +271,10 @@ fn unchanged_publication_tail(auto_fix: bool, review: bool) {
             .count(),
         1,
         "completion must not push or restart CI"
+    );
+    assert_eq!(
+        after.rebase_recovery_checkpoints,
+        state.rebase_recovery_checkpoints
     );
     let recovery = after.final_recovery.unwrap();
     assert!(matches!(
@@ -303,6 +321,9 @@ pub(super) fn completion_reuse_refuses_drift() {
         "other_worker",
         "retry_ancestor",
         "prior_recovery",
+        "invalid_preparation",
+        "unknown_preparation",
+        "failure_activity",
         "rebound",
         "pr",
         "merge_intent",
@@ -400,11 +421,27 @@ pub(super) fn completion_reuse_refuses_drift() {
                 }
                 f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
             }
-            "prior_recovery" => {
+            "prior_recovery" | "invalid_preparation" | "unknown_preparation" => {
                 let mut state = before.clone();
+                let (step, kind) = match case {
+                    // A preparation label cannot exempt a post-publication step.
+                    "prior_recovery" => ("complete_pr", "delivery_preparation"),
+                    "invalid_preparation" => ("prepare_branch", "rebase_recovery"),
+                    _ => ("unknown_step", "delivery_preparation"),
+                };
                 state
                     .rebase_recovery_checkpoints
-                    .insert("complete_pr".into(), json!({"head_sha":f.head}));
+                    .insert(step.into(), json!({"kind":kind,"head_sha":f.head}));
+                f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+            }
+            "failure_activity" => {
+                let mut state = before.clone();
+                state.failure_activity_checkpoint =
+                    Some(orbit_types::workflow::FailureActivityCheckpoint {
+                        activity_name: "pr_failure_handoff".into(),
+                        failed_step_id: "complete_pr".into(),
+                        output: json!({}),
+                    });
                 f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
             }
             "retry_ancestor" => {
@@ -457,12 +494,21 @@ pub(super) fn completion_reuse_refuses_drift() {
             _ => unreachable!(),
         }
         let expected = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
-        assert!(
-            f.runtime
-                .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
-                .is_err(),
-            "{case}"
-        );
+        let refusal = f
+            .runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap_err();
+        let condition = match case {
+            "prior_recovery" => Some("rebase recovery checkpoint at `complete_pr`"),
+            "invalid_preparation" => Some("rebase recovery checkpoint at `prepare_branch`"),
+            "unknown_preparation" => Some("rebase recovery checkpoint at `unknown_step`"),
+            "failure_activity" => Some("failure_activity_checkpoint"),
+            "reviewer" => Some("reviewer repair"),
+            _ => None,
+        };
+        if let Some(condition) = condition {
+            assert!(refusal.to_string().contains(condition), "{case}: {refusal}");
+        }
         assert_eq!(
             f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap(),
             expected,
