@@ -59,9 +59,8 @@ agent is a direct child of the pipeline worker, so `agent_run_list` reports no m
 `busy=false` for a perfectly healthy one. Do not read that as a lost child [ORB-10496].
 
 Ask the pipeline instead. `orbit run show` prints one `Agent:` line per provider subprocess that
-has not reported an exit. `orbit run show --json` and `GET /api/runs/:id` (bridge
-`workflow_run_status`) both project those children with `RunProviderProcess::to_json`, so the
-objects share keys — including `last_activity_at`, `latest_message`, `stopped_descendants`, and
+has not reported an exit. `orbit run show --json` and `GET /api/runs/:id` both project those
+children with `RunProviderProcess::to_json`, so the objects share keys — including `last_activity_at`, `latest_message`, `stopped_descendants`, and
 `blocked_on_stopped_descendant` — and omit `run_id`, which the caller already has:
 
 ```text
