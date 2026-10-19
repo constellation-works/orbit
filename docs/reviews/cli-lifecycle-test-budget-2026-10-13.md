@@ -604,3 +604,10 @@ the generated index row is unchanged because the first heading and summary
 were not edited. Final repository gates remain pipeline-owned and not run in
 this session. The real native CLI scenarios supply the meaningful positive,
 refusal, accepted-inode and recovery QA; no additional manual QA is claimed.
+
+## Later changes
+
+Checked against HEAD on 2026-10-19. The candidate landed as PR #4749 (merge 9e5114917). Three names in the retirement map no longer match the landed suite:
+
+- `run_show_hides_shipped_catalog_layers_unless_verbose` and `run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record` are listed as surviving in `run_show_contracts`, but neither is defined at HEAD. Commit 5951deb5a dropped them when the candidate landed.
+- `generation_root::preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global` is now `preflight_with_root_admits_uninitialized_override_cwd_and_host_global` in `crates/orbit-cli/tests/workspace/generation_root.rs`; commit 5951deb5a made the rename.

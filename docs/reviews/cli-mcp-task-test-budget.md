@@ -1,7 +1,7 @@
 ---
 type: review
 summary: MCP and task CLI test-budget measurements and coverage mapping
-last_validated: 2026-10-13
+last_validated: 2026-10-19
 ---
 # MCP and task CLI test budget
 
@@ -466,4 +466,11 @@ already-initialized fixture with its assertions intact.
 ### [crates/orbit-cli/tests/task/config_show_task_reads.rs](../../crates/orbit-cli/tests/task/config_show_task_reads.rs)
 
 - one_config_show_takes_the_task_commit_lock_once → review_after_landing_cli::after_landing_review_mints_exactly_when_the_auto_task_is_enabled. All lock-count and projection assertions run against an equivalent fresh runtime over the already-minted review fixture; no duplicate workspace, commit or review-task setup.
+
+## Later changes
+
+Checked against HEAD on 2026-10-19. Three names above no longer match the suite:
+
+- `mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio` is listed under retired tests, but it is defined again. Commit d1b4511ff restored it in the QA-sweep coverage reconciliation; f8d176b65 has the same subject and diff stat.
+- `orbit_root_env_selects_the_same_checkout_as_the_root_flag` and `update_status_performs_approve_and_reject_transitions` are listed as retained named rows, but neither is defined at HEAD. Commits b7682ef89 and 7182fadd3 removed them with the subject "Retire duplicate fixture-hermeticity and listing tests".
 

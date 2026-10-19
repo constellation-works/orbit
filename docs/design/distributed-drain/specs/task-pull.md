@@ -68,7 +68,7 @@ still orders every admission; the declaration only narrows what this executor is
 
 ## Class and routing
 
-Only the owner serves this `control_plane` tool. A caller must have the workspace's `agent`
+Only the owner serves this `control_plane` tool. A caller must hold the workspace's `agent` or `operator`
 capability. `agent_invoke` is not needed because execution starts locally. Workspace selection uses
 the host-qualified selector. SSH login establishes owner access; session agent/operator capability
 and caller-side managed-run restrictions remain. There is no destination callers file, key-bound
@@ -229,7 +229,7 @@ for a pull drain as for a local one.
    one, and record it in `capacity_unavailable` [ORB-15774]; a repair claim is filtered the same
    way.
    Also skip, into `crew_unavailable`, a task the requesting machine's same drain run
-   (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
+   (`run_context.run_id`) released for an `environment`, `transient` (unless it carries a forge hold), `owner_route` or `provider`
    failure, or by an operator cancel, and every task when that run released one for an
    `environment` or `owner_route` failure — the host itself is suppressed for the window; another
    drain may take them [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
