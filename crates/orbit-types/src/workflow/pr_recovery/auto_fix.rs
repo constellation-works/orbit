@@ -175,7 +175,7 @@ pub fn decide_pr_auto_fix(
 /// failure text counts: a generic CLI exit's stderr tail is provider output
 /// and may quote the marker without the watcher having admitted anything.
 pub fn is_pr_auto_fix_check_repair(message: &str) -> bool {
-    let authoritative = super::failure_classification_text(message);
+    let authoritative = crate::workflow::failure_classification_text(message);
     authoritative
         .match_indices(PR_AUTO_FIX_CHECK_REPAIR_MARKER)
         .any(|(at, marker)| authoritative[at + marker.len()..].starts_with(": pull request #"))

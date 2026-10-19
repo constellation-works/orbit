@@ -19,8 +19,8 @@ pub fn pr_completion_has_mutation_provenance(history: &[TaskHistoryEntry]) -> bo
                 | super::PR_AUTO_FIX_PUSHED_EVENT
                 | super::PR_BASE_UPDATE_RESERVED_EVENT
                 | super::PR_INFRASTRUCTURE_RESERVED_EVENT
-                | super::SOURCE_REPAIR_RESERVED
-                | super::SOURCE_REPAIR_LINKED
+                | crate::workflow::SOURCE_REPAIR_RESERVED
+                | crate::workflow::SOURCE_REPAIR_LINKED
                 | PR_COMPLETION_MUTATION_STARTED_EVENT
         )
     })
