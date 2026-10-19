@@ -80,6 +80,14 @@ const CLAUDE_LIMIT: &str = "You've hit your limit · resets 3pm (America/Los_Ang
 /// grok 1.0.46's HTTP failure, on stderr.
 const GROK_LIMIT: &str = "Error: Too Many Requests (429): rate limit exceeded for this account";
 
+/// Grok Build's billing error, on stderr.
+const GROK_BUILD_402_LIMIT: &str =
+    "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+
+/// An agent's declared envelope failure quoting Grok Build's 402 error: the
+/// work's report, not the provider's.
+const GROK_BUILD_402_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"upstream_limit","message":"API error (status 402 Payment Required): Grok Build usage balance exhausted"}}"#;
+
 /// An agent's declared envelope failure that quotes a GitHub rate limit (box
 /// run jrun-20261003-0630-c2): the work's report, not the provider's.
 const GITHUB_RATE_LIMIT_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"partial_scan","message":"partial_scan: GitHub rate-limit exhaustion; Too Many Requests (429) from api.github.com; You've hit your usage limit"}}"#;
@@ -163,6 +171,10 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
         r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
         serde_json::to_string(GITHUB_RATE_LIMIT_ENVELOPE).unwrap()
     );
+    let grok_declared_failure = format!(
+        r#"{{"type":"item.completed","item":{{"type":"agent_message","text":{}}}}}"#,
+        serde_json::to_string(GROK_BUILD_402_ENVELOPE).unwrap()
+    );
     let cases = vec![
         case(
             "agy",
@@ -200,12 +212,37 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             true,
         ),
         case("grok", Provider::Grok, String::new(), GROK_LIMIT, 1, true),
+        case(
+            "grok",
+            Provider::Grok,
+            String::new(),
+            GROK_BUILD_402_LIMIT,
+            1,
+            true,
+        ),
         // The agent declared its own failure over a GitHub rate limit.
         case("codex", Provider::Codex, declared_failure, "", 0, false),
         case(
             "claude",
             Provider::Claude,
             GITHUB_RATE_LIMIT_ENVELOPE.to_string(),
+            "",
+            1,
+            false,
+        ),
+        // The agent declared its own failure quoting Grok Build's 402 error.
+        case(
+            "codex",
+            Provider::Codex,
+            grok_declared_failure,
+            "",
+            0,
+            false,
+        ),
+        case(
+            "claude",
+            Provider::Claude,
+            GROK_BUILD_402_ENVELOPE.to_string(),
             "",
             1,
             false,
@@ -217,6 +254,17 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             format!(
                 r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"gh api","aggregated_output":{},"exit_code":1,"status":"failed"}}}}"#,
                 serde_json::to_string(GROK_LIMIT).unwrap()
+            ),
+            "",
+            1,
+            false,
+        ),
+        case(
+            "codex",
+            Provider::Codex,
+            format!(
+                r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"curl","aggregated_output":{},"exit_code":1,"status":"failed"}}}}"#,
+                serde_json::to_string(GROK_BUILD_402_LIMIT).unwrap()
             ),
             "",
             1,
