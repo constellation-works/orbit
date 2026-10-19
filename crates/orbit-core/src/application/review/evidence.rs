@@ -13,10 +13,11 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
-    REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
-    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
-    ReviewExternalEvidence, ReviewGateHistoryNote, ReviewValidation, ValidationOutcome,
+    BUBBLEWRAP_DEFERRAL_PREFIX, FindingDisposition, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, REVIEW_GATE_ARTIFACT,
+    ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold, ReviewEvidenceKind,
+    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
+    ReviewGateHistoryNote, ReviewValidation, SEATBELT_DEFERRAL_PREFIX, ValidationOutcome,
     ValidationRole, is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
@@ -62,12 +63,18 @@ pub(super) fn evidence_only(
 /// or treating an unnamed missing check as an external requirement. A
 /// required record whose pass deferred its confined path ran nothing there,
 /// so external evidence may stand in for it like a `not_run` one [ORB-14334].
+/// [ORB-17043] A broader required run that passed only by deferring tests a
+/// `host_sandbox_test` requirement each runs on its own ([`covers_deferral`])
+/// counts as passed once those are received; one uncovered deferral leaves it
+/// `not_run`. Each requirement still needs its own required record, which
+/// the owner's handoff check binds to the host's result.
 pub(super) fn with_external_checks_passed(
     records: &[ReviewValidation],
     requirements: &[ReviewEvidenceRequirement],
 ) -> Option<Vec<ReviewValidation>> {
+    let requirements = canonical_requirements(requirements)?;
     let mut validation = records.to_vec();
-    for required in canonical_requirements(requirements)? {
+    for required in &requirements {
         let mut matched = false;
         for record in &mut validation {
             if record.command == required.command && record.role == ValidationRole::Required {
@@ -86,7 +93,96 @@ pub(super) fn with_external_checks_passed(
             return None;
         }
     }
+    for record in &mut validation {
+        let covered = record.deferral().is_some()
+            && record.deferred.iter().all(|notice| {
+                notice.trim().is_empty()
+                    || requirements
+                        .iter()
+                        .any(|required| covers_deferral(required, record, notice))
+            });
+        if covered {
+            record.deferred.clear();
+        }
+    }
     Some(validation)
+}
+
+/// [ORB-17043] Whether `required`, a `host_sandbox_test`, runs exactly the
+/// test that the deferral `notice` of `record` names, so a passing host run
+/// of it executed that deferred path. `record` must be a required `cargo
+/// test` run naming one package (`-p`) and one target (`--test`) that passed
+/// only by deferring; `notice` must be a Bubblewrap, Seatbelt or ps-denied
+/// deferral, `<prefix> <test>: <detail>`; and `required` must be admitted as
+/// `cargo test` of that package and target, filtered to exactly `<test>`.
+/// Anything else covers nothing: a requirement without a filter, a filter
+/// naming only the test's module, an unadmitted command, a failed record.
+pub(super) fn covers_deferral(
+    required: &ReviewEvidenceRequirement,
+    record: &ReviewValidation,
+    notice: &str,
+) -> bool {
+    if required.kind != ReviewEvidenceKind::HostSandboxTest
+        || record.role != ValidationRole::Required
+        || record.outcome != ValidationOutcome::Passed
+    {
+        return false;
+    }
+    let (Some(test), Some((package, target))) =
+        (deferred_test(notice), cargo_test_scope(&record.command))
+    else {
+        return false;
+    };
+    matches!(
+        HostSandboxCommand::admit(&required.command, &[]),
+        Ok(HostSandboxCommand::CargoTest {
+            package: covered_package,
+            target: covered_target,
+            filter: Some(filter),
+        }) if covered_package == package && covered_target == target && filter == test
+    )
+}
+
+/// The test a sandbox deferral notice names: `<prefix> <test>: <detail>`.
+fn deferred_test(notice: &str) -> Option<&str> {
+    let notice = notice.trim();
+    let rest = [
+        BUBBLEWRAP_DEFERRAL_PREFIX,
+        SEATBELT_DEFERRAL_PREFIX,
+        PS_DENIED_DEFERRAL_PREFIX,
+    ]
+    .into_iter()
+    .find_map(|prefix| notice.strip_prefix(prefix))?
+    .trim_start();
+    let test = rest.split_once(": ").map_or(rest, |(test, _)| test).trim();
+    (!test.is_empty() && !test.contains(char::is_whitespace)).then_some(test)
+}
+
+/// The one package and one integration test target a `cargo test` command
+/// names before any `--`, or `None` when it names either none or several.
+fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
+    let mut words = command.split_whitespace();
+    if words.next()? != "cargo" || words.next()? != "test" {
+        return None;
+    }
+    let (mut package, mut target) = (Vec::new(), Vec::new());
+    while let Some(word) = words.next() {
+        let (slot, inline) = match word {
+            "--" => break,
+            "-p" | "--package" => (&mut package, None),
+            "--test" => (&mut target, None),
+            _ => match word.split_once('=') {
+                Some(("--package", value)) => (&mut package, Some(value)),
+                Some(("--test", value)) => (&mut target, Some(value)),
+                _ => continue,
+            },
+        };
+        slot.push(inline.or_else(|| words.next())?);
+    }
+    match (package.as_slice(), target.as_slice()) {
+        ([package], [target]) => Some((package, target)),
+        _ => None,
+    }
 }
 
 /// Use the store's key for every evidence locator guard. Keep the review

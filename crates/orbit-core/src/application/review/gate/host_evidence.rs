@@ -11,7 +11,10 @@
 //! host's, before the verdict is reconciled:
 //!
 //! - only when the report is otherwise evidence-only, so a review that would
-//!   block anyway runs nothing;
+//!   block anyway runs nothing. A broader required run that passed only by
+//!   deferring tests counts as evidence-only when each deferred test is one
+//!   requirement's exact `cargo test` filter in the same package and target
+//!   [ORB-17043];
 //! - only a command [`HostSandboxCommand::admit`] admits — the `cargo test`
 //!   shape or an owner-required command — refused with a typed reason and
 //!   never run otherwise;
@@ -22,9 +25,10 @@
 //! settlement counts like any external evidence on this tree, so the review
 //! can pass without a hold. A run that skipped, deferred, ran no test or met
 //! an unavailable sandbox leaves the evidence missing, and the review holds.
-//! A failed run fails the reviewer's record, and the review blocks. The
-//! certificate keeps every record, and a passed verdict's handoff pins each
-//! result and log for the owner to check.
+//! A failed run fails the reviewer's record, and any broader record that
+//! deferred the same test, and the review blocks. The certificate keeps every
+//! record, and a passed verdict's handoff pins each result and log for the
+//! owner to check.
 
 use std::collections::BTreeMap;
 
@@ -39,7 +43,9 @@ use serde_json::json;
 
 use crate::OrbitRuntime;
 
-use super::super::evidence::{canonical_requirements, satisfied_external_evidence};
+use super::super::evidence::{
+    canonical_requirements, covers_deferral, satisfied_external_evidence,
+};
 use super::super::fulfilment::fulfilment_artifact_paths;
 use super::context::GateContext;
 use super::judgement::{Judgement, write_artifact};
@@ -203,8 +209,15 @@ impl Judgement {
                     record.detail = refusal.detail;
                     if refusal.reason == HostEvidenceReason::TestFailed {
                         for validation in &mut self.validation {
-                            if validation.command == required.command
-                                && validation.role == ValidationRole::Required
+                            // [ORB-17043] A broader run that deferred the
+                            // failing test claimed a pass it never had.
+                            let covered = validation
+                                .deferred
+                                .iter()
+                                .any(|notice| covers_deferral(required, validation, notice));
+                            if (validation.command == required.command
+                                && validation.role == ValidationRole::Required)
+                                || covered
                             {
                                 validation.outcome = ValidationOutcome::Failed;
                                 validation.note = Some(format!(

@@ -15,6 +15,7 @@ use orbit_types::workflow::{
 
 use crate::OrbitRuntime;
 
+use super::super::super::evidence::covers_deferral;
 use super::super::context::GateContext;
 
 use super::Judgement;
@@ -77,24 +78,43 @@ impl Judgement {
             };
             let (artifact, evidence) = found;
             used_carry |= via_carry.is_some();
+            let carried = via_carry
+                .map(|carry| {
+                    format!(
+                        " (carried from tree {} by unchanged patch {})",
+                        carry.from_tree, carry.patch_id
+                    )
+                })
+                .unwrap_or_default();
             for record in &mut self.validation {
                 if record.command == required.command && record.role == ValidationRole::Required {
                     record.outcome = ValidationOutcome::Passed;
                     // The external run executed any path the reviewer's run deferred.
                     record.deferred.clear();
-                    let carried = via_carry
-                        .map(|carry| {
-                            format!(
-                                " (carried from tree {} by unchanged patch {})",
-                                carry.from_tree, carry.patch_id
-                            )
-                        })
-                        .unwrap_or_default();
                     let note = format!(
                         "External result {artifact}; log {}; tree {}{carried}",
                         evidence.log_artifact, candidate.tree,
                     );
                     extend_note(&mut record.note, note);
+                }
+                // [ORB-17043] A broader run that deferred the exact test this
+                // host result executed is established for that test.
+                let ran = record
+                    .deferred
+                    .iter()
+                    .filter(|notice| covers_deferral(required, record, notice))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !ran.is_empty() {
+                    record.deferred.retain(|notice| !ran.contains(notice));
+                    extend_note(
+                        &mut record.note,
+                        format!(
+                            "Deferred test run by `{}`: external result {artifact}; log {}; \
+                             tree {}{carried}",
+                            required.command, evidence.log_artifact, candidate.tree,
+                        ),
+                    );
                 }
             }
             false
