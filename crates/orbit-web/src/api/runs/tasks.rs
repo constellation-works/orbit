@@ -11,7 +11,7 @@ use orbit_core::application::job::job_run_task_ids as task_ids;
 /// Titles of the tasks the selected runs reference: a keyed read per
 /// referenced id, never a workspace listing. Run input is free-form, so ids
 /// that are not task ids are never read and stay unlabelled.
-pub(super) fn task_titles<'a>(
+pub(in crate::api) fn task_titles<'a>(
     runtime: &OrbitRuntime,
     runs: impl IntoIterator<Item = &'a JobRun>,
 ) -> Result<BTreeMap<String, String>, OrbitError> {
@@ -30,7 +30,11 @@ pub(super) fn task_titles<'a>(
         .collect())
 }
 
-pub(super) fn add_tasks(value: &mut Value, run: &JobRun, titles: &BTreeMap<String, String>) {
+pub(in crate::api) fn add_tasks(
+    value: &mut Value,
+    run: &JobRun,
+    titles: &BTreeMap<String, String>,
+) {
     let ids = task_ids(run);
     if ids.is_empty() {
         value["task_ids"] = Value::Null;
