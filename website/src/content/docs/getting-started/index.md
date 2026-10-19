@@ -50,7 +50,7 @@ orbit web serve
 The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
 this machine. Keep it running in its own terminal.
 
-![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
+![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and Drain in the rail on the left.](../../../assets/dashboard/dashboard-tasks.png)
 
 | Section | What you do there |
 |---|---|

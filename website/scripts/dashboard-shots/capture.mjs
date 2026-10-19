@@ -294,7 +294,7 @@ if (selection === "--hosts-only" || selection === "--run-detail") {
 await open("tasks?status=in-progress,review,blocked,proposed,backlog", "#tasks-body .row");
 
 // The whole Tasks view: the top bar with host resources and the refresh
-// clock, the rail, the status cards, and the Drain dock beside them.
+// clock, the rail, and the status cards.
 await shot("dashboard-tasks", [{ x: 0, y: 0, width: WIDTH, height: HEIGHT }], 0);
 
 // The task list from its header through the end of the Backlog card:
