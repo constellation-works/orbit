@@ -944,10 +944,12 @@ paintApprovals([
 ]);
 assert.equal(approveButton('ORB-81').textContent, 'Approve', 'review without a PR has an approval');
 assert.ok(approveButton('ORB-81').title.includes('done'), 'review approval explains the destination');
-assert.equal(approveButton('ORB-82').textContent, 'Approve', 'review with a PR keeps an approval');
+assert.equal(approveButton('ORB-82'), null, 'review with a PR omits the row approval');
 const prLink = rowFor('ORB-82').querySelector('.task-quick-link');
-assert.equal(prLink.href, prRef[0].url, 'review keeps the PR link beside approval');
+assert.equal(prLink.href, prRef[0].url, 'review keeps the PR link');
 assert.equal(prLink.textContent, 'PR #123');
+assert.equal(rowFor('ORB-82').querySelector('.task-quick-cell').children.length, 1, 'the linked review action cell contains only the PR link');
+assert.ok(!rowFor('ORB-82').classList.contains('no-quick'), 'the PR link keeps the review action column');
 assert.equal(approveButton('ORB-83').textContent, 'Approve', 'proposed keeps its approval');
 assert.ok(approveButton('ORB-83').title.includes('backlog'));
 for (const item of currentTasks.filter(item => !['review', 'proposed'].includes(item.status))) {
@@ -975,17 +977,16 @@ assert.ok(byId['tasks-body'].querySelectorAll('.group-label').some(label => labe
 assert.equal(approveButton('ORB-81'), null, 'Done offers no approval');
 assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
 
-paintApprovals([task(82, { status: 'review', external_refs: prRef })]);
+paintApprovals([task(81, { status: 'review' })]);
 nextApproval = deferred();
-approveButton('ORB-82').dispatch('click');
+approveButton('ORB-81').dispatch('click');
 await settleActions();
-nextApproval.resolve(response({ error: 'The pull request has not landed' }, false));
+nextApproval.resolve(response({ error: 'Review is not ready to approve' }, false));
 await settleActions();
-assert.equal(rowFor('ORB-82').querySelector('.task-quick-error').textContent, 'approve failed: The pull request has not landed', 'the server refusal is inline');
+assert.equal(rowFor('ORB-81').querySelector('.task-quick-error').textContent, 'approve failed: Review is not ready to approve', 'a review without a PR shows the server refusal inline');
 assert.equal(currentTasks[0].status, 'review', 'refusal leaves the task in review');
 assert.equal(refreshes, 1, 'refusal does not refresh or move the task');
-assert.equal(approveButton('ORB-82').disabled, false, 'a refused approval can be retried');
-assert.ok(rowFor('ORB-82').querySelector('.task-quick-link'), 'the refusal retains the PR link');
+assert.equal(approveButton('ORB-81').disabled, false, 'a refused approval can be retried');
 
 // Both approval statuses use the same existing mutation refusal text.
 const assertDisabledApprovals = reason => {

@@ -285,7 +285,7 @@ try {
   await page.locator('#task-detail-body').getByRole('tab', { name: /^Artifacts/ }).click();
   await page.locator('.artifact-row').first().click();
   await page.locator('.artifact-preview', { hasText: 'hello from hostb' }).waitFor({ state: 'visible' });
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('hostb-NEW').locator('.task-quick.approve').click();
   await until('the approve action on hostb', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
   for (const route of ['jobs/history', 'runs/jrun-remote-1', 'operations/routines', 'diagnostics/incidents', 'config/effective', 'config/hosts']) {
     await page.evaluate((route) => { window.location.hash = route; }, route);
@@ -448,7 +448,7 @@ try {
   const readOnly = page.locator('#host-read-only');
   await readOnly.waitFor({ state: 'visible' });
   assert((await readOnly.textContent()).includes(READ_ONLY_REASON), 'the read-only note gives the refusal reason');
-  const quick = page.locator('.task-quick.approve').first();
+  const quick = taskRow('hostb-NEW').locator('.task-quick.approve');
   assert(await quick.isDisabled(), 'the quick action is disabled on a read-only host');
   assert((await quick.getAttribute('title')).includes(READ_ONLY_REASON), 'the disabled quick action says why');
   await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
@@ -648,13 +648,13 @@ try {
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
   await until('hostb connection read after Forward', () => logged(/^GET \/api\/hosts\/hostb\/connection(\?|$)/));
   // Writes follow the restored address too.
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('hostb-NEW').locator('.task-quick.approve').click();
   await until('the approve action on hostb after Forward', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
   await traverse(-1, 'Back on the serving host again', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
   await openTasks();
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   routeLog = [];
-  await page.locator('.task-quick.approve').first().click();
+  await taskRow('alpha-NEW').locator('.task-quick.approve').click();
   await until('the approve action on the serving host after Back', () => logged(/^POST \/api\/tasks\/alpha-NEW\/approve\?workspace=ws_orbit$/));
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), `no write leaves for hostb after Back: ${JSON.stringify(routeLog)}`);
   await page.close();
