@@ -578,7 +578,7 @@ Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
     admits at least every two minutes has one, and a one-off command does
     not: there `B` is the settled value. Memory uses the live reading minus
     the running deliveries' current use. The settled minute ends at most
-    about two minutes before now, the bound on how late `B` sees new load
+    about three minutes before now, the bound on how late `B` sees new load
     with no floor.
   - *No settled minute.* No worker recorded one lately (with no delivery
     running, or without worker containment on Linux), or a run blocks every
