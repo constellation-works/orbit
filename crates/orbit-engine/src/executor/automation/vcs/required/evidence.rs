@@ -14,8 +14,9 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-pub(super) const DIRECTORY_ENV: &str = "ORBIT_COMMAND_EVIDENCE_DIR";
-pub(super) const INVOCATION_ENV: &str = "ORBIT_COMMAND_EVIDENCE_INVOCATION";
+pub(in crate::executor::automation::vcs) const DIRECTORY_ENV: &str = "ORBIT_COMMAND_EVIDENCE_DIR";
+pub(in crate::executor::automation::vcs) const INVOCATION_ENV: &str =
+    "ORBIT_COMMAND_EVIDENCE_INVOCATION";
 // Use the existing inline read ceiling for the entire invocation, not per file.
 const MAX_BYTES: usize = orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES as usize;
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;
@@ -105,7 +106,11 @@ fn read_at(_anchor: &File, _name: &str, _limit: usize) -> io::Result<Vec<u8>> {
     ))
 }
 
-pub(super) fn capture(anchor: &File, invocation: &str, workspace: &Path) -> Value {
+pub(in crate::executor::automation::vcs) fn capture(
+    anchor: &File,
+    invocation: &str,
+    workspace: &Path,
+) -> Value {
     let result = (|| -> Result<Value, String> {
         let bytes = match read_at(anchor, "manifest.json", MAX_MANIFEST_BYTES) {
             Ok(bytes) => bytes,
@@ -193,7 +198,7 @@ pub(super) fn capture(anchor: &File, invocation: &str, workspace: &Path) -> Valu
 /// Attach every chunk before publishing a manifest that names it. Any failed
 /// or unknown write is recorded as incomplete; there is no retry or successful completeness
 /// claim when attachment did not conclusively complete.
-pub(super) fn retain<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn retain<H: RuntimeHost + ?Sized>(
     host: &H,
     task_ids: &[String],
     run_id: &str,

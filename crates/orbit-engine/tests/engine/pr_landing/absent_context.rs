@@ -51,7 +51,7 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
     )
     .unwrap();
     // `handoff_land` with `max_wait_seconds: 0` reads PR status under the 15s
-    // default process budget (`landing.rs` skips the recovery deadline, and
+    // default process budget (`landing/run.rs` skips the recovery deadline, and
     // `Deadline::remaining` still clamps a passed deadline to that budget).
     // The first exec of this image is the host-wide assessment queue
     // (`test_env::prime_executable`, ORB-15293). Land it here, before that read.

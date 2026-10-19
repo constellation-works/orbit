@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
 
-pub use super::base_claim::{
+pub use super::base::claim::{
     BaseFailureCheck, BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure,
 };
 pub use super::claim::implementer_summary;
@@ -563,12 +563,12 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
     workspace_path: &Path,
     command: &str,
 ) -> Result<RequiredValidationRun, OrbitError> {
-    let run = super::required_command::run_required_command(
+    let run = super::required::command::run_required_command(
         host,
         workspace_path,
         command,
         None,
-        super::required_command::VALIDATION_TIMEOUT_MS,
+        super::required::command::VALIDATION_TIMEOUT_MS,
     )?;
     Ok(RequiredValidationRun {
         failure_kind: run.failure_kind().as_str().map(str::to_string),

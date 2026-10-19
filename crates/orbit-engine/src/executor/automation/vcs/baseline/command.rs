@@ -1,4 +1,4 @@
-use super::super::required_command::{
+use super::super::required::command::{
     RequiredCommandRun, VALIDATION_TIMEOUT_MS, run_required_command,
 };
 use crate::context::RuntimeHost;

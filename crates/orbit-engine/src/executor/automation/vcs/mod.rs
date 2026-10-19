@@ -1,9 +1,6 @@
 pub(crate) mod absorbed;
 mod attribution;
-mod base_chase;
-mod base_claim;
-mod base_obsolescence;
-mod base_refresh;
+mod base;
 mod baseline;
 mod build_output;
 mod candidate_resume;
@@ -22,16 +19,13 @@ mod handoff;
 mod host_evidence;
 mod interrupted_review;
 mod landing;
-mod landing_checks;
 mod light_delivery;
 mod operations;
 mod owed_criteria;
 mod pr;
 mod push;
 mod remote_probe;
-mod required_capture;
-mod required_command;
-mod required_evidence;
+mod required;
 mod resume;
 pub mod review_gate;
 mod scratch_target;
@@ -41,7 +35,7 @@ mod worktree;
 #[cfg(test)]
 mod tests;
 
-pub use base_claim::{
+pub use base::claim::{
     ClaimedKnownRed, KnownRedUnconfirmed, verify_claimed_known_red, verify_claimed_known_red_base,
 };
 pub use baseline::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};

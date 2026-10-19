@@ -242,7 +242,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_owned_supervised_cancellable` | Owned transfer, signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
 | `orbit-engine/src/executor/automation/{dependabot,ci}/query.rs` | `run_process` | Deadline, capture |
 | `orbit-engine/src/executor/automation/vcs/{git,host_evidence}.rs`, `vcs/commit/git_ops.rs`, `vcs/worktree/cleanup.rs`, `vcs/operations/process.rs` | `run_process`; `run_process_streaming_stdout` (`vcs/git.rs`) | Deadline, capture or stdout relay |
-| `orbit-engine/src/executor/automation/vcs/required_command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
+| `orbit-engine/src/executor/automation/vcs/required/command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
 | `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `spawn_owned_supervised_cancellable` (sandbox-spawned child) | Adopt an owned child, empty stdin, deadline, `timed_out` |
 | `orbit-exec/src/validation_env.rs` | `run_probe_process` | Kill at once on deadline (an interactive shell ignores SIGTERM) |
 | `orbit-exec/src/build_sandbox/mod.rs` (plugin install phases), `build_sandbox/supervise.rs` | `build_sandbox::supervise::run` → `SupervisedChild::adopt` + `supervise` | Null stdin; two sinks sharing a head/tail log; wall-clock timeout; 1 s periodic directory cap and post-exit check; group termination with 5 s grace; 2 s pipe drain with workers joined; sandbox guard retained through cleanup (§1.4) |

@@ -294,7 +294,7 @@ filters may remain owner-evaluated without transferring priority authority to ca
 ## Landing consumes durable evidence and explicit completion authority
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-engine/src/executor/automation/vcs/pr/complete.rs`
+**Code anchors:** `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-engine/src/executor/automation/vcs/pr/complete/`
 
 ### Context
 

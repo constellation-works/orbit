@@ -1,9 +1,9 @@
 //! One owner-reserved base update for proven absent workflow emission.
-use super::pr::{
+use super::super::pr::{
     CheckState, DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state,
     read_pr_status_before,
 };
-use super::{completion_deadline::Deadline, operations};
+use super::super::{completion_deadline::Deadline, operations};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::HandoffCandidate;
@@ -13,7 +13,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub(super) enum RefreshStep {
+pub(in crate::executor::automation::vcs) enum RefreshStep {
     None,
     Wait,
     Changed,
@@ -24,7 +24,7 @@ pub(super) enum RefreshStep {
 /// provider's status and adapter proof are re-read after reserving, before
 /// the single write. No caller-authored evidence reaches this operation.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn recover<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     tasks: &[String],
@@ -67,8 +67,8 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             }
             return Ok(RefreshStep::Changed);
         }
-        super::landing_checks::verify_published_base_update(workspace, candidate, status)?;
-        let parents = super::git::git_output(
+        super::super::landing::checks::verify_published_base_update(workspace, candidate, status)?;
+        let parents = super::super::git::git_output(
             workspace,
             &[
                 "rev-list",
@@ -91,7 +91,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 "provider base differs from reserved emission source",
             ));
         }
-        let tree = super::git::git_output(
+        let tree = super::super::git::git_output(
             workspace,
             &[
                 "rev-parse",
@@ -128,8 +128,8 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::None);
     }
     match &status.review_decision {
-        super::pr::ReviewDecision::NotApplicable => {}
-        super::pr::ReviewDecision::Reported(value) if value == "APPROVED" => {}
+        super::super::pr::ReviewDecision::NotApplicable => {}
+        super::super::pr::ReviewDecision::Reported(value) if value == "APPROVED" => {}
         _ => return Err(refused("required or unreadable review decision")),
     }
     let number = status
@@ -202,7 +202,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             // Even an error may be an applied write with a lost response.
             let observed = read_pr_status_before(host, workspace, &number, deadline_ms)?;
             if observed.head_sha.as_deref() != Some(&request.head_sha) {
-                super::landing_checks::verify_published_base_update(
+                super::super::landing::checks::verify_published_base_update(
                     workspace, candidate, &observed,
                 )?;
                 return Ok(RefreshStep::Changed);
@@ -220,7 +220,7 @@ fn refused(reason: &str) -> OrbitError {
 /// Owner-local completion has no accepted-handoff row. Its existing exact
 /// published/review pins still supply the candidate; Git supplies its base.
 /// Missing checkpoints leave recovery unavailable, never weaken those pins.
-pub(super) fn owner_candidate(
+pub(in crate::executor::automation::vcs) fn owner_candidate(
     workspace: &Path,
     input: &Value,
     pin: &DeliveryPin,
@@ -235,16 +235,16 @@ pub(super) fn owner_candidate(
         return Ok(None);
     };
     let base = base.strip_prefix("origin/").unwrap_or(base);
-    let origin = super::git::git_output(workspace, &["remote", "get-url", "origin"])?;
-    let Some(repository) = super::claim::slug(&origin) else {
+    let origin = super::super::git::git_output(workspace, &["remote", "get-url", "origin"])?;
+    let Some(repository) = super::super::claim::slug(&origin) else {
         return Ok(None);
     };
-    let base_ref = super::git::resolve_worktree_start_point(
+    let base_ref = super::super::git::resolve_worktree_start_point(
         workspace,
         base,
-        super::git::base_sync_mode_from_input(input)?,
+        super::super::git::base_sync_mode_from_input(input)?,
     )?;
-    let base = super::git::git_output(workspace, &["merge-base", head, &base_ref])?;
+    let base = super::super::git::git_output(workspace, &["merge-base", head, &base_ref])?;
     Ok(Some(HandoffCandidate {
         repository,
         source_branch: branch.into(),
@@ -256,8 +256,8 @@ pub(super) fn owner_candidate(
             .base_branch
             .clone()
             .ok_or_else(|| refused("landing branch unavailable"))?,
-        candidate: super::review_gate::revision(workspace, head)?,
-        base: super::review_gate::revision(workspace, base.trim())?,
+        candidate: super::super::review_gate::revision(workspace, head)?,
+        base: super::super::review_gate::revision(workspace, base.trim())?,
         delivery: orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number },
     }))
 }

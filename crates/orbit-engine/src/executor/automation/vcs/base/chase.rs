@@ -14,14 +14,14 @@ use serde_json::{Value, json};
 use crate::DispatchError;
 use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 
-use super::super::input::{input_string_field, required_input_string};
-use super::freshness::{
+use super::super::super::input::{input_string_field, required_input_string};
+use super::super::freshness::{
     abort_owned_rebase, branch_freshness_against_ref, commit_sha, discard_rewrite,
     ensure_clean_for_rewrite, original_base_sha, perform_rebase_onto_base, recovery_run_id,
     unmerged_paths,
 };
-use super::git::{git_failure_error, git_run, git_timeout_error, timeout_recovery_error};
-use super::handoff::{HandoffContext, rebase_in_progress};
+use super::super::git::{git_failure_error, git_run, git_timeout_error, timeout_recovery_error};
+use super::super::handoff::{HandoffContext, rebase_in_progress};
 
 /// How many times one step may carry its certified recovery onto a base that
 /// advanced past it. Every chase either rebases cleanly, which costs seconds,
@@ -41,7 +41,7 @@ const MAX_BASE_CHASES: usize = 2;
 /// the prepared pre-rewrite HEAD, so the ordinary bounded conflict recovery
 /// can be admitted on its stopped rebase. Each chase onto a new base counts
 /// against [`MAX_BASE_CHASES`] in the host's own attempt record.
-pub(super) fn chase_advanced_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,

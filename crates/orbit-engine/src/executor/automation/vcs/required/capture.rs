@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 
-use super::base_claim::normalize_output;
+use super::super::base::claim::normalize_output;
 
 /// Source bytes per command, shared by stdout and stderr. Ordinary head/tail
 /// notices sit outside the count; causal-region notices fit within it.
@@ -22,7 +22,7 @@ const MAX_FAILURE_BYTES: usize = 64 * 1024;
 /// head, a tail and fair shares of nextest failure blocks, with explicit
 /// omission markers. Stderr stays after stdout, preserving tail diagnostics
 /// and the existing short-stderr allocation [ORB-14086].
-pub(super) fn capture(stdout: &str, stderr: &str) -> String {
+pub(in crate::executor::automation::vcs) fn capture(stdout: &str, stderr: &str) -> String {
     let stdout = trimmed_stream(stdout);
     let stderr = trimmed_stream(stderr);
     let separator = usize::from(!stdout.is_empty() && !stderr.is_empty());

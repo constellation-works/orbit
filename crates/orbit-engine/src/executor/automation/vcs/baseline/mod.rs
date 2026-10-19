@@ -49,7 +49,7 @@
 //! A command that selects what to test from the candidate's diff
 //! (`make ci-test-affected`) selects nothing on the base itself, where that
 //! diff is empty [ORB-15131]. When the candidate run reported its selection
-//! (see [`super::required_command`]), the base run is handed that selection,
+//! (see [`super::required::command`]), the base run is handed that selection,
 //! which also enters the cache key. A base result that ran another selection,
 //! reported none, or passed without executing a counted test is *not
 //! comparable* ([`compare::not_comparable`]): it neither makes the failure
@@ -57,7 +57,7 @@
 //! recorded the selection.
 //!
 //! A reviewer's red-base claim is checked through the same machinery in
-//! [`super::base_claim`], which may hand a base run only the candidate's
+//! [`super::base::claim`], which may hand a base run only the candidate's
 //! failing tests ([`FAILING_TESTS_KEY`]) [ORB-15328].
 
 mod cache;

@@ -254,7 +254,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         )));
     }
     if let RecoveredRewrite::Overtaken(checkpoint) = &recovery {
-        return super::super::base_chase::chase_advanced_base(
+        return super::super::base::chase::chase_advanced_base(
             host,
             input,
             context,

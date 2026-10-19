@@ -7,7 +7,7 @@
 //! and keeps the marker.
 //!
 //! `worktree::dependency_delivery` asks the question about a dependency's
-//! commits; `base_obsolescence` asks the same question about the commits a base
+//! commits; `base::obsolescence` asks the same question about the commits a base
 //! branch carries (ORB-10644). The rule lives here once so the two cannot
 //! drift.
 

@@ -18,13 +18,13 @@ use serde_json::json;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::super::base_claim::failure_identities;
 #[cfg(unix)]
-use super::super::base_claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
+use super::super::super::baseline::{cached_base_check, known_red};
 #[cfg(unix)]
-use super::super::baseline::{cached_base_check, known_red};
+use super::super::super::required::command::{VALIDATION_TIMEOUT_MS, run_required_command};
+use super::super::claim::failure_identities;
 #[cfg(unix)]
-use super::super::required_command::{VALIDATION_TIMEOUT_MS, run_required_command};
+use super::super::claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
 #[cfg(unix)]
 #[cfg(unix)]
 struct Host;

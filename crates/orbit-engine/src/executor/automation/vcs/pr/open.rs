@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::super::input::{input_string_field, required_input_string};
-use super::super::base_obsolescence::ensure_base_can_still_land;
+use super::super::base::obsolescence::ensure_base_can_still_land;
 use super::super::freshness::branch_freshness_against_ref;
 use super::super::git::git_output;
 use super::super::handoff::{

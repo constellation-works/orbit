@@ -1,6 +1,6 @@
 //! Checking a reviewer's claim that the pinned base fails a required check
 //! the same way [ORB-14434], through the base comparison delivery validation
-//! uses ([`super::baseline`]).
+//! uses ([`super::super::baseline`]).
 //!
 //! The claim's check need not replay the whole selection on the base
 //! [ORB-15328]. When the candidate's failures are all named tests, the base
@@ -28,12 +28,12 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::baseline::{
+use super::super::baseline::{
     BaseCommandResult, FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until,
     compare_with_base_until, hold_failures, known_red, run_validation_command_until,
 };
-use super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
-use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
+use super::super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
+use super::super::required::command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
 
 /// The share of a [`ReplayBudget`] reserved for the base replay: one part in
 /// this many.
@@ -329,7 +329,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         .is_none()
         .then(|| cached_base_check(host, workspace_path, base_sha, command, full.as_ref()))
         .flatten()
-        .filter(super::baseline::BaselineCheck::conclusive);
+        .filter(super::super::baseline::BaselineCheck::conclusive);
     // A timed-out run is compared whole for evidence, never confirmed.
     let narrowed = (!run.timed_out || cut.is_some())
         .then(|| failing_tests_selection(full.as_ref(), &on_candidate, claimed_failures))
@@ -555,7 +555,7 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
     }
     verify_claimed_known_red_base(workspace_path, base_branch, base_sync, base_sha)?;
     let cached = cached_base_check(host, workspace_path, base_sha, command, selection)
-        .filter(super::baseline::BaselineCheck::conclusive);
+        .filter(super::super::baseline::BaselineCheck::conclusive);
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
         (Some(check), _) => (check, true),
         (None, Some(narrowed)) => (
@@ -660,7 +660,7 @@ pub fn verify_claimed_known_red_base(
 /// `selection` with [`FAILING_TESTS_KEY`] naming the tests to replay on the
 /// base, or `None` when the candidate run reported no selection or a failure
 /// it names is not a test a run can be handed by name.
-pub(super) fn failing_tests_selection(
+pub(in crate::executor::automation::vcs) fn failing_tests_selection(
     selection: Option<&Value>,
     failures: &BTreeSet<String>,
     claimed: &[String],
@@ -724,7 +724,10 @@ fn test_id(name: &str) -> bool {
 /// Qualified requests match the binary as well as the test; bare libtest
 /// requests match that exact test path in any binary. Counts alone cannot
 /// distinguish a missing requested test from an unrelated executed one.
-pub(super) fn replay_coverage(selection: &Value, summary: &ValidationSummary) -> Option<String> {
+pub(in crate::executor::automation::vcs) fn replay_coverage(
+    selection: &Value,
+    summary: &ValidationSummary,
+) -> Option<String> {
     let requested = selection.get(FAILING_TESTS_KEY)?;
     let Some(tests) = requested.as_array().filter(|tests| !tests.is_empty()) else {
         return Some("the failing-test selection is malformed or empty".into());
@@ -772,7 +775,7 @@ fn executed_no_tests(summary: Option<&ValidationSummary>) -> Option<String> {
 
 /// Whitespace runs collapsed and color codes dropped, so two captures of one
 /// failure compare equal.
-pub(super) fn normalize_output(text: &str) -> String {
+pub(in crate::executor::automation::vcs) fn normalize_output(text: &str) -> String {
     static ANSI: OnceLock<Option<Regex>> = OnceLock::new();
     let text = match ANSI
         .get_or_init(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").ok())
@@ -791,8 +794,11 @@ pub(super) fn normalize_output(text: &str) -> String {
 /// made relative so a base worktree and the candidate compare equal.
 ///
 /// Required validation runs read them from the complete streams before
-/// capture bounds the text ([`super::required_command`]) [ORB-15375].
-pub(super) fn failure_identities(output: &str, root: &Path) -> std::collections::BTreeSet<String> {
+/// capture bounds the text ([`super::super::required::command`]) [ORB-15375].
+pub(in crate::executor::automation::vcs) fn failure_identities(
+    output: &str,
+    root: &Path,
+) -> std::collections::BTreeSet<String> {
     static PATTERNS: OnceLock<Option<[Regex; 4]>> = OnceLock::new();
     let Some([libtest, nextest, header, location]) = PATTERNS
         .get_or_init(|| {

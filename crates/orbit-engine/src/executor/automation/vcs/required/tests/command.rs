@@ -10,7 +10,7 @@ use std::path::Path;
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::super::required_command::{
+use super::super::command::{
     RequiredCommandRun, VALIDATION_TIMEOUT_MS, capture, missing_tool, run_required_command,
 };
 
