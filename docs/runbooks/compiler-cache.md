@@ -141,7 +141,7 @@ After merge, the landing owner must verify one **ordinary** successful trusted
 costs and stats. A subsequent ordinary PR consumer supplies whole-job performance
 evidence separately. A pre-merge PR cannot populate the trusted namespace. Do not
 run warming loops, weaken checks, or claim this infrastructure alone meets the
-900-second job budget.
+600-second job budget.
 
 ## Ownership and location
 

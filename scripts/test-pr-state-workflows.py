@@ -550,6 +550,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
         self.assertGreater(shards, 1)
+        # The shards start on the build's upload step; the partition guard
+        # follows it. A renamed upload step would leave them waiting for the
+        # whole build job.
+        build_steps = [step.get("name") for step in jobs["test-build"]["steps"]]
+        upload = "Upload nextest archive"
+        self.assertIn(upload, build_steps)
+        self.assertLess(build_steps.index(upload), build_steps.index("Prove the shards cover every test"))
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
@@ -562,8 +569,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partition = nextest[nextest.index("--partition") + 1]
                 self.assertNotIn(partition, partitions, f"{job_id} repeats {partitions.get(partition)}'s shard")
                 partitions[partition] = job["name"]
-                [wait] = self.run_step(job, "Await the test build")
-                self.assertEqual(wait[1:], ["--job", "Test build"])
+                [wait] = self.run_step(job, "Await the nextest archive")
+                self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
         self.assertEqual(sorted(partitions), sorted(f"count:{k}/{shards}" for k in range(1, shards + 1)),
                          "the shard jobs must select every count partition of NEXTEST_SHARDS")
         self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))

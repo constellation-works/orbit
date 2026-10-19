@@ -387,38 +387,48 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
   workflow test build, then `cargo nextest archive` of the workspace's lib, bin
   and test targets under the same lint environment, so the archive costs no
-  compile. It then runs
-  [check-nextest-partitions.py](../scripts/check-nextest-partitions.py), which
-  lists the archive once unpartitioned and once per `--partition count:k/N`
+  compile. The job uploads the archive as a one-day artifact, then runs
+  `ci-guardrails.sh --test-partitions PATH`:
+  [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
+  the archive once unpartitioned and once per `--partition count:k/N`
   (`NEXTEST_SHARDS` in `ci.yml`). It fails unless every test the full list
   selects is in exactly one shard, every shard selects at least one test, and
-  no shard selects a test outside the full list. The job uploads the archive
-  as a one-day artifact.
+  no shard selects a test outside the full list. A failure fails `Test build`,
+  and so the Check job's wait, while the shards already run.
 - `Test shard k/N` jobs, one per shard, start beside the build and set up
-  their runner. Each waits for `Test build` through
-  [ci-await-jobs.py](../scripts/ci-await-jobs.py), downloads the archive, and
-  runs `cargo nextest run --profile ci --partition count:k/N` from it.
+  their runner. Each waits through
+  [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
+  `Upload nextest archive` step rather than the whole job, downloads the
+  archive, and runs `cargo nextest run --profile ci --partition count:k/N`
+  from it. A build that fails before the upload fails the wait at once.
   Extracting into the checkout puts `target/debug/orbit` and the test binaries
   at the paths they were built for. Each shard uploads its nextest JUnit report
   (`target/nextest/ci/junit.xml`) as `nextest-junit-k`, which carries the
-  per-test durations. The Linux sandbox/policy enforcement gate runs from the
-  same archive in shard 1. The shards are separate literal jobs with no
-  matrix, gated on `Live PR state` like the other jobs: Orbit's PR-landing
-  recovery certifies a rerun after a failed gate only for such jobs.
-  `scripts/test-pr-state-workflows.py` runs each shard's nextest step and the
-  Check job's wait with stub tools, and fails unless the shards select
-  `count:1/N` through `count:N/N` once each and the wait names the build and
-  every shard.
+  per-test durations. The Linux sandbox/policy enforcement gate runs in shard 1
+  from that extraction (`--binaries-metadata` and `--cargo-metadata` under
+  `target/nextest/`), without extracting the archive again. The shards are
+  separate literal jobs with no matrix, gated on `Live PR state` like the other
+  jobs: Orbit's PR-landing recovery certifies a rerun after a failed gate only
+  for such jobs. agent-main's ruleset requires the exact names
+  `Test shard 1/3` to `Test shard 3/3`, so changing `NEXTEST_SHARDS` or a shard
+  name needs the same ruleset change before merge. Requiring only
+  `Check / Clippy / Test`, which awaits every shard, would not depend on the
+  shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
+  step and wait and the Check job's wait with stub tools, and fails unless the
+  shards select `count:1/N` through `count:N/N` once each, each shard waits for
+  the upload step ahead of the partition guard, and the Check job's wait names
+  the build and every shard.
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
   repository guard and self-test, production Clippy, doctests, documentation
   and the supply-chain gate, with no workspace test build or nextest. It then
   waits for `Test build` and every shard, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
-  15-minute budget and the `ci-budget-watch` auto-task measure, and its
+  10-minute budget and the `ci-budget-watch` auto-task measure, and its
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
-  job.
+  job. A shard's wait prints `ci-await: Test build step 'Upload nextest
+  archive' succeeded started=...` instead.
 
 Locally, `make ci` keeps the single-process full mode: the folded build, then
 nextest from its binary listing.
@@ -428,9 +438,9 @@ on failure: format, workflow test listing/build (which folds in the all-targets
 Clippy lint), the exclusive self-test lane, workspace test listing, workspace
 tests, production Clippy, doctests, documentation, supply-chain checks and
 repository guards. `--test-archive` mode records only
-`workflow-test-list-build`, `workspace-test-archive` and
-`workspace-test-partitions`, and `--checks` mode records every phase except the
-workflow test build and the workspace test phases.
+`workflow-test-list-build` and `workspace-test-archive`, `--test-partitions`
+mode only `workspace-test-partitions`, and `--checks` mode records every phase
+except the workflow test build and the workspace test phases.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the workflow
 test build, so `guard-pool` includes the overlapped build.
@@ -522,7 +532,7 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
 
 `clear_inherited_authority` removes the managed-run routing, identity and grant variables, including `ORBIT_WORKER_CONTEXT_REQUIRED`. [`tool_list.rs`](../crates/orbit-cli/tests/tool/tool_list.rs) uses this pattern; [`isolated_cli_fixture.rs`](../crates/orbit-cli/tests/support/isolated_cli_fixture.rs) is a shared disposable home, registry and workspace. Orbit core's libtest fixtures use `application::tests::run_isolated_test`, which re-executes one exact test this way and verifies it passed in the child. CLI MCP and output bodies that write databases or change process authority use [`isolated_test::run_in_child`](../crates/orbit-cli/tests/support/isolated_test.rs) before any setup; it verifies exactly one passed test and supplies a private home under the checkout's `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay. It includes ignored entry points only when their parent has already been selected by the caller.
 
-Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-15-minute-budget).
+Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-10-minute-budget).
 
 Runtime fixtures create write-heavy temporary roots with `bulk_write_temp_dir()`. Runtime tables use the host build budget's resolved test-thread count, without a binary-wide serialization group. Record both wall and summed time under matched host build-budget settings when measuring the binary. The owner-read retry fixture uses the feature-gated `with_owner_read_retry_wait` hook to exercise the same retries in milliseconds; production keeps its one- and three-second waits. Outcome fixtures may opt into `with_pipeline_poll_wait` while retaining real elapsed time, deadlines and child/process transitions. Immutable proc fixtures use `with_host_load_sampling_wait` only when sampling cannot gain tick data by waiting; raw reads, CPU unknowns and reservation behavior remain real, and native `/proc` keeps the production interval. These callbacks have independent thread-local scopes and restore the previous callback on return or unwind. Changing-proc, polling-cadence and deadline controls keep system waits.
 
