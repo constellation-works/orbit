@@ -31,7 +31,13 @@ fn tool_run_input_misses_return_actionable_suggestions() {
         .assert()
         .success();
 
-    for case in tool_input_hint_cases::cases() {
+    // GitHub builtins have no MCP scope, so both stay here. The shared table
+    // still feeds the MCP matrix; this loop keeps one id miss, one type miss,
+    // and one search-status miss so the CLI entry point stays covered.
+    for case in tool_input_hint_cases::cases()
+        .iter()
+        .filter(|case| cli_keeps_shared_hint_case(case))
+    {
         let output = command()
             .args([
                 "tool",
@@ -48,11 +54,11 @@ fn tool_run_input_misses_return_actionable_suggestions() {
             .clone();
         assert!(output.stdout.is_empty(), "{output:?}");
         let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
-        tool_input_hint_cases::assert_hint(&case, &error, "error");
+        tool_input_hint_cases::assert_hint(case, &error, "error");
         if case.tool == "orbit.search" {
-            for suggestion in case.suggestions {
+            for suggestion in &case.suggestions {
                 let mut corrected = case.input.clone();
-                corrected["status"] = suggestion.into();
+                corrected["status"] = (*suggestion).into();
                 command()
                     .args(["tool", "run", case.tool, "--input", &corrected.to_string()])
                     .assert()
@@ -162,6 +168,23 @@ fn tool_run_unusable_input_does_not_migrate_a_pending_layout() {
         "1\n",
         "a well-formed call must still open the runtime and apply the pending migration"
     );
+}
+
+fn cli_keeps_shared_hint_case(case: &crate::tool_input_hint_cases::HintCase) -> bool {
+    if !case.tool.starts_with("orbit.") {
+        return true;
+    }
+    if case.tool == "orbit.task.show"
+        && case.input.get("task_id").is_some()
+        && case.input.get("name").is_none()
+    {
+        return true;
+    }
+    if case.tool == "orbit.task.add" && case.suggestions.as_slice() == ["type"] {
+        return true;
+    }
+    case.tool == "orbit.search"
+        && case.input.get("status").and_then(Value::as_str) == Some("rejected")
 }
 
 fn non_workspace_parent() -> PathBuf {

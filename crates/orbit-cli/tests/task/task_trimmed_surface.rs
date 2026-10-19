@@ -86,6 +86,19 @@ fn update_status_refuses_completion_without_review_and_evidence(workspace: &Test
     );
 
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    assert_eq!(
+        workspace.task_json(&["task", "show", &id, "--json"])["status"],
+        json!("backlog")
+    );
+    let reject = workspace.add_task("Reject via update");
+    workspace.run(
+        &["task", "update", &reject, "--status", "rejected"],
+        "reject",
+    );
+    assert_eq!(
+        workspace.task_json(&["task", "show", &reject, "--json"])["status"],
+        json!("rejected")
+    );
     workspace.run(
         &[
             "task",
@@ -118,18 +131,6 @@ fn update_status_refuses_completion_without_review_and_evidence(workspace: &Test
         "--json",
     ]);
     assert_eq!(done["status"], json!("done"));
-}
-
-fn update_status_performs_approve_and_reject_transitions(workspace: &TestWorkspace) {
-    let [approve, reject] = workspace.add_tasks(["Approve via update", "Reject via update"]);
-
-    // proposed -> backlog (former `approve`).
-    let task = workspace.task_json(&["task", "update", &approve, "--status", "backlog", "--json"]);
-    assert_eq!(task["status"], json!("backlog"));
-
-    // proposed -> rejected (former `reject`).
-    let task = workspace.task_json(&["task", "update", &reject, "--status", "rejected", "--json"]);
-    assert_eq!(task["status"], json!("rejected"));
 }
 
 /// [ORB-13985] `--discard-candidate` records the operator's discard in task
@@ -895,10 +896,6 @@ fn governed_status_transitions() {
         (
             "update_status_refuses_completion_without_review_and_evidence",
             update_status_refuses_completion_without_review_and_evidence as fn(&TestWorkspace),
-        ),
-        (
-            "update_status_performs_approve_and_reject_transitions",
-            update_status_performs_approve_and_reject_transitions as fn(&TestWorkspace),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

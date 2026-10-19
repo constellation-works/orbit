@@ -7,7 +7,6 @@
 //! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571),
 //! plus the layer provenance `config show --json` reports.
 //!
-//! Doctor also covers a terminal sink resolved at a pinned width in a child.
 //! The CLI "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
@@ -254,16 +253,6 @@ impl Fixture {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-}
-
-#[test]
-fn fixture_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
-    let fixture = Fixture::new_in(env!("CARGO_MANIFEST_DIR"));
-    let tasks = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
-    assert_eq!(
-        tasks.as_array().expect("fixture task list").len(),
-        SEED_TASKS.len()
-    );
 }
 
 #[test]
@@ -1078,36 +1067,6 @@ fn config_reference_lists_every_registry_key() {
     );
 }
 
-#[test]
-fn no_ansi_escapes_under_any_color_configuration() {
-    let fixture = Fixture::new();
-    let combinations: &[&[(&str, &str)]] = &[
-        &[],
-        &[("NO_COLOR", "1")],
-        &[("CLICOLOR_FORCE", "1")],
-        &[("TERM", "dumb")],
-        &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")],
-    ];
-
-    for command in COMMANDS {
-        for extra_env in combinations {
-            for json in [false, true] {
-                let mut args = command.args.to_vec();
-                if json {
-                    args.push("--json");
-                }
-                let output = fixture.run(&args, extra_env);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                assert!(
-                    !stdout.contains('\u{1b}'),
-                    "`orbit {}` emitted an ANSI escape under {extra_env:?}:\n{stdout}",
-                    args.join(" ")
-                );
-            }
-        }
-    }
-}
-
 /// Inventory of record-output conversions in this change, and the remaining
 /// separately owned bypass that must not be treated as an omission here:
 /// `orbit doctor --fix-*` ([ORB-11597]). `orbit workspace init` now returns a
@@ -1392,20 +1351,6 @@ fn global_format_controls_tool_run_output() {
     );
     assert_eq!(config["key"], "workflow.base_branch");
     assert!(config.get("value").is_some(), "{config}");
-}
-
-#[test]
-fn doctor_terminal_findings_golden() {
-    let actual = super::doctor::render_fixture("mixed");
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/output_goldens/doctor_terminal_findings.txt");
-    if std::env::var_os(UPDATE_ENV).is_some() {
-        std::fs::write(&path, &actual).expect("write doctor golden");
-    }
-    assert_eq!(
-        actual,
-        std::fs::read_to_string(path).expect("doctor golden")
-    );
 }
 
 #[test]

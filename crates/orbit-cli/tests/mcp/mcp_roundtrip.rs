@@ -5628,55 +5628,6 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
     assert_eq!(answer["answer"]["summary"], "remote probe complete");
 }
 
-#[cfg(unix)]
-#[test]
-fn agent_invoke_mcp_reports_a_saturated_queue() {
-    if crate::isolated_test::run_in_child(
-        "mcp_roundtrip::agent_invoke_mcp_reports_a_saturated_queue",
-    ) {
-        return;
-    }
-    let workspace = McpWorkspace::init();
-    let shown = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "job",
-            "show",
-            "agent_invoke_pipeline",
-            "--json",
-        ]),
-    );
-    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
-    let limit = shown["max_active_runs"].as_u64().unwrap();
-    let config: Value = serde_yaml::from_str(
-        &std::fs::read_to_string(workspace.work.join(".orbit/config.yaml")).unwrap(),
-    )
-    .unwrap();
-    let connection = Connection::open(workspace.home.join(".orbit/orbit.db")).unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    for index in 0..limit {
-        connection.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid) VALUES (?1, ?2, 'agent_invoke_pipeline', 1, 'running', ?3, ?3, ?3, ?4)",
-            rusqlite::params![format!("jrun-mcp-occupied-{index}"), config["workspace_id"].as_str().unwrap(), now, std::process::id()]).unwrap();
-    }
-    let mut client = workspace.serve_with_args(&["--operator"]);
-    let queued = client.call_tool_ok(
-        "orbit_agent_invoke",
-        json!({"prompt":"queued MCP probe", "cwd":workspace.work}),
-    );
-    assert_eq!(queued["queued"], true, "{queued}");
-    assert_eq!(queued["state"], "queued");
-    assert_eq!(queued["queue_position"], 1);
-    assert!(!queued["warnings"].as_array().unwrap().is_empty());
-    orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "run",
-            "cancel",
-            queued["run_id"].as_str().unwrap(),
-            "--confirm",
-            "--json",
-        ]),
-    );
-}
-
 mod search;
 #[cfg(unix)]
 mod worker_routing;

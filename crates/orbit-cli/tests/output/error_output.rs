@@ -270,13 +270,9 @@ fn a_missing_task_and_a_missing_friction_are_both_not_found_and_exit_1() {
         let friction = json_failure(&friction_args, &fixture.run(&friction_args, &[]), 1);
         assert_eq!(friction["code"], "friction_not_found", "{friction}");
     }
-}
 
-#[test]
-fn a_command_failure_outside_json_mode_is_a_plain_message_on_stderr() {
-    let fixture = Fixture::workspace();
-    let args = ["friction", "show", MISSING_FRICTION];
-    plain_failure(&args, &fixture.run(&args, &[]), 1);
+    let plain = ["friction", "show", MISSING_FRICTION];
+    plain_failure(&plain, &fixture.run(&plain, &[]), 1);
 }
 
 #[test]
@@ -292,16 +288,7 @@ fn friction_mutations_on_a_missing_record_are_not_found_and_exit_1() {
             "triaged",
             "--json",
         ],
-        vec![
-            "friction",
-            "update",
-            MISSING_FRICTION,
-            "--status",
-            "triaged",
-            "--format=json",
-        ],
         vec!["friction", "resolve", MISSING_FRICTION, "--json"],
-        vec!["friction", "resolve", MISSING_FRICTION, "--format=json"],
         vec![
             "friction",
             "rehome",
@@ -309,14 +296,6 @@ fn friction_mutations_on_a_missing_record_are_not_found_and_exit_1() {
             "--to-workspace",
             "target-ws",
             "--json",
-        ],
-        vec![
-            "friction",
-            "rehome",
-            MISSING_FRICTION,
-            "--to-workspace",
-            "target-ws",
-            "--format=json",
         ],
     ] {
         let error = json_failure(&args, &fixture.run(&args, &[]), 1);

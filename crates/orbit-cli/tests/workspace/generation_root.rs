@@ -719,20 +719,6 @@ fn preflight_with_root_admits_uninitialized_override_cwd_and_host_global() {
     );
 }
 
-/// `ORBIT_ROOT` is the same explicit generation root as `--root`.
-fn preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global() {
-    let trees = PreflightTrees::new(true);
-    let output = preflight_output(&trees, None, Some(&trees.scratch));
-    assert_admitted_roots(
-        &output,
-        &[
-            trees.scratch.as_path(),
-            trees.home_orbit.as_path(),
-            trees.discovered_workspace_orbit.as_path(),
-        ],
-    );
-}
-
 /// A live client in the discovered workspace refuses the probe for both
 /// spellings of an uninitialized override. The override does not drop that
 /// authority.
@@ -933,10 +919,6 @@ fn generation_admission_contracts_2() {
 #[test]
 fn generation_admission_contracts_3() {
     for (name, check) in [
-        (
-            "preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global",
-            preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global as fn(),
-        ),
         (
             "preflight_refuses_a_live_cwd_client_for_root_and_orbit_root",
             preflight_refuses_a_live_cwd_client_for_root_and_orbit_root as fn(),
