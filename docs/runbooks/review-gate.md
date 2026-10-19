@@ -475,6 +475,23 @@ pass without executing their confined path. The reviewer copies each notice
 into the record's `deferred`, and such a pass never counts as running that
 path: settlement reads it as `not_run` (`validation_incomplete`).
 
+A test runner may instead exit nonzero because nested Seatbelt application
+or a required child-process spawn was refused by the review sandbox. Record
+that affected check as `required` and `denied`, with the exact command,
+affected tests, denial and evidence for the sandbox cause in `note`. Name
+the focused check as `host_sandbox_test` evidence and return `incomplete`
+when that is the only gap. Settlement holds for evidence or accepts after
+the host runs it; the sandbox refusal alone is not a candidate defect.
+A bare spawn `No such file or directory` or a passing base is insufficient
+to establish the sandbox cause. Genuine assertion failures, unresolved
+mixed failures and unconfirmed spawn failures keep their failed outcomes.
+
+Reviewers choose focused checks for the changed behavior under the workspace
+policy. They do not introduce `cargo test --workspace`, `make ci` or another
+blanket suite as an additional review gate. The captured owner's
+`required_validation_commands` remain authoritative, and any result already
+listed in `host_validation` is decided by that host result.
+
 The same holds earlier, for the implementer [ORB-15287]. An affected-test
 gate that exits 0 with only deferral notices of sandboxes the lane refuses
 does not fail the implementation step. The implementer names only the validation summary the
