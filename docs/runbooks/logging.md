@@ -29,7 +29,10 @@ read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
 `orbit log tail` exits non-zero with `orbit log file not found`; `-f` waits for
 either feed to appear. Relay targets and `RUST_LOG` filters retain
 their existing behavior; the reserved `agent_output` tracing field routes
-stdout/stderr records to the independent feed.
+stdout/stderr records to the independent feed. That feed blocks the emitter
+when its queue is full, so a burst cannot discard relay lines. The operational
+feed still drops a line when its own queue is full, which keeps a slow disk
+from stalling ordinary tracing.
 
 One JSON object is written per line:
 `{"timestamp", "level", "target", "fields": {..., "message"}}`. Secret-looking values

@@ -22,6 +22,10 @@
 //! when the formatter writes the event, which may lag event emission slightly
 //! when the non-blocking writer is under load.
 //!
+//! The operational feed drops a line when its queue is full, so a slow disk
+//! does not stall ordinary tracing. The agent feed does not: a full queue
+//! blocks the emitter, and the relay keeps every stdout and stderr line.
+//!
 //! Library crates enforce a `#![deny(clippy::print_stderr,
 //! clippy::print_stdout)]` guard at their crate roots so new diagnostic output
 //! must flow through `tracing` rather than ad-hoc stdout/stderr macros (see
@@ -568,14 +572,20 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
     Ok(Some(root))
 }
 
-/// Lines the background writer may lag behind before new ones are dropped.
+/// Lines each background JSONL writer may hold before it drops or blocks.
 ///
 /// The queue is preallocated slot by slot when the layer is built, so the
 /// `tracing_appender` default of 128 000 lines costs milliseconds of
 /// initialization in every process, including one-shot commands that log
-/// nothing. Orbit emits lines at human scale and the writer drains them as they
-/// arrive, so a few thousand absorb any realistic burst.
-pub(super) const JSONL_QUEUE_LINES: usize = 4_096;
+/// nothing. The operational feed drops new lines past this bound. The agent
+/// feed blocks the emitter instead, so a full queue slows the relay and keeps
+/// every line.
+pub const JSONL_QUEUE_LINES: usize = 4_096;
+
+/// Debug builds stall the agent writer's first disk write on this FIFO so a
+/// test can fill [`JSONL_QUEUE_LINES`] before any relay byte is stored.
+/// Release builds ignore it. Unset for ordinary runs.
+const AGENT_JSONL_GATE_ENV: &str = "ORBIT_TEST_AGENT_JSONL_GATE";
 
 struct SplitJsonlWriter {
     operational: NonBlocking,
@@ -608,12 +618,19 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     let agent_path = path.with_file_name("orbit-agent.jsonl");
+    // Operational lines are human-scale and stay lossy so a stalled disk cannot
+    // block the process. Agent relay lines are the persistent feed: a full
+    // queue blocks the emitter instead of discarding stdout or stderr.
     let (operational, operational_guard) = NonBlockingBuilder::default()
         .buffered_lines_limit(JSONL_QUEUE_LINES)
+        .lossy(true)
+        .thread_name("orbit-jsonl")
         .finish(LazyJsonlWriter::new(path.to_path_buf()));
     let (agent, agent_guard) = NonBlockingBuilder::default()
         .buffered_lines_limit(JSONL_QUEUE_LINES)
-        .finish(LazyJsonlWriter::new(agent_path));
+        .lossy(false)
+        .thread_name("orbit-agent-log")
+        .finish(LazyJsonlWriter::agent(agent_path));
     let layer = fmt::layer()
         .event_format(RedactingJsonEventFormat)
         .fmt_fields(RedactingFields::json())
@@ -634,6 +651,9 @@ struct LazyJsonlWriter {
     path: PathBuf,
     file: JsonlFile,
     bytes_since_check: usize,
+    /// Taken on the first write. Only the agent feed arms it, and only when
+    /// [`AGENT_JSONL_GATE_ENV`] names a FIFO in a debug build.
+    write_gate: Option<PathBuf>,
 }
 
 impl LazyJsonlWriter {
@@ -642,6 +662,14 @@ impl LazyJsonlWriter {
             path,
             file: JsonlFile::Closed,
             bytes_since_check: 0,
+            write_gate: None,
+        }
+    }
+
+    fn agent(path: PathBuf) -> Self {
+        Self {
+            write_gate: agent_write_gate(),
+            ..Self::new(path)
         }
     }
 
@@ -670,8 +698,27 @@ impl LazyJsonlWriter {
     }
 }
 
+fn agent_write_gate() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os(AGENT_JSONL_GATE_ENV)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
 impl Write for LazyJsonlWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // A regression holds this FIFO's write end closed until the agent
+        // queue is full. The worker blocks here, on its first line, before
+        // any byte reaches the log. A missing path does not stall the feed.
+        if let Some(gate) = self.write_gate.take() {
+            let _ = std::fs::File::open(gate);
+        }
         // Reopen periodically so long-lived producers enforce size budgets
         // and stop appending to an inode another process has rotated away.
         // Never split a formatted record across two files.
