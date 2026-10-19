@@ -1161,7 +1161,7 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
 
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .args(["friction", "list", "--json"]),
+            .args(["friction", "list", "--status", "all", "--json"]),
     );
     assert!(output.status.success());
     let listed: Value = serde_json::from_slice(&output.stdout).expect("friction list JSON");

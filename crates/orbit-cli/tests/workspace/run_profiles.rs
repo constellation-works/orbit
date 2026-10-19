@@ -1134,7 +1134,14 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         "a minute the worker only started inside is not a sampling gap"
     );
 
-    let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
+    let plain = fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--wide",
+        "--format",
+        "plain",
+    ]);
     let row = |label: &str| {
         plain
             .lines()
@@ -1177,6 +1184,40 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     );
     assert_eq!(five_row[7], "-2.0 cores");
     assert_eq!(five_row[11], "+2.0 GiB");
+
+    // The default is the per-offset summary, its units named in the header
+    // row `--header` adds; the drain tables follow unchanged.
+    let summary = fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--format",
+        "plain",
+        "--header",
+    ]);
+    let lines = summary.lines().collect::<Vec<_>>();
+    let header = lines
+        .iter()
+        .position(|line| line.starts_with("OFFSET\t"))
+        .unwrap_or_else(|| panic!("missing summary header in {summary}"));
+    assert_eq!(
+        lines[header],
+        "OFFSET\tPAIRS\tCPU_MEAN_ERR (cores)\tCPU_MAE (cores)\tCPU_UNDER (%)\tMEM_MEAN_ERR (GiB)\tMEM_UNDER (%)"
+    );
+    assert_eq!(lines[header + 1], "+5m\t1\t-2.0\t2.0\t100\t+2.0\t0");
+    assert_eq!(lines[header + 2], "+10m\t0\t-\t-\t-\t-\t-");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("WORKSPACE\tDRAIN\t")),
+        "{summary}"
+    );
+    let bare = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
+    assert!(
+        !bare.lines().any(|line| line.starts_with("OFFSET\t")),
+        "plain output without --header has no header rows: {bare}"
+    );
+    assert!(bare.contains("+5m\t1\t-2.0\t2.0\t100\t+2.0\t0"), "{bare}");
 }
 
 /// Enforce cohorts report the distinct tasks local passes admitted, the
@@ -1497,7 +1538,14 @@ fn accuracy_attributes_only_covered_deliveries_and_keeps_legacy_raw_pairs() {
             assert_eq!(pair["attributed_memory_bytes"], 6.0 * GIB as f64);
         }
     }
-    let text = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "table"]);
+    let text = fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--wide",
+        "--format",
+        "table",
+    ]);
     for column in [
         "CPU_MAE",
         "MEM_MAE",

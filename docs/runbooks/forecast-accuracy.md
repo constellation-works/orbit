@@ -20,7 +20,11 @@ budgets, thresholds, profiles or persistent settings.
    orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain jrun-example --mode enforce --json
    ```
 
-   Omit `--json` for a table. The three selectors intersect; each is optional
+   Omit `--json` for text. Text starts with a summary per offset: `PAIRS`,
+   `CPU_MEAN_ERR (cores)`, `CPU_MAE (cores)`, `CPU_UNDER (%)`,
+   `MEM_MEAN_ERR (GiB)` and `MEM_UNDER (%)`. Add `--wide` for every
+   per-offset column the steps below name. Over ssh or a pipe, add
+   `--header` to label the plain columns. The three selectors intersect; each is optional
    and requires `--accuracy`. `--since` is an inclusive RFC3339 forecast
    timestamp, with an explicit timezone. Drain and mode are exact matches;
    mode accepts `shadow` or `enforce`. Omitting since uses 30 days before the
@@ -73,8 +77,8 @@ budgets, thresholds, profiles or persistent settings.
 
    At each offset, paired + pending + missing equals the selected recorded
    point count, and missing = unsampled + partial + gap. `unmeasured` remains
-   pending + missing. Text columns `PAIRS`, `PENDING`, `MISSING` and the
-   error columns keep their meaning; `UNSAMPLED`, `PARTIAL` and `GAP` follow
+   pending + missing. `--wide` text columns `PAIRS`, `PENDING`, `MISSING`
+   and the error columns keep their meaning; `UNSAMPLED`, `PARTIAL` and `GAP` follow
    `MISSING`. JSON adds `unsampled`, `partial` and `gap` beside `missing`. Not every forecast
    necessarily records every offset (the configured horizon can cap it).
    An empty cohort has zero counts, empty pairs/drains and null errors.
@@ -91,7 +95,7 @@ budgets, thresholds, profiles or persistent settings.
 
    JSON `attributed_cpu` and `attributed_memory` each expose `mean_error`,
    `mean_absolute_error`, `under_rate` and `worst_miss`, beside the existing
-   raw summaries. Text shows `ATTR_CPU_MEAN_ERR`, `ATTR_CPU_MAE`,
+   raw summaries. `--wide` text shows `ATTR_CPU_MEAN_ERR`, `ATTR_CPU_MAE`,
    `ATTR_CPU_UNDER`, `ATTR_CPU_WORST` and corresponding `ATTR_MEM_*`
    columns; raw MAE is `CPU_MAE` / `MEM_MAE`. `ATTR_PAIRS` (JSON
    `attributed_paired`) is the attributed denominator. Historical forecasts

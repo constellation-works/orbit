@@ -62,9 +62,16 @@ pub(super) fn build_predicate(workspace_id: &str, filter: &FrictionListFilter) -
         let index = bind(&mut params, SqlValue::Text(model.clone()));
         clauses.push(format!("r.model = ?{index}"));
     }
-    if let Some(status) = filter.status {
-        let index = bind(&mut params, SqlValue::Text(status.as_str().to_string()));
-        clauses.push(format!("r.status = ?{index}"));
+    if !filter.statuses.is_empty() {
+        let placeholders = filter
+            .statuses
+            .iter()
+            .map(|status| {
+                let index = bind(&mut params, SqlValue::Text(status.as_str().to_string()));
+                format!("?{index}")
+            })
+            .collect::<Vec<_>>();
+        clauses.push(format!("r.status IN ({})", placeholders.join(", ")));
     }
     if let Some(tag) = &filter.tag {
         let index = bind(&mut params, SqlValue::Text(tag.clone()));
@@ -113,7 +120,8 @@ pub(super) fn build_predicate(workspace_id: &str, filter: &FrictionListFilter) -
 }
 
 /// Reads one page of records. Ordering matches the retired scan
-/// (`created_at`, then id) so pagination is stable across calls.
+/// (`created_at`, then id), reversed when the filter asks for newest first,
+/// so pagination is stable across calls.
 pub(super) fn list_records(
     conn: &Connection,
     workspace_id: &str,
@@ -131,9 +139,10 @@ pub(super) fn list_records(
         i64::try_from(filter.offset).unwrap_or(i64::MAX),
     ));
     let offset_index = params.len();
+    let direction = if filter.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
         "SELECT {RECORD_COLUMNS} FROM friction_records r \
-         WHERE {} ORDER BY r.created_at ASC, r.friction_id ASC \
+         WHERE {} ORDER BY r.created_at {direction}, r.friction_id {direction} \
          LIMIT ?{limit_index} OFFSET ?{offset_index}",
         predicate.sql
     );

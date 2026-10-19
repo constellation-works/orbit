@@ -38,12 +38,15 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')

@@ -722,7 +722,7 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
         "{}",
         recoveries[0].reason
     );
-    let frictions = fixture.json(&["friction", "list", "--json"]);
+    let frictions = fixture.json(&["friction", "list", "--status", "all", "--json"]);
     let adoption = frictions
         .as_array()
         .unwrap()

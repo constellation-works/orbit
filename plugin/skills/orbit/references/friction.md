@@ -78,6 +78,12 @@ The human `orbit friction list` command and the dashboard show search guidance
 notes. `orbit friction list --json` remains a bare record array for
 compatibility.
 
+`orbit friction list` lists open and triaged records, newest first, in every
+output format. `--status` takes one status, several comma-separated, or `all`
+for the whole corpus; `--order oldest` restores creation order. The dashboard
+and `orbit.friction.list` tool calls that omit `status` and `order` still list
+every status, oldest first. Over a pipe, `--header` labels the plain columns.
+
 ## Tags
 
 ```bash
@@ -217,7 +223,8 @@ orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-
 ## Reading the corpus
 
 ```bash
-orbit friction list --status open
+orbit friction list                           # open and triaged, newest first
+orbit friction list --status all              # every status
 orbit friction show <ID>
 orbit friction stats                          # friction rates over time
 orbit search "<terms>" --kind friction        # lexical friction search

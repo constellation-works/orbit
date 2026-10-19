@@ -50,6 +50,9 @@ const FORMAT_ARG_ID: &str = "format";
 /// Clap id and long name of the global JSON shorthand.
 const JSON_ARG_ID: &str = "json";
 
+/// Clap id and long name of the global plain-form header switch.
+const HEADER_ARG_ID: &str = "header";
+
 /// The global `--format`, declared exactly once for the whole CLI.
 ///
 /// Installed beside [`json_arg`] throughout the assembled command tree,
@@ -68,6 +71,14 @@ fn json_arg() -> Arg {
         .long(JSON_ARG_ID)
         .action(clap::ArgAction::SetTrue)
         .help("Output as JSON (shorthand for --format json; always pretty-printed)")
+}
+
+/// The global `--header`: label the plain form's columns for a reader.
+fn header_arg() -> Arg {
+    Arg::new(HEADER_ARG_ID)
+        .long(HEADER_ARG_ID)
+        .action(clap::ArgAction::SetTrue)
+        .help("Start plain output with a tab-separated header row (table output always has one)")
 }
 
 /// Whether this command already declares a `--format` of its own.
@@ -113,6 +124,12 @@ fn install_output_args(command: Command) -> Command {
     {
         command = command.arg(json_arg());
     }
+    if !command
+        .get_arguments()
+        .any(|arg| arg.get_long() == Some(HEADER_ARG_ID))
+    {
+        command = command.arg(header_arg());
+    }
     for name in subcommands {
         command = command.mut_subcommand(name, install_output_args);
     }
@@ -155,6 +172,20 @@ fn legacy_json(matches: &ArgMatches) -> bool {
             if matches!(level.try_get_one::<bool>(id), Ok(Some(true))) {
                 return true;
             }
+        }
+        match level.subcommand() {
+            Some((_, sub)) => level = sub,
+            None => return false,
+        }
+    }
+}
+
+/// Whether `--header` was set at any level.
+fn plain_header(matches: &ArgMatches) -> bool {
+    let mut level = matches;
+    loop {
+        if matches!(level.try_get_one::<bool>(HEADER_ARG_ID), Ok(Some(true))) {
+            return true;
         }
         match level.subcommand() {
             Some((_, sub)) => level = sub,
@@ -408,8 +439,9 @@ fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Comma
     install_output_args(root)
 }
 
-/// Parse argv into the derived CLI plus the two inputs to mode resolution.
-fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
+/// Parse argv into the derived CLI, the two inputs to mode resolution, and
+/// whether `--header` asked for a plain-form header row.
+fn parse_cli() -> (command::Cli, Option<FormatArg>, bool, bool) {
     let groups = plugin_cli_groups();
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let matches = cli_command(&groups)
@@ -438,7 +470,7 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
         None => command::Cli::from_arg_matches(&matches)
             .unwrap_or_else(|err| usage_error::exit(err, requested, legacy)),
     };
-    (cli, requested, legacy)
+    (cli, requested, legacy, plain_header(&matches))
 }
 
 /// Whether a string is a plain shell word that needs no quoting in a POSIX shell.
@@ -529,13 +561,13 @@ fn run() {
     );
     output::pipe::install_handler();
 
-    let (mut cli, requested_format, legacy_json) = parse_cli();
+    let (mut cli, requested_format, legacy_json, header) = parse_cli();
     if command_rotates_jsonl_on_start(&cli.command) {
         orbit_common::observability::logging::rotate_global_jsonl_best_effort();
     }
     // Resolved once per invocation, before dispatch, and passed to the one
     // renderer that consumes it. Nothing downstream re-derives these answers.
-    let sink = OutputSink::from_process(requested_format, legacy_json);
+    let sink = OutputSink::from_process(requested_format, legacy_json).with_plain_header(header);
     sink.apply_color_policy();
     tracing::debug!(
         mode = ?sink.mode(),

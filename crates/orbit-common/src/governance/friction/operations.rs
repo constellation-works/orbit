@@ -182,9 +182,13 @@ const LIST: FrictionOperation = FrictionOperation {
     effect: Effect::Read,
     params: &[&[
         text_param("model", "Optional model filter"),
-        text_param(
-            "status",
-            "Optional status filter: open, triaged, or resolved",
+        defaulted(
+            text_param(
+                "status",
+                "Status filter: open, triaged or resolved, comma-separated for several, or `all` for every status. Omitted, every status is listed",
+            ),
+            "open,triaged",
+            "Status filter: open, triaged or resolved, comma-separated for several, or `all` for every status",
         ),
         text_param("tag", "Optional tag filter"),
         text_param(
@@ -199,6 +203,14 @@ const LIST: FrictionOperation = FrictionOperation {
         text_param("to", "Optional RFC3339 upper bound for created_at"),
         count_param("limit", "Optional maximum number of records to return"),
         count_param("offset", "Optional number of records to skip"),
+        defaulted(
+            text_param(
+                "order",
+                "Creation-time order: `oldest` or `newest` first. Omitted, oldest first",
+            ),
+            "newest",
+            "Creation-time order: `oldest` or `newest` first",
+        ),
         ParamSpec {
             name: "response_mode",
             aliases: &[],
@@ -512,6 +524,21 @@ const fn text_param(name: &'static str, description: &'static str) -> ParamSpec 
             help: Description::Static(description),
         }),
     }
+}
+
+/// A parameter whose omitted flag sends `default`, with CLI help that leaves
+/// out the omitted-field behaviour the tool description states, since
+/// `--help` shows the default itself.
+const fn defaulted(
+    mut param: ParamSpec,
+    default: &'static str,
+    cli_help: &'static str,
+) -> ParamSpec {
+    param.default = Some(default);
+    if let Some(binding) = &mut param.cli {
+        binding.help = Description::Static(cli_help);
+    }
+    param
 }
 
 /// A `--<name> <NAME>` flag carrying a non-negative integer (pagination).
