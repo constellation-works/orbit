@@ -1000,6 +1000,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             ("  push:\n    branches: [agent-main]\n", True),
             ("  pull_request:\n  push:\n    branches: [main, agent-main]\n", True),
             ("  push:\n    branches: [main]\n", False),
+            ("  push:\n    branches: [agent-main-experimental]\n", False),
+            ("  push:\n    branches: [pre-agent-main]\n", False),
+            ("  push:\n    branches: [main, not-the-agent-main]\n", False),
             ("  pull_request:\n", False),
             ("  pull_request:\n    branches: [agent-main]\n", False),
         ):
