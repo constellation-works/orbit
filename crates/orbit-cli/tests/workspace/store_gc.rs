@@ -277,7 +277,10 @@ fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
         .orbit()
         .args(["gc", "audit", "--older-than-days", "0"])
         .assert()
-        .failure();
+        .failure()
+        .stderr(predicates::str::contains(
+            "--older-than-days must be at least 1",
+        ));
 
     // The routine's shipped job applies both sweeps.
     let output = fixture
@@ -599,7 +602,10 @@ fn journal_retention_plans_then_prunes_applied_rows() {
         .orbit()
         .args(["gc", "journal", "--older-than-days", "0"])
         .assert()
-        .failure();
+        .failure()
+        .stderr(predicates::str::contains(
+            "--older-than-days must be at least 1",
+        ));
 }
 
 fn doctor_check(fixture: &Fixture, name: &str) -> Value {
@@ -900,7 +906,7 @@ fn run_retention_refuses_windows_shorter_than_analytics_history() {
     let fixture = Fixture::new();
     let config_path = fixture.work.join(".orbit/config.toml");
     fs::write(&config_path, "").unwrap();
-    for value in ["0", "14", "29", "0x0e"] {
+    for value in ["0", "14", "29"] {
         fixture
             .orbit()
             .env("ORBIT_OPERATOR", "1")
@@ -914,8 +920,25 @@ fn run_retention_refuses_windows_shorter_than_analytics_history() {
             .env("ORBIT_OPERATOR", "1")
             .args(["gc", "runs", "--older-than-days", value, "--apply"])
             .assert()
-            .failure();
+            .failure()
+            .stderr(predicates::str::contains(
+                "run retention must be at least 30 days",
+            ));
     }
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["config", "set", "retention.runs_days", "0x0e"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("require 30 days"));
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), "");
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["gc", "runs", "--older-than-days", "0x0e", "--apply"])
+        .assert()
+        .failure();
     fixture
         .orbit()
         .env("ORBIT_OPERATOR", "1")
