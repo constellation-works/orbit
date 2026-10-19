@@ -89,6 +89,13 @@ pub struct ExploreSubmission {
     /// Whether the run is waiting on the job's `max_active_runs` ceiling.
     pub queued: bool,
     pub queue_position: Option<usize>,
+    /// What the caller should treat as this submission's state.
+    ///
+    /// A new run is `queued` or `submitted`. A retried idempotency key reports
+    /// `queued` while the original run is waiting for a slot, that run's own
+    /// terminal state once it has finished, and `submitted` while it is still
+    /// in flight and not waiting.
+    pub state: String,
     /// Whether the caller's idempotency key resolved an earlier explorer of
     /// the same run instead of starting a new one.
     pub deduplicated: bool,
@@ -283,69 +290,125 @@ impl OrbitRuntime {
         }
 
         let lock_target = self.paths().state_dir.join("agent_explore_admission");
-        let (invoke, deduplicated, calls_used) =
-            with_exclusive_file_lock(&lock_target, "explorer admission", || {
-                let prior = self.explore_runs_of(&parent)?;
-                if let Some(existing) = idempotency_key.and_then(|key| {
-                    prior
-                        .iter()
-                        .find(|run| run_input_str(run, EXPLORE_IDEMPOTENCY_KEY) == Some(key))
-                }) {
-                    return Ok::<_, OrbitError>((
-                        resolved_invocation(existing),
-                        true,
-                        u32::try_from(prior.len()).unwrap_or(u32::MAX),
-                    ));
-                }
-                let calls = u32::try_from(prior.len()).unwrap_or(u32::MAX);
-                if calls >= settings.max_calls_per_run {
-                    return Err(OrbitError::CapabilityDenied(format!(
-                        "this run has used all {} explorer calls \
+        let admitted = with_exclusive_file_lock(&lock_target, "explorer admission", || {
+            let prior = self.explore_runs_of(&parent)?;
+            if let Some(existing) = idempotency_key.and_then(|key| {
+                prior
+                    .iter()
+                    .find(|run| run_input_str(run, EXPLORE_IDEMPOTENCY_KEY) == Some(key))
+            }) {
+                // The retry's crew, timeout and directory were checked only so
+                // an unusable call is still refused. The run that already
+                // exists keeps the settings it was admitted with.
+                let settings = persisted_explore_settings(existing)?;
+                let (queued, queue_position, state) = self.explore_retry_queue(existing)?;
+                return Ok(ExploreAdmission {
+                    invoke: PipelineInvokeResult {
+                        run_id: existing.run_id.clone(),
+                        job_name: existing.job_id.clone(),
+                        submitted_at: existing.scheduled_at.to_rfc3339(),
+                        queued,
+                        queue_position,
+                    },
+                    deduplicated: true,
+                    calls_used: u32::try_from(prior.len()).unwrap_or(u32::MAX),
+                    crew: settings.crew,
+                    timeout_seconds: settings.timeout_seconds,
+                    workspace_path: settings.workspace_path,
+                    cwd: settings.cwd,
+                    state,
+                });
+            }
+            let calls = u32::try_from(prior.len()).unwrap_or(u32::MAX);
+            if calls >= settings.max_calls_per_run {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "this run has used all {} explorer calls \
                          (`workflow.explore.max_calls_per_run`); continue without delegating",
-                        settings.max_calls_per_run
-                    )));
-                }
-                let active = prior.iter().filter(|run| !run.state.is_terminal()).count();
-                if u32::try_from(active).unwrap_or(u32::MAX) >= settings.max_concurrent_per_run {
-                    return Err(OrbitError::CapabilityDenied(format!(
-                        "this run already has {active} explorer(s) running, its limit \
+                    settings.max_calls_per_run
+                )));
+            }
+            let active = prior.iter().filter(|run| !run.state.is_terminal()).count();
+            if u32::try_from(active).unwrap_or(u32::MAX) >= settings.max_concurrent_per_run {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "this run already has {active} explorer(s) running, its limit \
                          (`workflow.explore.max_concurrent_per_run`); wait for one to finish \
                          or continue without delegating"
-                    )));
-                }
-                let invoke = self.submit_persisted_pipeline_run(PipelineSubmission::catalog(
-                    EXPLORE_JOB_ID,
-                    input.clone(),
-                    Some(actor),
-                ))?;
-                Ok((invoke, false, calls.saturating_add(1)))
-            })?;
-        if !deduplicated {
+                )));
+            }
+            let invoke = self.submit_persisted_pipeline_run(PipelineSubmission::catalog(
+                EXPLORE_JOB_ID,
+                input.clone(),
+                Some(actor),
+            ))?;
+            let state = if invoke.queued { "queued" } else { "submitted" };
+            Ok(ExploreAdmission {
+                crew: crew.clone(),
+                timeout_seconds,
+                workspace_path: root.display().to_string(),
+                cwd: cwd.display().to_string(),
+                state: state.to_string(),
+                deduplicated: false,
+                calls_used: calls.saturating_add(1),
+                invoke,
+            })
+        })?;
+        if !admitted.deduplicated {
             tracing::info!(
                 target: "orbit.agent_explore",
-                run_id = %invoke.run_id,
+                run_id = %admitted.invoke.run_id,
                 parent_run_id = %parent.run_id,
-                crew = %crew,
+                crew = %admitted.crew,
                 input_hash = %input_hash(&input),
                 "admitted a read-only explorer"
             );
         }
         Ok(ExploreSubmission {
-            run_id: invoke.run_id,
-            job_id: invoke.job_name,
-            submitted_at: invoke.submitted_at,
-            queued: invoke.queued,
-            queue_position: invoke.queue_position,
-            deduplicated,
+            run_id: admitted.invoke.run_id,
+            job_id: admitted.invoke.job_name,
+            submitted_at: admitted.invoke.submitted_at,
+            queued: admitted.invoke.queued,
+            queue_position: admitted.invoke.queue_position,
+            state: admitted.state,
+            deduplicated: admitted.deduplicated,
             parent_run_id: parent.run_id,
-            crew,
-            timeout_seconds,
-            workspace_path: root.display().to_string(),
-            cwd: cwd.display().to_string(),
-            calls_used,
+            crew: admitted.crew,
+            timeout_seconds: admitted.timeout_seconds,
+            workspace_path: admitted.workspace_path,
+            cwd: admitted.cwd,
+            calls_used: admitted.calls_used,
             calls_allowed: settings.max_calls_per_run,
             max_answer_bytes: settings.max_answer_bytes,
         })
+    }
+
+    /// Queue placement of an explorer that already exists, and the state word
+    /// a retry should report for it.
+    ///
+    /// Placement uses the same `max_active_runs` order as a fresh submission.
+    /// A finished run is not waiting, so the word is its own terminal state.
+    fn explore_retry_queue(
+        &self,
+        run: &JobRun,
+    ) -> Result<(bool, Option<usize>, String), OrbitError> {
+        let (_, spec) = self.load_v2_job_asset_by_name(EXPLORE_JOB_ID)?;
+        let active = self
+            .stores()
+            .jobs()
+            .list_pending_or_running_job_runs(EXPLORE_JOB_ID)?;
+        let queue_position = super::pipeline::pipeline_run_queue_position(
+            &active,
+            &run.run_id,
+            spec.max_active_runs,
+        );
+        let queued = queue_position.is_some();
+        let state = if queued {
+            "queued".to_string()
+        } else if run.state.is_terminal() {
+            run.state.to_string()
+        } else {
+            "submitted".to_string()
+        };
+        Ok((queued, queue_position, state))
     }
 
     /// The calling run's own checkout root, and the canonical `cwd` inside
@@ -579,14 +642,63 @@ fn run_input_str<'a>(run: &'a JobRun, key: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
-fn resolved_invocation(run: &JobRun) -> PipelineInvokeResult {
-    PipelineInvokeResult {
-        run_id: run.run_id.clone(),
-        job_name: run.job_id.clone(),
-        submitted_at: run.scheduled_at.to_rfc3339(),
-        queued: false,
-        queue_position: None,
-    }
+/// Settings a retried explorer reports: the run's persisted input, not the
+/// retry that resolved it.
+struct PersistedExploreSettings {
+    crew: String,
+    timeout_seconds: u64,
+    workspace_path: String,
+    cwd: String,
+}
+
+/// One admitted explorer, new or resolved, ready for [`ExploreSubmission`].
+struct ExploreAdmission {
+    invoke: PipelineInvokeResult,
+    deduplicated: bool,
+    calls_used: u32,
+    crew: String,
+    timeout_seconds: u64,
+    workspace_path: String,
+    cwd: String,
+    state: String,
+}
+
+fn persisted_explore_settings(run: &JobRun) -> Result<PersistedExploreSettings, OrbitError> {
+    let input = run.input.as_ref().ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "deduplicated explorer '{}' has no persisted input",
+            run.run_id
+        ))
+    })?;
+    let required_str = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "deduplicated explorer '{}' has no persisted {key}",
+                    run.run_id
+                ))
+            })
+    };
+    let timeout_seconds = input
+        .get("timeout_seconds")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds >= 1)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "deduplicated explorer '{}' has no persisted timeout",
+                run.run_id
+            ))
+        })?;
+    Ok(PersistedExploreSettings {
+        crew: required_str("crew")?,
+        timeout_seconds,
+        workspace_path: required_str("workspace_path")?,
+        cwd: required_str("cwd")?,
+    })
 }
 
 /// The explorer's bound: the request when it is within the workspace's

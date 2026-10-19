@@ -43,6 +43,31 @@ model = "claude-opus-4-6"
 backend = "cli"
 "#;
 
+/// Two eligible explorers, so a retry can name the other member or omit
+/// `crew` and redraw the pool.
+const TWO_EXPLORER_CREWS: &str = r#"
+[workflow]
+default_crew = "opus"
+
+[workflow.purpose_crews]
+explorer = ["haiku", "sonnet"]
+
+[crews.haiku]
+provider = "claude"
+model = "claude-haiku-4-5"
+backend = "cli"
+
+[crews.sonnet]
+provider = "claude"
+model = "claude-sonnet-4-6"
+backend = "cli"
+
+[crews.opus]
+provider = "claude"
+model = "claude-opus-4-6"
+backend = "cli"
+"#;
+
 const BUDGETS: &str = r#"
 [workflow.explore]
 enabled = true
@@ -62,8 +87,12 @@ struct Fixture {
 /// A git workspace whose implement run is live in its own linked worktree,
 /// with `explore` as the workspace's `[workflow.explore]` table.
 fn fixture(explore: &str) -> Fixture {
+    fixture_with(CREWS, explore)
+}
+
+fn fixture_with(crews: &str, explore: &str) -> Fixture {
     let (root, runtime, repo) =
-        super::engine_support::runtime_with_workspace_config(Some(&format!("{CREWS}\n{explore}")));
+        super::engine_support::runtime_with_workspace_config(Some(&format!("{crews}\n{explore}")));
     orbit_core::bootstrap::init::init_workspace_at_root(
         &runtime.global_root(),
         orbit_core::bootstrap::init::InitOptions {
@@ -206,16 +235,20 @@ fn input_of(runtime: &OrbitRuntime, run_id: &str) -> Value {
 // ------------------------------------------------------------------ admission
 
 fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
-    let fx = fixture(BUDGETS);
+    let fx = fixture_with(TWO_EXPLORER_CREWS, BUDGETS);
     as_managed_agent(&fx.parent.run_id, "agent_implement");
     let session = agent_session();
     let cwd = fx.worktree.join("src");
     let cwd = cwd.display().to_string();
+    let tests_dir = fx.worktree.join("tests");
+    std::fs::create_dir_all(&tests_dir).expect("sibling directory for a retry");
+    let tests_cwd = tests_dir.display().to_string();
 
     let submission = explore(
         &fx.runtime,
         AgentInvokeRequest {
             idempotency_key: Some("retry-budget"),
+            crew: Some("haiku"),
             ..ask(&cwd, &session)
         },
     );
@@ -230,6 +263,15 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
         "the setting is the default"
     );
     assert_eq!((submission.calls_used, submission.calls_allowed), (1, 2));
+    assert_eq!(
+        submission.state,
+        if submission.queued {
+            "queued"
+        } else {
+            "submitted"
+        },
+        "a new explorer reports the admission word, not a later run state"
+    );
     let worktree = fx.worktree.canonicalize().expect("canonical worktree");
     assert_eq!(PathBuf::from(&submission.workspace_path), worktree);
     assert_eq!(PathBuf::from(&submission.cwd), worktree.join("src"));
@@ -253,16 +295,60 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
         "the explorer's minutes count in its caller's work class"
     );
 
-    // A retried call resolves the same explorer and spends no budget.
+    // A retried call resolves the same explorer and spends no budget, even
+    // when it names another eligible crew, a shorter timeout and a sibling
+    // directory. The response is the run that was persisted, not the retry.
     let retried = explore(
         &fx.runtime,
         AgentInvokeRequest {
             idempotency_key: Some("retry-budget"),
-            ..ask(&cwd, &session)
+            crew: Some("sonnet"),
+            timeout_seconds: Some(30),
+            ..ask(&tests_cwd, &session)
         },
     );
     assert!(retried.deduplicated);
     assert_eq!(retried.run_id, submission.run_id);
+    assert_eq!(
+        (
+            retried.crew.as_str(),
+            retried.timeout_seconds,
+            retried.cwd.as_str()
+        ),
+        ("haiku", 300, submission.cwd.as_str()),
+        "a retry's crew, timeout and directory must not replace the persisted ones"
+    );
+    assert_eq!(retried.workspace_path, submission.workspace_path);
+    assert_eq!(retried.calls_used, 1);
+    assert_eq!(explorer_count(&fx.runtime), 1);
+    let persisted = input_of(&fx.runtime, &submission.run_id);
+    assert_eq!(persisted["crew"], json!("haiku"));
+    assert_eq!(persisted["timeout_seconds"], json!(300));
+    assert_eq!(persisted["cwd"], json!(submission.cwd));
+
+    // Omitting crew redraws the pool. Whichever member that draw returns,
+    // the response stays the original run.
+    let redrawn = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("retry-budget"),
+            crew: None,
+            timeout_seconds: Some(45),
+            ..ask(&tests_cwd, &session)
+        },
+    );
+    assert!(redrawn.deduplicated);
+    assert_eq!(redrawn.run_id, submission.run_id);
+    assert_eq!(
+        (
+            redrawn.crew.as_str(),
+            redrawn.timeout_seconds,
+            redrawn.cwd.as_str()
+        ),
+        ("haiku", 300, submission.cwd.as_str()),
+        "a pool redraw on retry must not replace the persisted crew, timeout or directory"
+    );
+    assert_eq!(redrawn.calls_used, 1);
 
     // The tool itself, through the governed chokepoint the agent's MCP server
     // uses: the operator-only row does not stop a managed caller, whose call
@@ -271,11 +357,21 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
         .runtime
         .run_tool(
             "orbit.agent.invoke",
-            json!({ "prompt": "where is the retry budget enforced", "cwd": cwd,
-                    "idempotency_key": "retry-budget" }),
+            json!({
+                "prompt": "where is the retry budget enforced",
+                "cwd": tests_cwd,
+                "crew": "sonnet",
+                "timeout_seconds": 30,
+                "idempotency_key": "retry-budget"
+            }),
         )
         .expect("a managed implement agent may call the tool");
     assert_eq!(response["run_id"], json!(submission.run_id));
+    assert_eq!(response["deduplicated"], json!(true));
+    assert_eq!(response["crew"], json!("haiku"));
+    assert_eq!(response["timeout_seconds"], json!(300));
+    assert_eq!(response["cwd"], json!(submission.cwd));
+    assert_eq!(response["calls_used"], json!(1));
     assert_eq!(
         (&response["sandboxed"], &response["read_only"]),
         (&json!(true), &json!(true))
@@ -285,6 +381,66 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
         "no operator authorized an explorer"
     );
     assert_eq!(explorer_count(&fx.runtime), 1);
+
+    let recorded = jobs(&fx.runtime)
+        .get_job_run(&submission.run_id)
+        .expect("read explorer")
+        .expect("explorer exists");
+    if !recorded.state.is_terminal() {
+        finish(&fx.runtime, &submission.run_id);
+    }
+    let recorded = jobs(&fx.runtime)
+        .get_job_run(&submission.run_id)
+        .expect("read finished explorer")
+        .expect("explorer exists");
+    assert!(
+        recorded.state.is_terminal(),
+        "the retry must be judged against a finished explorer, got {}",
+        recorded.state
+    );
+    let finished = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("retry-budget"),
+            crew: Some("sonnet"),
+            timeout_seconds: Some(15),
+            ..ask(&tests_cwd, &session)
+        },
+    );
+    assert!(finished.deduplicated);
+    assert_eq!(finished.run_id, submission.run_id);
+    assert_eq!(finished.state, recorded.state.to_string());
+    assert!(!finished.queued);
+    assert_eq!(finished.queue_position, None);
+    assert_eq!(
+        (
+            finished.crew.as_str(),
+            finished.timeout_seconds,
+            finished.cwd.as_str()
+        ),
+        ("haiku", 300, submission.cwd.as_str())
+    );
+    assert_eq!(finished.calls_used, 1);
+    assert_eq!(explorer_count(&fx.runtime), 1);
+    let finished_response = fx
+        .runtime
+        .run_tool(
+            "orbit.agent.invoke",
+            json!({
+                "prompt": "where is the retry budget enforced",
+                "cwd": tests_cwd,
+                "crew": "sonnet",
+                "timeout_seconds": 15,
+                "idempotency_key": "retry-budget"
+            }),
+        )
+        .expect("a retry of a finished explorer still resolves it");
+    assert_eq!(
+        finished_response["state"],
+        json!(recorded.state.to_string())
+    );
+    assert_eq!(finished_response["queued"], json!(false));
+    assert_eq!(finished_response["calls_used"], json!(1));
 
     let listed = fx
         .runtime
