@@ -16,6 +16,13 @@ use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams}
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_store::TaskCommitBoundary;
+use orbit_store::contracts::{
+    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionRunContext,
+    AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+};
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::ExternalRef;
 use serde_json::json;
 use tempfile::TempDir;
@@ -29,6 +36,8 @@ struct ForgeState {
     recent: Vec<MergedPullRequest>,
     /// Merged PRs only a lookup by number reaches.
     older: BTreeMap<u64, MergedPullRequest>,
+    /// Open and closed-unmerged PRs return no merge from the forge.
+    unmerged: BTreeMap<u64, &'static str>,
     closed: Vec<u64>,
 }
 
@@ -85,6 +94,9 @@ impl TaskPrForge for FakeForge {
         number: u64,
     ) -> Result<Option<MergedPullRequest>, OrbitError> {
         let state = self.0.lock().unwrap();
+        if state.unmerged.contains_key(&number) {
+            return Ok(None);
+        }
         Ok(state
             .recent
             .iter()
@@ -220,6 +232,345 @@ impl Fixture {
     fn status(&self, task_id: &str) -> TaskStatus {
         self.runtime.get_task(task_id).unwrap().status
     }
+
+    /// Admit and bind a real claim, then release its held PR or fail with a
+    /// kept candidate. Neither path accepts a handoff or adds a task PR ref.
+    fn released_pr(&self, number: u64, held: bool, landing: &str) -> String {
+        let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
+        let boundary = TaskCommitBoundary::new(
+            self.runtime.sqlite_store().unwrap(),
+            TaskRegistryStore::open(&task_registry_path(&self.runtime.global_root())).unwrap(),
+            self.runtime.workspace_id().unwrap(),
+        )
+        .unwrap();
+        let ship = AdmissionShipContract {
+            mode: "pr".into(),
+            base_branch: self.base.clone(),
+            landing_branch: landing.into(),
+            before_pr: false,
+            before_landing: false,
+            completion: "review".into(),
+            authorization_reference: None,
+            review: None,
+        };
+        let request = AdmissionRequest {
+            request_id: format!("req-{number}"),
+            caller_version: "test".into(),
+            caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            caller_fingerprint: None,
+            caller_before_pr: false,
+            review_gate: true,
+            run_context: AdmissionRunContext {
+                run_id: format!("drain-{number}"),
+                job_name: "workspace_pull_pipeline".into(),
+                machine_name: None,
+            },
+            ship: ship.clone(),
+            crews: None,
+            os: None,
+            browser_kit: false,
+            admissible: None,
+        };
+        let repo = self._root.path().join("repo");
+        let AdmissionLookup::Found { receipt, .. } = boundary
+            .admit_task(
+                &AdmissionIdentity::trusted_remote(ExecutionLocation {
+                    machine_id: "follower".into(),
+                    machine_name: None,
+                }),
+                &request,
+                &AdmissionOrdering::default(),
+                "test",
+                &repo,
+                &repo.join(".orbit"),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &|_, _, _| Ok(None),
+            )
+            .unwrap()
+        else {
+            panic!("admission receipt missing");
+        };
+        let claim = receipt
+            .claim
+            .clone()
+            .unwrap_or_else(|| panic!("task not admitted: {receipt:?}"));
+        assert_eq!(claim.task_id, task);
+        let run = ClaimRun {
+            machine_id: "follower".into(),
+            run_id: format!("leaf-{number}"),
+        };
+        let worker = ClaimInvocation::trusted_worker(
+            task.clone(),
+            claim.claim_id.clone(),
+            "follower".into(),
+            None,
+        );
+        self.runtime
+            .mutate_execution_claim(
+                Some(&worker),
+                "bind",
+                &ClaimMutation::Bind {
+                    run: run.clone(),
+                    ship,
+                },
+            )
+            .unwrap();
+        let worker = ClaimInvocation::trusted_worker(
+            task.clone(),
+            claim.claim_id.clone(),
+            "follower".into(),
+            Some(run),
+        );
+        let head = format!("orbit/{task}-claimed");
+        let mut evidence = ClaimEvidence {
+            summary: Some("Leaf stopped after opening its PR".into()),
+            ..Default::default()
+        };
+        if held {
+            evidence.evidence_hold = Some(
+                serde_json::from_value(json!({
+                    "schema_version": 1, "attempt_id": "review", "lineage_key": "lineage",
+                    "run_id": format!("leaf-{number}"),
+                    "candidate": {"commit": MERGE_COMMIT, "tree": MERGE_COMMIT},
+                    "task_meaning_digest": "fixture", "requirements": [],
+                    "published_ref": format!("refs/heads/orbit-evidence/{task}")
+                }))
+                .unwrap(),
+            );
+            evidence.held_pull_request = Some(
+                serde_json::from_value(json!({
+                    "number": number.to_string(), "head": head
+                }))
+                .unwrap(),
+            );
+        } else {
+            evidence.failure = Some(
+                serde_json::from_value(json!({
+                    "class": "candidate", "reason": "Leaf failed after opening its PR",
+                    "candidate": {
+                        "branch": head, "head_sha": MERGE_COMMIT,
+                        "pull_request": number.to_string(), "published": true
+                    }
+                }))
+                .unwrap(),
+            );
+        }
+        let mutation = if held {
+            ClaimMutation::Release(evidence)
+        } else {
+            ClaimMutation::Fail(evidence)
+        };
+        self.runtime
+            .mutate_execution_claim(Some(&worker), "release", &mutation)
+            .unwrap();
+        assert!(
+            self.runtime
+                .get_task(&task)
+                .unwrap()
+                .external_refs
+                .is_empty()
+        );
+        assert!(
+            boundary
+                .find_accepted_handoff(&claim.claim_id)
+                .unwrap()
+                .is_none()
+        );
+        task
+    }
+}
+
+#[test]
+fn released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref() {
+    for held in [true, false] {
+        let fx = Fixture::new();
+        // The captured branch remains authoritative when workspace config differs.
+        let landing = "captured-landing";
+        let number = if held { 101 } else { 102 };
+        let task = fx.released_pr(number, held, landing);
+        fx.forge
+            .merge_recent(number, &task, "follower-bot", landing);
+        let settlement = if held {
+            fx.runtime
+                .settle_externally_merged_task(&task)
+                .expect("held PR settles")
+        } else {
+            let mut settled = fx
+                .runtime
+                .settle_externally_merged_tasks()
+                .expect("owner pass settles kept PR");
+            assert_eq!(settled.len(), 1);
+            settled.pop().unwrap()
+        };
+        assert_eq!(settlement.pr_number, number);
+        assert_eq!(settlement.task_id, task);
+        assert_eq!(fx.status(&task), TaskStatus::Done);
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        let note = history
+            .iter()
+            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+            .unwrap()
+            .note
+            .as_deref()
+            .unwrap();
+        assert!(
+            note.contains(&format!("#{number}"))
+                && note.contains(MERGE_COMMIT)
+                && note.contains(landing),
+            "{note}"
+        );
+    }
+}
+
+#[test]
+fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch() {
+    for held in [true, false] {
+        for rejected in [
+            "open",
+            "closed",
+            "wrong-base",
+            "wrong-task",
+            "other-claim",
+            "missing-receipt",
+            "mismatched-receipt",
+        ] {
+            let fx = Fixture::new();
+            let task = fx.released_pr(103, held, "captured-landing");
+            let before = fx.status(&task);
+            match rejected {
+                "open" | "closed" => {
+                    fx.forge.0.lock().unwrap().unmerged.insert(103, rejected);
+                }
+                "wrong-base" => fx.forge.merge_recent(103, &task, BOT, &fx.base),
+                "wrong-task" => fx
+                    .forge
+                    .merge_recent(103, "OTHER-1", BOT, "captured-landing"),
+                "other-claim" => {
+                    // The merge names an unrelated task, on the captured branch.
+                    // Only this task's released claim records the PR, so the
+                    // named task must not settle from another task's claim.
+                    let unrelated = fx.add_task("Unrelated", TaskStatus::Blocked, &[]);
+                    fx.forge
+                        .merge_recent(103, &unrelated, BOT, "captured-landing");
+                    assert!(
+                        fx.runtime
+                            .settle_externally_merged_task(&unrelated)
+                            .is_err()
+                    );
+                    assert_eq!(fx.status(&unrelated), TaskStatus::Blocked);
+                }
+                "missing-receipt" => {
+                    fx.forge.merge_recent(103, &task, BOT, "captured-landing");
+                    rusqlite::Connection::open(fx.runtime.global_root().join("orbit.db"))
+                        .unwrap().execute(
+                            "DELETE FROM task_coordination_rows WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
+                            [fx.runtime.workspace_id().unwrap()],
+                        ).unwrap();
+                }
+                "mismatched-receipt" => {
+                    fx.forge.merge_recent(103, &task, BOT, "captured-landing");
+                    rusqlite::Connection::open(fx.runtime.global_root().join("orbit.db"))
+                        .unwrap().execute(
+                            "UPDATE task_coordination_rows SET payload_json = json_set(payload_json, '$.receipt.claim.task_id', 'OTHER-1') WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
+                            [fx.runtime.workspace_id().unwrap()],
+                        ).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                fx.runtime.settle_externally_merged_task(&task).is_err(),
+                "{held}/{rejected}"
+            );
+            assert!(
+                fx.runtime
+                    .settle_externally_merged_tasks()
+                    .unwrap()
+                    .is_empty(),
+                "{held}/{rejected}"
+            );
+            assert_eq!(fx.status(&task), before, "{held}/{rejected}");
+            assert!(
+                !fx.runtime
+                    .get_task_history(&task)
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT),
+                "{held}/{rejected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
+    let fx = Fixture::new();
+    let task = fx.released_pr(104, true, &fx.base);
+    fx.forge.merge_recent(104, &task, BOT, &fx.base);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    jobs.insert_job_run(
+        "task_auto_pipeline",
+        1,
+        Utc::now(),
+        Some(json!({"task_ids": [task]})),
+        None,
+    )
+    .unwrap();
+    let error = fx.runtime.settle_externally_merged_task(&task).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("live `run auto` leaf carries it"),
+        "{error}"
+    );
+    assert!(
+        fx.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fx.status(&task), TaskStatus::InProgress);
+}
+
+#[test]
+fn external_merge_settlement_refuses_every_ineligible_status() {
+    let fx = Fixture::new();
+    for status in [
+        TaskStatus::Proposed,
+        TaskStatus::Backlog,
+        TaskStatus::Someday,
+        TaskStatus::Done,
+        TaskStatus::Archived,
+        TaskStatus::Rejected,
+    ] {
+        let initial = if status == TaskStatus::Archived {
+            TaskStatus::Proposed
+        } else {
+            status
+        };
+        let task = fx.add_task("Ineligible status", initial, &[105]);
+        if status == TaskStatus::Archived {
+            fx.runtime.archive_task(&task).unwrap();
+        }
+        fx.forge.merge_recent(105, &task, BOT, &fx.base);
+        let error = fx.runtime.settle_externally_merged_task(&task).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only a blocked, in-progress or review task settles"),
+            "{error}"
+        );
+        assert_eq!(fx.status(&task), status);
+    }
+    assert!(
+        fx.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

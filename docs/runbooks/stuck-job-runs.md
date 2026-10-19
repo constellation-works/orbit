@@ -1092,9 +1092,15 @@ A task settles only when all of these hold:
 - one of its delivery pull requests is merged into the task's target branch. A
   delivery pull request has an `orbit/<task-id>-…` head branch and a body naming the
   task. Its author is a delivery identity (`pr.delivery_authors`, else the forge
-  login), or it is a follower handoff the owner accepted. The target branch is that
-  handoff's landing branch, else the base branch of the task's delivery run, else
-  the workspace base branch.
+  login), or it is a follower handoff the owner accepted, or a pull request kept
+  with a released or failed claim's candidate (including a before-landing evidence
+  hold). A claim's pull request must merge into its recorded landing branch: the
+  accepted handoff's branch, or the original admission receipt's branch for a
+  released or failed claim. A missing or expired admission receipt cannot prove
+  that branch. Other delivery pull requests must merge into the base branch of
+  the task's delivery run, else the workspace base branch;
+- it owes no post-deploy acceptance criterion still awaiting an operator's met
+  record. Merging the pull request does not discharge that measurement.
 
 The settlement records an `external_merge_settled` history entry from the old
 status to `done`. Its landing note names the pull request, the branch and the merge
