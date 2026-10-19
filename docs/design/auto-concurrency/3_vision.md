@@ -2,7 +2,7 @@
 title: Auto-concurrency — Vision
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Draft
 feature: auto-concurrency
 doc_role: vision
