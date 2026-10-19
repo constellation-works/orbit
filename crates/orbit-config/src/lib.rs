@@ -118,10 +118,11 @@ pub use provider_limit::{
 };
 pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
-    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection,
-    ConfigSnapshot, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
-    describe as describe_config_key, immutable_key_note, is_global_only_key,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
+    ConfigSection, ConfigSnapshot, MachineSettings, MidRunSteeringSettings,
+    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
+    admit_settable_config_key, config_key_options, describe as describe_config_key,
+    immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,
