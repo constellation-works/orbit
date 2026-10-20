@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -69,7 +70,14 @@ class AwaitJobsTests(unittest.TestCase):
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         (bin_dir / "gh").write_text(f'''#!/usr/bin/env python3
-import os, sys
+import os, signal, sys
+blocked_pid_file = os.environ.get("CI_AWAIT_BLOCK_PID_FILE")
+if blocked_pid_file:
+    # A listing that never answers: record the pid, then wait to be killed.
+    with open(blocked_pid_file, "w") as pid_file:
+        pid_file.write(str(os.getpid()))
+    while True:
+        signal.pause()
 args = ["http://127.0.0.1:{server.server_port}/" + arg if arg.startswith("repos/") else arg
         for arg in sys.argv[1:]]
 os.execv({real_gh!r}, [{real_gh!r}, *args])
@@ -79,14 +87,14 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
                         GH_CONFIG_DIR=str(self.root / "gh-config"), GITHUB_REPOSITORY="fixture/orbit",
                         GITHUB_RUN_ID="4242")
 
-    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None):
+    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01"):
         self.responses[:] = responses
         arguments = [argument for name in jobs for argument in ("--job", name)]
         if step is not None:
             arguments += ["--step", step]
         return self_test_hang.run(
             [sys.executable, str(SCRIPTS / "ci-await-jobs.py"), *arguments,
-             "--poll-seconds", "0.01", "--timeout-seconds", timeout],
+             "--poll-seconds", poll, "--timeout-seconds", timeout],
             step="ci-await-jobs",
             env=self.env, text=True, capture_output=True)
 
@@ -141,9 +149,38 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
                 self.assertEqual(len(self.requests), 1)
 
     def test_a_job_that_never_completes_times_out_by_name(self):
-        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="0.3")
+        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="3")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 0.3 s waiting for Test shard 2/2 (missing)", result.stderr)
+        self.assertIn("timed out after 3 s waiting for Test shard 2/2 (missing)", result.stderr)
+
+    def test_a_blocked_listing_is_killed_at_the_deadline(self):
+        pid_file = self.root / "gh.pid"
+        self.env["CI_AWAIT_BLOCK_PID_FILE"] = str(pid_file)
+        result = self.wait([job("Test build")], timeout="2")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("timed out after 2 s waiting for every job (job listing still running at the "
+                      "deadline, killed)", result.stderr)
+        self.assertTrue(pid_file.exists(), "the listing child started before the deadline")
+        with self.assertRaises(ProcessLookupError, msg="the timed-out listing child is reaped"):
+            os.kill(int(pid_file.read_text()), 0)
+
+    def test_a_listing_after_the_deadline_is_not_a_success(self):
+        everything = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2")]
+        uploaded = [job("Test build", "in_progress", steps=[(UPLOAD, "completed", "success")])]
+        for responses, kwargs in ((everything, {}), (uploaded, {"jobs": ["Test build"], "step": UPLOAD})):
+            with self.subTest(kwargs=kwargs):
+                result = self.wait(responses, timeout="0", **kwargs)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("timed out after 0 s", result.stderr)
+                self.assertNotIn("awaited jobs succeeded", result.stdout)
+
+    def test_the_poll_sleep_does_not_outlast_the_deadline(self):
+        started = time.monotonic()
+        result = self.wait([job("Test build")], timeout="3", poll="60")
+        # Loose bound: unclipped, the sleep alone takes the full 60 s poll.
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("timed out after 3 s waiting for Test shard 1/2 (missing)", result.stderr)
 
 
 if __name__ == "__main__":
