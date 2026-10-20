@@ -310,9 +310,12 @@ fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
                 .expect("create config parent");
             fs::write(&config, "{}").expect("write stray client config");
 
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 fixture.assert_no_client_config_outside_the_checkout();
             }));
+            std::panic::set_hook(prev_hook);
             let message = result
                 .expect_err("outside client config guard must reject the config")
                 .downcast_ref::<String>()

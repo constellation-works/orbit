@@ -391,7 +391,8 @@
 }
 .task-levers .status-cell .task-select-chip { display: none; }
 .task-levers .task-status-select,
-.task-levers .task-complexity-select {
+.task-levers .task-complexity-select,
+.task-crew-control .task-crew-select {
   width: auto;
   height: 28px;
   border-radius: 999px;
@@ -436,6 +437,27 @@
 }
 .task-levers .task-complexity-select:hover:not(:disabled),
 .task-levers .task-complexity-select:focus { border-color: var(--fg-mute); }
+
+/* Crew uses the same labeled pill for listed and pinned task details. The
+   native select remains the keyboard control; feedback sits below the pill. */
+.task-levers .crew-cell { display: flex; flex-direction: column; align-items: flex-start; }
+.task-crew-control { padding-right: 4px; }
+.task-crew-control .task-crew-select {
+  width: auto;
+  max-width: 180px;
+  height: 26px;
+  padding-left: 0;
+  border: 0;
+  border-radius: 999px;
+  background-color: transparent;
+  color: inherit;
+  font: 12px var(--font-mono);
+  text-transform: none;
+  cursor: pointer;
+}
+.task-crew-control:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-crew-control:hover { border-color: var(--fg-mute); }
+.task-crew-control .task-crew-select:disabled { cursor: default; }
 
 /* Tags close the row: dashed pills, with Edit after them; the open editor
    takes the whole line. */

@@ -305,6 +305,9 @@ try {
     await page.waitForFunction(() => globalThis.panelFixture.writes.includes('/api/tasks/PANEL-1/approve'));
     assert.equal(await pane(page).isHidden(), true, 'Approve from the row leaves the pane closed');
     assert.equal(await openParam(page), null, 'Approve from the row selects nothing');
+    await row(page, 'PANEL-1').locator('.task-crew-select').selectOption('sol');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-1', body: { crew: 'sol' } }], 'Crew editing still saves from a list row');
     await row(page, 'PANEL-4').getByRole('link', { name: 'View run' }).click();
     await page.waitForFunction(() => location.hash.startsWith('#runs'));
     assert.match(page.url(), /run_id=jrun-fixture-4/, 'View run opens the task\'s run');
@@ -316,23 +319,56 @@ try {
     results.inlineActions = true;
   }
 
-  // A task outside the filter (PANEL-31 is done) is pinned by its id. The full
-  // page drops the list-only note and shows the crew once, through the select
-  // that changes it; the dock keeps the note with the same single crew control.
-  {
-    const { page, errors, context } = await openPage();
-    await page.goto(origin + '/?workspace=one#tasks/PANEL-31');
-    await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
-    await capture(page, 'tasks-page-pinned-dark-1440.png');
-    assert.equal(await page.locator('#task-detail-body .pinned-note').isVisible(), false, 'The full page drops the outside-the-list note: there is no list for the task to be outside of');
-    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'The full page shows the crew through one select');
-    assert.equal(await page.locator('#task-detail-body .task-chip-crew').count(), 0, 'The lever row does not repeat the crew');
-    await page.locator('#task-detail-body .task-crew-select').selectOption('sol');
-    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
-    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-31', body: { crew: 'sol' } }], 'Changing the crew on the full page saves it to the pinned task');
-    assert.equal(await page.locator('#task-detail-body .task-crew-select').inputValue(), 'sol', 'The select keeps the saved crew');
+  // Filter membership must not change the full-page crew's label, position,
+  // styling or ability to save. Each width compares a done task with a listed
+  // task, using the same crew value so their control geometry is comparable.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const layouts = [];
+    const shots = [];
+    for (const [kind, id] of [['pinned', 'PANEL-31'], ['listed', 'PANEL-5']]) {
+      await page.goto(origin + '/?workspace=one&compare=' + id + '#tasks/' + id);
+      await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
+      const name = `tasks-page-${kind}-dark-${width}.png`;
+      await capture(page, name);
+      shots.push(fs.readFileSync(path.join(evidence, name)).toString('base64'));
+      assert.equal(await page.locator('#task-detail-body .pinned-external').isVisible(), false, 'The full page has no outside-the-list box');
+      assert.equal(await pane(page).locator('.task-crew-select').count(), 1, 'The full page has one crew select');
+      const crew = pane(page).locator('.task-levers .task-chip-crew');
+      await crew.waitFor({ state: 'visible', timeout: 2000 });
+      assert.equal(await crew.locator('label').isVisible(), true, 'The crew has a visible field label');
+      assert.equal(await crew.getByLabel('Crew', { exact: true }).count(), 1, 'The visible label names its select');
+      layouts.push(await crew.evaluate(node => {
+        const levers = node.parentElement;
+        const control = node.querySelector('select');
+        const style = getComputedStyle(control);
+        return {
+          afterComplexity: node.previousElementSibling.classList.contains('complexity-cell'),
+          beforeHost: node.nextElementSibling.classList.contains('task-chip-host'),
+          offset: node.getBoundingClientRect().top - levers.getBoundingClientRect().top,
+          height: node.getBoundingClientRect().height,
+          style: ['fontFamily', 'fontSize', 'borderRadius', 'color', 'backgroundColor', 'appearance'].map(key => style[key]),
+        };
+      }));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The full page fits its viewport');
+      await crew.locator('select').selectOption('sol');
+      await page.waitForFunction(id => globalThis.panelFixture.patches.some(patch => patch.id === id), id);
+      await crew.locator('.mutation-feedback.success').waitFor({ state: 'visible' });
+      assert.equal(await crew.locator('select').inputValue(), 'sol', 'The full page keeps the saved crew');
+      assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id, body: { crew: 'sol' } }], 'Crew changes target the displayed task');
+    }
+    assert.ok(layouts.every(layout => layout.afterComplexity && layout.beforeHost), 'Crew sits between complexity and host for either filter membership');
+    assert.deepEqual(layouts[0], layouts[1], 'The crew has the same lever-row position and styling inside and outside the filter');
+    // A browser-rendered comparison artifact keeps both complete viewports
+    // side by side without adding an image-processing dependency.
+    const comparison = await context.newPage();
+    await comparison.setViewportSize({ width: width * 2, height: width === 375 ? 812 : 900 });
+    await comparison.setContent(`<body style="margin:0;display:flex">${shots.map(shot => `<img width="${width}" src="data:image/png;base64,${shot}">`).join('')}</body>`);
+    await comparison.locator('img').evaluateAll(images => Promise.all(images.map(image => image.decode())));
+    await comparison.screenshot({ path: path.join(evidence, `tasks-page-comparison-dark-${width}.png`) });
     assert.deepEqual(errors, []);
     await context.close();
+    results[`crewLayout${width}`] = layouts;
   }
 
   {
@@ -341,26 +377,23 @@ try {
     await capture(page, 'tasks-dock-pinned-dark-1440.png');
     assert.equal(await page.locator('#task-detail-body .pinned-note').innerText(), 'Not in the current list · done', 'The dock keeps the outside-the-list note');
     assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'The dock shows the crew through one select');
-    assert.equal(await page.locator('#task-detail-body .task-chip-crew').count(), 0, 'The lever row does not repeat the crew beside the dock');
+    assert.equal(await page.locator('#task-detail-body .task-levers .task-crew-select').count(), 1, 'The dock keeps crew editing in the lever row');
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await pane(page).locator('.pinned-note').isVisible(), true, 'The pinned phone sheet keeps the outside-the-list note');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The pinned phone sheet fits its viewport');
+    await capture(page, 'tasks-dock-pinned-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator('#task-detail-body .task-crew-select').selectOption('opus');
     await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-31', body: { crew: 'opus' } }], 'Changing the crew beside the list saves it to the pinned task');
+    await pane(page).locator('.crew-cell .mutation-feedback.success').waitFor({ state: 'visible' });
+    await pane(page).getByRole('button', { name: 'Open full page' }).click();
+    assert.equal(await pane(page).locator('.pinned-external').isVisible(), false, 'Opening the pinned dock as a page hides the list-only note');
+    assert.equal(await pane(page).getByLabel('Crew', { exact: true }).inputValue(), 'opus', 'Opening the full page keeps the saved crew and its label');
+    await pane(page).getByRole('button', { name: 'Back to list' }).click();
+    await pane(page).locator('.pinned-note').waitFor({ state: 'visible' });
     assert.deepEqual(errors, []);
     await context.close();
-  }
-
-  // At 375px the pinned page keeps one crew control and no note.
-  {
-    const { page, errors, context } = await openPage({ width: 375, height: 812 });
-    await page.goto(origin + '/?workspace=one#tasks/PANEL-31');
-    await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
-    await capture(page, 'tasks-page-pinned-dark-375.png');
-    assert.equal(await page.locator('#task-detail-body .pinned-note').isVisible(), false, 'At 375px the full page drops the outside-the-list note');
-    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'At 375px the full page shows the crew through one select');
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The pinned page does not overflow the phone width');
-    assert.deepEqual(errors, []);
-    await context.close();
-    results.pinned = true;
   }
 
   // At 375px the pane is a full-screen modal sheet with Back.
