@@ -2609,7 +2609,9 @@ function goToLandingRetry(detail, claim) {
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });
 }
 
-function buildTaskDetail(task, context, drain = null) {
+// `crewInBox`: the caller shows the crew as its own control (a pinned task's
+// box), so the lever row does not repeat it as a chip.
+function buildTaskDetail(task, context, drain = null, { crewInBox = false } = {}) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
   detail.teardown = () => disconnectCommentCards(detail);
@@ -2753,7 +2755,7 @@ function buildTaskDetail(task, context, drain = null) {
 
   // The side column holds what gates the task, then the graph around it; what
   // the task is and where it stands sits above the tabs.
-  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor });
+  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor, crewInBox });
 
   const readiness = readinessOf(task);
   if (readiness || drain) {
@@ -2844,15 +2846,17 @@ function buildTaskDetail(task, context, drain = null) {
 // the delivery card gathers the pull request, the run and the hands that
 // carried the task. The pane head carries only the id and title, so nothing
 // here is repeated there, and the timestamps close the detail.
-function buildTaskMeta(task, context, { editor, showsEditor }) {
+function buildTaskMeta(task, context, { editor, showsEditor, crewInBox }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
   levers.appendChild(buildComplexityUpdateControl(task, context));
-  const crew = explicitCrewValue(task);
-  levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
-    el("span", { class: "visually-hidden", text: "Crew: " }),
-    ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
-  ]));
+  if (!crewInBox) {
+    const crew = explicitCrewValue(task);
+    levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+      el("span", { class: "visually-hidden", text: "Crew: " }),
+      ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
+    ]));
+  }
   levers.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
     el("span", { class: "visually-hidden", text: "Runs on: " }),
     buildOsReadout(task),
@@ -3397,7 +3401,9 @@ function buildStatusUpdateControl(task, context) {
   return cell;
 }
 
-function buildCrewUpdateControl(task, context) {
+// `withChip: false` drops the pill that echoes the select's value: it only reads
+// as one control in a list row, where the cell's grid lays it over the select.
+function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   const cell = el("span", { class: "crew-cell" });
   if (isAggregateView()) {
     // The aggregate task list has no single crew registry to validate against.
@@ -3465,14 +3471,16 @@ function buildCrewUpdateControl(task, context) {
   cell.appendChild(select);
   const crewLabel = staleCurrentValue ? `${currentValue} (missing)` : currentValue || defaultOption.textContent;
   select.title += `: ${crewLabel}`;
-  const chip = el("span", {
-    class: "task-select-chip",
-    text: crews.length === 0 ? "unavailable" : staleCurrentValue
-      ? `${currentValue} (missing)`
-      : currentValue || resolvedCrewName(task),
-  });
-  chip.setAttribute("aria-hidden", "true");
-  cell.appendChild(chip);
+  if (withChip) {
+    const chip = el("span", {
+      class: "task-select-chip",
+      text: crews.length === 0 ? "unavailable" : staleCurrentValue
+        ? `${currentValue} (missing)`
+        : currentValue || resolvedCrewName(task),
+    });
+    chip.setAttribute("aria-hidden", "true");
+    cell.appendChild(chip);
+  }
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskCrewChange(task, feedback.undo.previousValue, context);
   });
@@ -3990,17 +3998,20 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
 
 // The pinned global-resolver result: a task outside the active filter, shown
 // in the pane with a note saying so. The list has no row for it, so its crew
-// control sits beside that note; the pane head closes it like any other.
+// control sits in the box beside that note, and the lever row leaves the crew
+// to the box. The full page hides the note and the box's highlight (tasks.css):
+// there is no list for the task to be outside of. The pane head closes it like
+// any other.
 function buildPinnedTask(ptask, context) {
   const row = el("div", { class: "pinned-external" }, [
     el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
-    buildCrewUpdateControl(ptask, context),
+    buildCrewUpdateControl(ptask, context, { withChip: false }),
   ]);
   stopRowInteraction(row);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const drain = taskDrainState(ptask, context);
-  const detail = buildTaskDetail(ptask, context, drain);
+  const detail = buildTaskDetail(ptask, context, drain, { crewInBox: true });
   const readiness = detail.querySelector(".readiness-list");
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
 
