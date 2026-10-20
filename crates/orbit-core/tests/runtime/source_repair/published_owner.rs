@@ -1286,6 +1286,111 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(opened["pr_number"], "17");
 }
 
+/// Two resumed runs that deferred the same footprint behind a third task each
+/// hold their task `in-progress` and neither holds a file. Once the holder
+/// releases, one run takes the footprint and the other is refused by that
+/// reservation alone, and takes it when the first releases — neither waits
+/// for the other to time out.
+pub(super) fn deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn() {
+    let f = Fixture::drained();
+    let add = |title: &str| {
+        f.runtime
+            .add_task(orbit_core::application::task::TaskAddParams {
+                title: title.into(),
+                description: "Changes the same file".into(),
+                acceptance_criteria: vec!["Observable".into()],
+                plan: "Fixture".into(),
+                context_files: vec!["file:source.txt".into()],
+                complexity: orbit_core::TaskComplexity::Medium,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    };
+    let set_status = |id: &str, status| {
+        f.runtime
+            .apply_task_automation_update(
+                id,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let holder = add("Overlapping work in review");
+    let (first, second) = (f.task.clone(), add("Second resumed publication"));
+    set_status(&holder, TaskStatus::Review);
+    set_status(&first, TaskStatus::InProgress);
+    set_status(&second, TaskStatus::InProgress);
+    let deferred_run = |task: &str| {
+        let mut run = f
+            .runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(
+                    json!({"task_ids":[task],"footprint_deferred":true,"footprint_wait_seconds":0}),
+                ),
+                None,
+            )
+            .unwrap();
+        run.state = JobRunState::Running;
+        run.pid = Some(std::process::id());
+        run.started_at = Some(Utc::now());
+        save_run(&f, &run);
+        run.run_id
+    };
+    let (first_run, second_run) = (deferred_run(&first), deferred_run(&second));
+    let acquire = |run: &str| f.runtime.acquire_deferred_footprint(run, "agent_implement");
+
+    for run in [&first_run, &second_run] {
+        let refused = acquire(run).unwrap_err().to_string();
+        assert!(
+            refused.contains("footprint_unavailable") && refused.contains(&holder),
+            "the holder still holds the footprint: {refused}"
+        );
+    }
+    set_status(&holder, TaskStatus::Done);
+
+    acquire(&first_run).expect("the other waiter holds no file, so it is no holder");
+    let refused = acquire(&second_run).unwrap_err().to_string();
+    assert!(
+        refused.contains("footprint_unavailable") && refused.contains(&first),
+        "an in-progress writer that holds the footprint excludes the second run: {refused}"
+    );
+    // With no status holder left, the writer's reservation alone excludes it.
+    set_status(&first, TaskStatus::Backlog);
+    let refused = acquire(&second_run).unwrap_err().to_string();
+    assert!(
+        refused.contains("footprint_unavailable") && refused.contains("reservation-"),
+        "the first run's file reservation excludes the second run: {refused}"
+    );
+
+    let locks = f
+        .runtime
+        .run_tool_as_human("orbit.task.locks", json!({}))
+        .unwrap();
+    let reservation = locks["by_reservation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["owner_run_id"] == first_run.as_str())
+        .expect("the first run holds a reservation with files");
+    assert_eq!(reservation["files"], json!(["file:source.txt"]));
+    let released = f
+        .runtime
+        .run_tool(
+            "orbit.task.locks.release",
+            json!({"reservation_id": reservation["reservation_id"], "model": "codex"}),
+        )
+        .unwrap();
+    assert_eq!(released["released"], true);
+    acquire(&second_run).expect("the second run takes the footprint once the first releases it");
+}
+
 /// Orbit's own auto-fix moved the published branch before the requeue. The
 /// head it recorded publishing is adopted; the next run carries it.
 pub(super) fn auto_fix_advanced_publication_is_adopted_at_its_recorded_head() {

@@ -443,11 +443,10 @@ pub(crate) fn reserve_deferred_footprint(
     }))
 }
 
-/// Whether `run_id` owns an active reservation that holds files.
-pub(crate) fn run_holds_file_reservation(
+/// The runs that own an active reservation holding files.
+pub(crate) fn runs_holding_file_reservations(
     runtime: &OrbitRuntime,
-    run_id: &str,
-) -> Result<bool, OrbitError> {
+) -> Result<BTreeSet<String>, OrbitError> {
     let listed = runtime
         .stores()
         .task_reservations()
@@ -456,9 +455,12 @@ pub(crate) fn run_holds_file_reservation(
             workspace_task_reservation_id(runtime)?.as_deref(),
         )?;
     emit_expired_reservation_events(runtime, &listed.expired_reservations)?;
-    Ok(listed.reservations.iter().any(|reservation| {
-        reservation.owner_run_id.as_deref() == Some(run_id) && !reservation.files.is_empty()
-    }))
+    Ok(listed
+        .reservations
+        .into_iter()
+        .filter(|reservation| !reservation.files.is_empty())
+        .filter_map(|reservation| reservation.owner_run_id)
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

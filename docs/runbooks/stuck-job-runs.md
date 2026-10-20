@@ -773,7 +773,10 @@ repairing a conflicting re-application, a reviewer fix, and step, conflict or
 check repair. Read-only reviewers and the final-recovery decision do not wait.
 If the locks stay held for the gate's wait (`max_wait_seconds`, default one
 hour), the agent is refused with `footprint_unavailable`, naming the holders.
-The run's reservation is released when the run ends.
+Another resumed run that still waits for its own footprint holds no file and is
+no holder, so two overlapping resumed runs take the footprint one after the
+other instead of refusing each other; the run that took it excludes the other
+until it ends. The run's reservation is released when the run ends.
 
 A missing task-meaning binding, changed task/head, incomplete publication,
 foreign source or ambiguous association stops admission. It never authorizes

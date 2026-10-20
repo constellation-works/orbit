@@ -215,6 +215,20 @@ impl TaskLockIndex {
         }
     }
 
+    /// The index without `task_ids` as holders, for tasks that hold their
+    /// context by status alone and have taken no file of it. A task named
+    /// here that a caller still requests stays readable.
+    pub(crate) fn without_status_holders(
+        mut self,
+        task_ids: &BTreeSet<String>,
+        requested_task_ids: &[String],
+    ) -> Self {
+        self.tasks.retain(|task_id, _| {
+            !task_ids.contains(task_id) || requested_task_ids.contains(task_id)
+        });
+        self
+    }
+
     pub(crate) fn get(&self, task_id: &str) -> Option<&TaskEnvelopeV2> {
         self.tasks.get(task_id)
     }

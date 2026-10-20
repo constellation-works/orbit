@@ -56,6 +56,7 @@ use completion::{
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use published_owner::{
     auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
+    deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
@@ -833,6 +834,7 @@ crate::scenario_table!(
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
+    deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
     auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
     unrecorded_publication_move_is_refused,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
