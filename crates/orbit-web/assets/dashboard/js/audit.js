@@ -143,6 +143,7 @@ function renderScopeChips() {
   if (workspace) {
     // Single-workspace mode has no picker to restore a cleared action scope.
     host.appendChild(scopeChip("workspace", workspaceDisplayName(workspace), isMultiWorkspace() ? () => {
+      if (!isMultiWorkspace()) return;
       setWorkspace(null);
       persistScopeToUrl();
       const select = $("workspace-select");

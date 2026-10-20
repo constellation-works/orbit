@@ -1337,8 +1337,6 @@ async function initWorkspaceSelector() {
   // workspaces are loaded on its own.
   if (hostRevision !== getHostRevision()) return false;
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
-  // Scope chips name workspaces from this list, single-workspace mode included.
-  setWorkspaceNames(dashboardWorkspaces);
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
@@ -1880,7 +1878,12 @@ async function ensureHostScope() {
     const rebuild = { hostRevision: getHostRevision() };
     workspaceRebuild = rebuild;
     rebuild.done = initWorkspaceSelector()
-      .then((loaded) => { if (!loaded && workspaceRebuild === rebuild) workspacesWanted = true; })
+      .then((loaded) => {
+        // Rebuild scope chips after both cardinality and selection settle. A
+        // shared id across hosts does not trigger a workspace-change listener.
+        if (loaded) setWorkspaceNames(dashboardWorkspaces);
+        else if (workspaceRebuild === rebuild) workspacesWanted = true;
+      })
       .finally(() => { if (workspaceRebuild === rebuild) workspaceRebuild = null; });
   }
   if (workspaceRebuild) await workspaceRebuild.done;
