@@ -178,6 +178,18 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<crate::contracts::TaskCandidates, OrbitError>;
+    /// Observe settled metadata without coordination, recovery, index repair or
+    /// persisted freshness proofs. This is an informational snapshot, never
+    /// an admission decision; concurrent publication may change its population.
+    fn observe_task_candidates(
+        &self,
+        _filter: &crate::contracts::TaskListFilter,
+        _limit: usize,
+    ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
+        Err(OrbitError::Store(
+            "observational task candidates unavailable".into(),
+        ))
+    }
     /// Select a fully indexed page from the generated index alone, reading no
     /// envelope; `None` when the filter or the index cannot answer that way.
     fn task_candidate_keys(

@@ -19,7 +19,7 @@ use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
 /// An `in-progress` or `review` task holds its context against other work,
 /// unless it carries [`NO_DIFF_EXPECTED_TAG`] [ORB-14247].
-fn holds_context_lock(status: TaskStatus, tags: &[String]) -> bool {
+pub(super) fn holds_context_lock(status: TaskStatus, tags: &[String]) -> bool {
     matches!(status, TaskStatus::InProgress | TaskStatus::Review) && !context_lock_exempt(tags)
 }
 
@@ -39,9 +39,20 @@ pub(crate) fn lock_context_files_for_task(
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
 ) -> Vec<String> {
+    canonical_lock_surface(
+        declared_context_files(&task.context_files, workspace_root).retained,
+        unlocked,
+    )
+}
+
+/// Apply admission's unlocked rules to canonical declarations, retaining the
+/// docs-only fallback and a stable, deduplicated surface for every consumer.
+pub(super) fn canonical_lock_surface(
+    declarations: impl IntoIterator<Item = String>,
+    unlocked: &UnlockedContextPaths,
+) -> Vec<String> {
     unlocked.lock_surface(
-        declared_context_files(&task.context_files, workspace_root)
-            .retained
+        declarations
             .into_iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -266,14 +277,7 @@ impl TaskLockIndex {
         workspace_root: &Path,
     ) -> DeclaredContextFiles {
         let mut declared = declared_context_files(&task.context_files, workspace_root);
-        declared.retained = self.unlocked.lock_surface(
-            declared
-                .retained
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-        );
+        declared.retained = canonical_lock_surface(declared.retained, &self.unlocked);
         declared.invalid = declared
             .invalid
             .into_iter()
@@ -442,7 +446,7 @@ pub(super) fn invalid_declared_selectors(
     invalid.into_iter().collect()
 }
 
-fn task_lock_status_rank(status: TaskStatus) -> u8 {
+pub(super) fn task_lock_status_rank(status: TaskStatus) -> u8 {
     match status {
         TaskStatus::InProgress => 0,
         TaskStatus::Review => 1,

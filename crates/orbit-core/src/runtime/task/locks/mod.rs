@@ -3,6 +3,7 @@
 mod audit;
 mod commands;
 mod index;
+mod projection;
 mod unlocked;
 
 pub(crate) use audit::{emit_expired_reservation_events, emit_task_lock_release_event};
