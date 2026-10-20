@@ -34,6 +34,11 @@ use crate::context::{
 use crate::executor::automation::vcs::absorbed::{AbsorbedCandidate, verify_absorbed_candidate};
 use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
+/// How long the authenticated completion retry waits before it reads the
+/// pull request again [ORB-17140].
+const COMPLETION_OBSERVATION_RETRY_BACKOFF: std::time::Duration =
+    std::time::Duration::from_secs(10);
+
 /// What the executor does after the hook.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum FinalRecoveryVerdict {
@@ -286,6 +291,8 @@ pub(super) fn attempt_final_recovery(
 
     // Read-only completion transport failures spend the same durable final
     // recovery budget, but need neither an agent nor a replacement candidate.
+    // The single retry waits out a short outage first; the cumulative
+    // completion deadline keeps counting through the wait.
     if matches!(
         error,
         DispatchError::CompletionObservationUnavailable { .. }
@@ -295,6 +302,7 @@ pub(super) fn attempt_final_recovery(
             .authenticate_completion_tail(&ctx.run_id, &task_id, &step.id);
         let refusal = match authentication {
             Ok(true) => {
+                crate::executor::automation::vcs::fixed_wait(COMPLETION_OBSERVATION_RETRY_BACKOFF);
                 let rationale =
                     "authenticated unchanged publication; retry current completion observation"
                         .to_string();

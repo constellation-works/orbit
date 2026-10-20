@@ -81,7 +81,7 @@ mod fixed_wait_fixture {
 #[cfg(feature = "test-support")]
 pub use fixed_wait_fixture::with_vcs_retry_wait;
 
-pub(super) fn fixed_wait(duration: Duration) {
+pub(crate) fn fixed_wait(duration: Duration) {
     #[cfg(feature = "test-support")]
     if fixed_wait_fixture::wait(duration) {
         return;

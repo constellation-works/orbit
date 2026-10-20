@@ -114,12 +114,23 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     };
     let commands = with_replays(host.required_validation_commands(), &replays);
     if commands.is_empty() {
+        // [ORB-17140] Optional reuse evidence: with nothing to run, the
+        // effective policy is all an unchanged completion retry can bind.
+        let completion_policy = required_job_run_id(input, "candidate_validate")
+            .ok()
+            .zip(completed_task_ids_from_input(input))
+            .and_then(|(run_id, task_ids)| {
+                host.completion_policy_digest(run_id, &task_ids)
+                    .ok()
+                    .flatten()
+            });
         let mut output = json!({
             "phase": "validate",
             "decision": SKIPPED_NO_REQUIRED_COMMANDS,
             "note": NO_REQUIRED_COMMANDS_NOTE,
             "commands": [],
             "validation": [],
+            "completion_policy": completion_policy,
         });
         if let Some(owned_paths) = owned_paths {
             output["owned_paths"] = json!(owned_paths);
