@@ -44,6 +44,7 @@ fn stall(store: &dyn AutomationStoreBackend) {
         escalated_at: None,
         friction_id: None,
         divergence: None,
+        crew_hold: None,
     });
     assert!(store.automation_stall(&state, &next).unwrap());
 }

@@ -72,6 +72,7 @@ fn report(
             branch: "agent-main",
             reason: "history_diverged",
             divergence: Some(&divergence),
+            crew_hold: None,
             repaired: false,
             at,
         },

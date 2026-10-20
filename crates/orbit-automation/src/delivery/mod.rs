@@ -27,6 +27,19 @@ pub trait DeliveryHost {
         Ok(None)
     }
 
+    /// Why the claimed `attempt` cannot be admitted under the current
+    /// configuration, or `None` when it can. A hold stalls the consumer as
+    /// [`stall::CREW_OS_INELIGIBLE`] instead of failing admission on every
+    /// tick, and the first evaluation that finds it gone resumes admission
+    /// without an operator.
+    fn admission_hold(
+        &self,
+        _attempt: &BatchAttempt,
+    ) -> Result<Option<orbit_types::workflow::automation::recovery::CrewOsHold>, AutomationError>
+    {
+        Ok(None)
+    }
+
     /// Minutes a deferred reason may persist before the evaluator escalates it
     /// to a warning and one friction record.
     fn stall_window_minutes(&self) -> u32 {

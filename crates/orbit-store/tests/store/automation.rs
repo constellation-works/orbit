@@ -135,6 +135,7 @@ fn next_state(previous: &AutomationState, write: Write) -> AutomationState {
                 escalated_at: None,
                 friction_id: None,
                 divergence: None,
+                crew_hold: None,
             });
         }
         Write::Waive => {

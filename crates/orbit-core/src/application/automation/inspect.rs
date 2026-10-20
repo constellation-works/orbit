@@ -459,7 +459,12 @@ fn inspect(
                 &trigger.branch,
             )
             .unwrap_or_else(|| "awaiting_baseline".into()),
-            Some(state) => scheduling_reason(state, trigger, admission_deferred, now).into(),
+            // A stall suspends evaluation ahead of any scheduling question,
+            // and the evaluator reports it so.
+            Some(state) => match &state.stall {
+                Some(stall) => delivery::stall::stalled_reason(&stall.reason),
+                None => scheduling_reason(state, trigger, admission_deferred, now).into(),
+            },
         }
     };
 

@@ -22,6 +22,7 @@ mod source_cache;
 pub(crate) mod stall;
 mod task;
 
+pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{
     AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
 };
