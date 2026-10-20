@@ -4087,7 +4087,7 @@ function refreshDraftCrewControl(wrap, task, context) {
   const refreshedSelect = refreshed.querySelector("select");
   if (!refreshedSelect) return;
 
-  select.replaceChildren(...Array.from(refreshedSelect.options, (option) => option.cloneNode(true)));
+  select.replaceChildren(...refreshedSelect.children);
   select.value = refreshedSelect.value;
   select.disabled = refreshedSelect.disabled;
   select.title = refreshedSelect.title;
