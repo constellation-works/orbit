@@ -6,7 +6,7 @@
 //! (a forge timeout, a final-recovery escalation or requeue, a dead worker),
 //! its pull request can turn red or conflict with its base while nothing
 //! watches it. Each pass of a drain started with `--auto-fix` therefore looks
-//! at the newest delivery leaf of every task and, for one whose pull request
+//! at the newest delivery leaf of every task that records a pull request and, for one whose pull request
 //! is blocked, hands the task back to that leaf's completion step: a
 //! checkpoint resume rewound to `pr_complete` (`plan_completion_repair_resume`)
 //! with `auto_fix` granted. The watcher there admits the repair against the
@@ -45,7 +45,6 @@
 //! Nothing here ends the drain: each refusal is reported in the step output
 //! and a later pass reconsiders it.
 
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -76,9 +75,10 @@ pub(crate) const PR_AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 /// The delivery leaf that opens and watches a pull request.
 const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
 
-/// Delivery leaves read by one pass, newest first. A task's newest leaf is
-/// the one considered.
-const REPAIR_SCAN_LIMIT: usize = 200;
+/// Delivery leaves read for one candidate task, newest first, to find the
+/// newest one that carries only that task. A leaf that carries several tasks
+/// is no task's own, so a few are read past.
+const TASK_LEAF_SCAN: usize = 8;
 
 /// How long a pull request found without a blocker is not read again.
 const CLEAN_RECHECK: Duration = Duration::from_secs(300);
@@ -170,41 +170,55 @@ impl OrbitRuntime {
             return json!({ "started": [], "skipped": [], "hold_reason": "write_free" });
         }
         let throttled = self.resource_admission().throttle.is_some();
-        let leaves = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_LEAF_JOB.to_string()),
-            order_by: JobRunOrder::Recency,
-            limit: Some(REPAIR_SCAN_LIMIT),
-            include_steps: false,
-            ..JobRunQuery::default()
-        }) {
-            Ok(leaves) => leaves,
+        let tasks = match self.list_task_metadata() {
+            Ok(tasks) => tasks,
             Err(error) => {
                 tracing::warn!(
                     target: "orbit.core.drain",
                     error = %error,
-                    "could not list delivery leaves; this pass repairs no pull request",
+                    "could not list tasks; this pass repairs no pull request",
                 );
                 return json!({
                     "started": [],
                     "skipped": [],
-                    "pass_error": format!("list delivery leaves: {error}"),
+                    "pass_error": format!("list tasks: {error}"),
                 });
             }
         };
-        let mut seen = BTreeSet::new();
         let mut started = Vec::new();
         let mut skipped = Vec::new();
         let mut reads = PassReads::default();
-        for run in leaves {
-            let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-            let mut carried = task_ids.iter();
-            let (Some(task_id), None) = (carried.next(), carried.next()) else {
-                continue;
-            };
-            // The newest leaf of a task speaks for it; older ones are its past.
-            if !seen.insert(task_id.clone()) {
-                continue;
+        // Candidates come from the tasks, not from a window of recent runs, so
+        // a task's stopped leaf is found however many deliveries ran since.
+        let mut leaves = Vec::new();
+        for task in tasks.iter().filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Review | TaskStatus::Blocked | TaskStatus::Backlog
+            ) && task.github_pr_number().is_some()
+        }) {
+            match self.newest_own_delivery_leaf(&task.id) {
+                Ok(Some(run)) => leaves.push((task.id.clone(), run)),
+                Ok(None) => {}
+                Err(error) => skipped.push(json!({
+                    "task_id": task.id,
+                    "source_run_id": Value::Null,
+                    "pr_number": task.github_pr_number(),
+                    "blocker": Value::Null,
+                    "reason": "store_unreadable",
+                    "detail": format!("read the task's delivery leaves: {error}"),
+                })),
             }
+        }
+        // Newest first, so a pass short of slots serves the freshest leaves.
+        leaves.sort_by(|(left_task, left), (right_task, right)| {
+            run_recency(right)
+                .cmp(&run_recency(left))
+                .then_with(|| left.run_id.cmp(&right.run_id))
+                .then_with(|| left_task.cmp(right_task))
+        });
+        for (task_id, run) in leaves {
+            let task_id = task_id.as_str();
             let hold = if throttled {
                 Some((
                     "resource_throttled",
@@ -254,6 +268,28 @@ impl OrbitRuntime {
             }
         }
         json!({ "started": started, "skipped": skipped })
+    }
+
+    /// The newest `task_pr_pipeline` run that carries only `task_id`, whatever
+    /// its state: a later finished run speaks for the task, so the verdict
+    /// never resumes an older stopped one.
+    fn newest_own_delivery_leaf(&self, task_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(DELIVERY_LEAF_JOB.to_string()),
+                task_id: Some(task_id.to_string()),
+                order_by: JobRunOrder::Recency,
+                limit: Some(TASK_LEAF_SCAN),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .find(|run| {
+                let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
+                carried.len() == 1 && carried.contains(task_id)
+            }))
     }
 
     /// Whether the pull request of `task_id`'s newest leaf `run` is repaired,
@@ -683,6 +719,11 @@ impl OrbitRuntime {
             })
             .collect())
     }
+}
+
+/// When a run last moved, as the store's recency order reads it.
+fn run_recency(run: &JobRun) -> chrono::DateTime<Utc> {
+    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 /// `Err` with the skip when the pull request's ledger would not admit a
