@@ -4081,8 +4081,9 @@ function refreshDraftCrewControl(wrap, task, context) {
   const refreshedSelect = refreshed.querySelector("select");
   if (!refreshedSelect) return;
 
+  const value = refreshedSelect.value;
   select.replaceChildren(...refreshedSelect.children);
-  select.value = refreshedSelect.value;
+  select.value = value;
   select.disabled = refreshedSelect.disabled;
   select.title = refreshedSelect.title;
   select.dataset.currentValue = refreshedSelect.dataset.currentValue;

@@ -319,18 +319,39 @@ try {
     results.inlineActions = true;
   }
 
-  // A comment draft keeps the detail node alive across crew saves. The crew
-  // control must still follow the saved task so its original value can be
-  // selected again and sent as a second update.
+  // A comment or reject draft keeps the detail node alive across crew saves.
+  // The crew control must still follow the saved task so its original value can
+  // be selected again and sent as a second update, readiness refreshes must
+  // not reset the select, and selecting the workspace default must clear it.
   {
     const { page, errors, context } = await openPage();
     await row(page, 'PANEL-2').locator('.title').click();
     await waitShown(page, 'PANEL-2');
+    const crew = pane(page).locator('#detail-PANEL-2-crew');
+    assert.equal(await crew.inputValue(), 'opus', 'The detail starts with the task\'s explicit crew');
+
+    // Readiness-only refresh with no draft held repaints in place without resetting crew.
+    await page.waitForFunction(() => globalThis.panelFixture.reads.some(r => r.includes('/api/workflows/auto/readiness?task=PANEL-2')));
+    await page.waitForFunction(() => {
+      const list = document.querySelector('#detail-PANEL-2 .readiness-list');
+      return list && list.dataset.drainSignature !== 'true-';
+    });
+    assert.equal(await crew.inputValue(), 'opus', 'A readiness-only refresh with no draft held preserves explicit crew');
+
+    // An open reject composer also retains the explicit crew.
+    await pane(page).getByRole('button', { name: 'reject', exact: true }).click();
+    const reject = pane(page).locator('.reject-form');
+    await reject.waitFor({ state: 'visible' });
+    assert.equal(await crew.inputValue(), 'opus', 'An open reject composer preserves explicit crew');
+    await reject.locator('.action.cancel').click();
+    await reject.waitFor({ state: 'hidden' });
+    assert.equal(await crew.inputValue(), 'opus', 'Canceling the reject composer leaves explicit crew intact');
+
+    // Open comment composer.
     await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
     const comment = pane(page).locator('.comment-form');
-    const crew = pane(page).locator('#detail-PANEL-2-crew');
     await comment.waitFor({ state: 'visible' });
-    assert.equal(await crew.inputValue(), 'opus', 'The detail starts with the task\'s explicit crew');
+    assert.equal(await crew.inputValue(), 'opus', 'Opening comment composer preserves the task\'s explicit crew');
 
     await crew.selectOption('sol');
     await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === 'sol');
@@ -338,6 +359,8 @@ try {
     const firstFeedbackVisible = await pane(page).locator('.crew-cell .mutation-feedback.success').isVisible();
     const draftStillOpenAfterSave = await comment.isVisible();
     assert.equal(await crew.inputValue(), 'sol', 'The draft-held detail reflects the first saved crew');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), 'sol', 'The list row reflects the saved crew');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), 'sol', 'The API fixture stores the saved crew');
     await capture(page, 'tasks-crew-draft-dark-1440.png');
     await page.setViewportSize({ width: 375, height: 812 });
     await capture(page, 'tasks-crew-draft-dark-375.png');
@@ -358,6 +381,41 @@ try {
     assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), 'opus', 'The list row shows the reverted crew');
     assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), 'opus', 'The API fixture stores the reverted crew');
     assert.equal(await comment.isVisible(), true, 'Both crew changes leave the comment draft open');
+
+    // Selecting the workspace default still clears the explicit crew.
+    await crew.selectOption('');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 3, undefined, { timeout: 2000 }).catch(() => {});
+    const patchesAfterDefault = await page.evaluate(() => globalThis.panelFixture.patches);
+    assert.deepEqual(patchesAfterDefault, [
+      { id: 'PANEL-2', body: { crew: 'sol' } },
+      { id: 'PANEL-2', body: { crew: 'opus' } },
+      { id: 'PANEL-2', body: { crew: null } },
+    ], 'Selecting the workspace default sends a third PATCH with crew: null');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === null);
+    await page.waitForTimeout(25);
+    assert.equal(await crew.inputValue(), '', 'The detail select shows the workspace default');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), '', 'The list row shows the workspace default');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), null, 'The API fixture stores null for the cleared crew');
+    assert.equal(await comment.isVisible(), true, 'Selecting default crew leaves the comment draft open');
+
+    await comment.locator('.action.cancel').click();
+    await comment.waitFor({ state: 'hidden' });
+
+    // A task with a missing explicit crew preserves it and marks it stale.
+    await page.evaluate(() => {
+      const task = globalThis.panelFixture.tasks.find(item => item.id === 'PANEL-14');
+      if (task) task.crew = 'stale-crew';
+    });
+    await row(page, 'PANEL-14').locator('.title').click();
+    await waitShown(page, 'PANEL-14');
+    const staleCrew = pane(page).locator('#detail-PANEL-14-crew');
+    assert.equal(await staleCrew.inputValue(), 'stale-crew', 'The detail starts with the missing explicit crew');
+    assert.equal(await staleCrew.getAttribute('data-stale-current-value'), 'stale-crew', 'The select records the stale crew in its dataset');
+    await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
+    await pane(page).locator('.comment-form').waitFor({ state: 'visible' });
+    assert.equal(await staleCrew.inputValue(), 'stale-crew', 'Draft-held refresh preserves the missing explicit crew');
+    assert.equal(await staleCrew.getAttribute('data-stale-current-value'), 'stale-crew', 'The select retains the stale crew in its dataset');
+
     assert.deepEqual(errors, []);
     await context.close();
     results.draftHeldCrewRevert = true;
