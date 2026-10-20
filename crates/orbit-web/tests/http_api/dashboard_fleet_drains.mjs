@@ -14,6 +14,16 @@ class Node {
   setAttribute(name, value) { this.attrs[name] = value; }
   addEventListener(type, fn) { this.events[type] = fn; }
 }
+const findAll = (node, match, found = []) => {
+  if (typeof node !== 'object') return found;
+  if (match(node)) found.push(node);
+  for (const child of node.children) findAll(child, match, found);
+  return found;
+};
+const fieldOf = (row, name) => findAll(row, node => node.attrs['data-field'] === name)[0];
+// Visible text: field names for assistive tech are left out.
+const shown = node => typeof node === 'string' ? node
+  : (node.attrs.class || '').includes('visually-hidden') ? '' : node.textContent + node.children.map(shown).join('');
 let hosts = [
   { name: 'owner', local: true }, { name: 'remote', ssh: 'remote' },
   { name: 'offline' }, { name: 'extra' },
@@ -51,17 +61,19 @@ try {
   assert.equal(payload.items.length, 4, 'unreachable hosts keep a row');
   assert.equal(payload.items[2].error, 'Host unreachable');
   assert.equal(fleetDrainLabel(payload), '1 of 3 workspaces draining · partial');
-  const table = renderFleetDrains(payload, (...scope) => calls.push(scope));
-  const body = table.children.find(child => child.tag === 'tbody');
-  const ready = body.children[0];
-  assert.equal(ready.children[4].textContent, '4', 'idle eligible work is visible');
-  assert.equal(ready.children[5].textContent, 'context lock conflict');
-  assert.equal(ready.children[6].textContent, 'codex usage limit');
+  const card = renderFleetDrains(payload, (...scope) => calls.push(scope));
+  const rows = findAll(card, node => node.tag === 'li');
+  const ready = rows[0];
+  assert.equal(shown(fieldOf(ready, 'eligible')), '4 eligible', 'idle eligible work is visible');
+  assert.equal(shown(fieldOf(ready, 'top-wait')), 'top wait: context lock conflict');
+  assert.equal(shown(fieldOf(ready, 'holds')), 'held: codex usage limit');
+  assert.equal(fieldOf(ready, 'slots').children[0].textContent, 'Slots ', 'slots keep their field name for assistive tech');
   ready.events.click();
-  body.children[1].events.click();
+  rows[1].events.click();
   assert.deepEqual(calls, [['owner', 'idle-ready'], ['remote', 'remote-work']], 'rows carry host and workspace to the dashboard scope switch');
-  assert.equal(ready.children[1].children[0].tag, 'button', 'row navigation has a native keyboard control');
-  assert.equal(body.children[2].events.click, undefined, 'unavailable hosts cannot select a workspace');
+  assert.ok(findAll(ready, node => node.tag === 'button').length === 1, 'row navigation has a native keyboard control');
+  assert.equal(rows[2].events.click, undefined, 'unavailable hosts cannot select a workspace');
+  assert.equal(shown(fieldOf(rows[2], 'error')), 'Host unreachable', 'unavailable hosts keep their error');
   await fetchFleetDrains();
   assert.equal(requests.length, 4, 'fresh snapshots are reused');
   clock = 30_000;

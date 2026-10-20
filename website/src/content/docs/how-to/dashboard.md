@@ -138,8 +138,9 @@ Choosing **All workspaces** in the picker is remembered too.
 
 The header drain chip counts workspace/host pairs across registered hosts,
 for example **2 of 20 workspaces draining**. A workspace registered on two
-hosts counts twice. Click the chip to open the **All workspaces** fleet drains
-table; select a row to inspect that workspace on its host.
+hosts counts twice. Click the chip to open the **All workspaces** fleet drains,
+grouped by host with one line per workspace; select a workspace to inspect it
+on its host.
 
 - **All workspaces** lists tasks from every served workspace. Automation, the
   auto-drain, settings, and other per-workspace panels are read-only there.
