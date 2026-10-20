@@ -159,8 +159,12 @@ fn deferred_test(notice: &str) -> Option<&str> {
 }
 
 /// The one package and one integration test target a `cargo test` command
-/// names before `--`, or `None` when it names either none or several. Unknown
-/// options fail closed because they may select additional targets.
+/// names before `--`, or `None` when it names either none or several. Flags
+/// that neither select a target nor change the build (`--locked`,
+/// `--no-fail-fast`, ...) are skipped. Every other option fails closed:
+/// target selectors may add targets, and `--release`, `--features`,
+/// `--profile` and `--target` change the build that a host replay does not
+/// reproduce, so they stay refused.
 fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
     let mut words = command.split_whitespace();
     if words.next()? != "cargo" || words.next()? != "test" {
@@ -170,6 +174,7 @@ fn cargo_test_scope(command: &str) -> Option<(&str, &str)> {
     while let Some(word) = words.next() {
         let (slot, inline) = match word {
             "--" => break,
+            "--locked" | "--frozen" | "--offline" | "--no-fail-fast" | "-q" | "--quiet" => continue,
             "-p" | "--package" => (&mut package, None),
             "--test" => (&mut target, None),
             _ => match word.split_once('=') {

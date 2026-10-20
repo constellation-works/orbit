@@ -463,8 +463,13 @@ requirement covers a notice only when its command is admitted as
 package and one target and a filter equal to the test the notice names
 (`<prefix> <test>: <detail>`, for a Bubblewrap, Seatbelt or ps-denied
 notice). A requirement without a filter, a module filter, another package or
-target, or a command outside the grammar covers nothing. When every notice
-on the record is covered, the review counts as evidence-only, so it holds or
+target, or a command outside the grammar covers nothing. The broader run may
+also carry `--locked`, `--frozen`, `--offline`, `--no-fail-fast`, `-q` or
+`--quiet`, which select no target and change no build. Any other option, such
+as a target selector (`--lib`, `--bins`, `--all-targets`, `--workspace` and the
+like) or a build option (`--release`, `--features`, `--profile`, `--target`),
+leaves its notices uncovered. When every notice on the record is covered, the
+review counts as evidence-only, so it holds or
 a claimed host replays the requirements. Each passing result clears only the
 notice it covers and notes its result and log on the broader record, which
 passes once none is left. A replay that skips, defers, runs no test or meets
