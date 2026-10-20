@@ -25,7 +25,9 @@ checks that it landed. Ask the same way to publish again or to restore.
   SSH. HTTPS works too, but needs the credential bridge in the
   [runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/task-publication.md),
   because publication ignores your global Git credential helpers.
-- The workspace's owner checkout, not a replica.
+- The workspace's owner checkout, not a replica, with a Git `origin` remote.
+  Orbit identifies the source repository by that remote and refuses to bind
+  without one.
 
 Orbit refuses the source repository itself and any URL with credentials in it.
 Keeping the repository private is up to you: task text and attachments can
