@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Recover Stuck Job Runs
@@ -962,8 +962,9 @@ complexity pool instead. See
 Sometimes GitHub refuses every push for a while: `! [remote rejected] <branch> ->
 <branch> (Internal Server Error)`, `Service Unavailable`, `Bad Gateway`, `Gateway
 Timeout`, `missing necessary objects`, or `remote: Internal Server Error`. Reads and API calls can keep working.
-The push step treats these as transient. It retries up to 6 times, waiting 10 s and
-doubling to a 160 s cap, with jitter: at most about 5 minutes in all. A
+The push step treats these as transient. It makes up to 6 attempts, waiting 10 s
+after the first refusal and doubling to a 160 s cap between attempts, with jitter:
+at most about 5 minutes of waiting in all. A
 `missing necessary objects` rejection is retried with `--no-thin`, so the next
 pack does not depend on thin-pack bases the server advertised while refs were
 moving. The step's output
