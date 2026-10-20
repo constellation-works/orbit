@@ -200,13 +200,28 @@
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
 
-/* When the dashboard last refreshed, in the top bar: "refreshed <destination>
-   · <time>". The host is the scope card's, so it is not repeated here. */
+/* The rail's foot, pinned below the destinations: when the dashboard last
+   refreshed ("refreshed <destination> · <time>"; the host is the scope
+   card's, so it is not repeated), then the UTC | Local clock. */
+.rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  bottom: -12px;
+  margin-top: auto;
+  padding: 12px 2px 12px;
+  margin-bottom: -12px;
+  border-top: 1px solid var(--hair);
+  background: var(--bg-rail);
+}
+.rail .tabs { margin-bottom: 18px; }
 .rail-conn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  padding: 0 8px;
   font-size: 12px;
   line-height: 1.4;
   color: var(--fg-mute);
@@ -215,27 +230,21 @@
 }
 .rail-conn .status-dot { flex: none; }
 .rail-conn .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* The refresh line yields before the host chips, which do not shrink. */
-.topbar-conn { flex: 0 1 auto; min-width: 0; }
-.topbar-conn .conn-host { display: none; }
-@media (max-width: 1279px) {
-  .topbar-conn { display: none; }
+.rail-conn .conn-host { display: none; }
+/* The fixed-width rail wraps the line rather than cut its time off. */
+@media (min-width: 761px) {
+  .rail-conn { align-items: flex-start; white-space: normal; }
+  .rail-conn .status-dot { margin-top: 0.35em; }
 }
-
-/* UTC | Local. The top bar copy sits with the refresh time from 1280px up.
-   Below that the bar is already one packed row, so the rail copy under the
-   workspace picker is the control, and only one of the two is shown. */
-.topbar .clock-zone { flex: 0 0 auto; margin-left: 0; }
-.rail-clock { width: 100%; margin-left: 0; box-sizing: border-box; }
-.rail-clock .clock-zone-btn { flex: 1 1 0; padding-left: 4px; padding-right: 4px; text-align: center; }
-@media (max-width: 1279px) {
-  .topbar .clock-zone { display: none; }
+/* Specific enough to beat `.scoreboard-window-selector`, concatenated later. */
+.rail-foot .clock-zone {
+  display: flex;
+  width: 100%;
+  margin-left: 0;
+  box-sizing: border-box;
+  border-radius: 6px;
 }
-@media (min-width: 1280px) {
-  /* Beats `.scoreboard-window-selector { display: inline-flex }`, which is
-     concatenated later and would otherwise keep this copy on screen. */
-  .rail-workspace .rail-clock { display: none; }
-}
+.rail-foot .clock-zone-btn { flex: 1 1 0; padding: 5px 4px; text-align: center; }
 
 .main-col {
   display: flex;
@@ -299,8 +308,10 @@
 }
 .host-resource-group.remote .host-resource-name { color: var(--accent); }
 .host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; flex: 0 0 auto; }
-/* One chip per resource, sized so a new reading does not resize it.
-   Throttling changes the held chip's colour and outline, never its size. */
+/* One chip per resource, sized so a new reading does not resize it; its meter
+   sits at the chip's right edge, so the spare room stays inside the chip and
+   the chips stay evenly spaced. Throttling changes the held chip's colour and
+   outline, never its size. */
 /* A reading: its name, its value and a small bar of how full it is. */
 .host-resource {
   display: inline-flex;
@@ -325,7 +336,7 @@
 .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 7.75rem; }
 .host-resource .v { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
 .host-resource .unit { font-weight: 400; }
-.host-resource-bar { flex: none; width: 36px; height: 4px; border-radius: 2px; background: #232a33; overflow: hidden; }
+.host-resource-bar { flex: none; width: 36px; height: 4px; margin-left: auto; border-radius: 2px; background: #232a33; overflow: hidden; }
 .host-resource-fill { display: block; height: 100%; background: var(--meter); }
 .host-resource.elevated { --meter: var(--warn-fg); color: var(--warn-fg); }
 .host-resource.critical { --meter: var(--state-failed); background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
@@ -450,7 +461,7 @@
   .rail {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
@@ -464,6 +475,19 @@
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
+  .rail-foot {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    position: static;
+    margin: 0;
+    padding: 4px 2px 0;
+  }
+  .rail-conn { flex: 1 1 auto; padding: 0; }
+  .rail-foot .clock-zone { width: auto; flex: 0 0 auto; }
+  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 4px 10px; }
   .rail .tabs {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -471,7 +495,7 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     min-width: 0;
-    margin-top: 0;
+    margin: 0;
     padding: 2px;
     gap: 2px;
     scrollbar-width: none;

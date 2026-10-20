@@ -1342,10 +1342,7 @@ async function initWorkspaceSelector() {
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
-    if (railWorkspace) {
-      railWorkspace.replaceChildren();
-      mountRailClock();
-    }
+    if (railWorkspace) railWorkspace.replaceChildren();
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
     if (only) {
       const linkedAll = isAggregateLinked();
@@ -1435,7 +1432,6 @@ function buildWorkspaceSelector() {
   host.innerHTML = "";
   host.appendChild(select);
   host.appendChild(note);
-  mountRailClock();
 }
 
 // ORB-10874/ORB-10872: workspace + window live in the query string so a
@@ -2023,26 +2019,8 @@ function wireClockControls() {
   syncClockControls();
 }
 
-// The top bar holds the control from 1280px up. Below that the bar is already
-// full, so the same control lives in the workspace scope card. Rebuilding the
-// card replaces its children, so the copy is mounted again afterwards.
-function mountRailClock() {
-  const host = $("rail-workspace");
-  const source = document.querySelector(".topbar .clock-zone");
-  if (!host || !source) return;
-  let clock = host.querySelector(".rail-clock");
-  if (!clock) {
-    clock = source.cloneNode(true);
-    clock.classList.add("rail-clock");
-    for (const button of clock.querySelectorAll("[data-wired]")) button.removeAttribute("data-wired");
-    host.appendChild(clock);
-  }
-  wireClockControls();
-}
-
 $("refresh-btn").addEventListener("click", refreshDashboard);
 wireClockControls();
-mountRailClock();
 initHostResources();
 wireReliabilityWindowSelector();
 wireDoctorPanel();

@@ -177,8 +177,7 @@ try {
     await page.screenshot({ path: path.join(evidence, `agents-orchestrators-chrome-dark-${width}.png`) });
     await page.locator('.agents-table-wrap').screenshot({ path: path.join(evidence, `agents-orchestrators-table-dark-${width}.png`) });
     await page.locator('.rail').screenshot({ path: path.join(evidence, `jobs-rail-dark-${width}.png`) });
-    const clockShot = width >= 1280 ? page.locator('.topbar') : page.locator('.rail-workspace');
-    await clockShot.screenshot({ path: path.join(evidence, `clock-dark-${width}.png`) });
+    await page.locator('.rail-foot').screenshot({ path: path.join(evidence, `clock-dark-${width}.png`) });
 
     await page.getByRole('button', { name: 'Local' }).click();
     await page.waitForFunction(() => /PDT|PST/.test(document.getElementById('meta-text').textContent));
@@ -198,8 +197,8 @@ try {
   await page.locator('#refresh-btn').click();
   await page.waitForFunction(() => document.getElementById('rail-count-jobs').textContent === '18.0k runs');
 
-  // The packed top bar (long drain label, three wide chips) stays one row
-  // with the clock shown from 1280px up and hidden below it.
+  // The packed top bar (long drain label, three wide chips) stays one row, and
+  // the refresh line and its clock stay in view at the foot of the rail.
   await page.evaluate(async () => {
     const { renderHostResources } = await import('/static/js/host-resources.js');
     const drain = document.getElementById('global-drain-state');
@@ -216,20 +215,24 @@ try {
     const bar = await page.evaluate(width => {
       const topbar = document.querySelector('.topbar').getBoundingClientRect();
       const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
-      const clock = document.querySelector('.topbar .clock-zone').getBoundingClientRect();
-      const railClock = document.querySelector('.rail-clock').getBoundingClientRect();
+      const rail = document.querySelector('.rail').getBoundingClientRect();
+      const inRail = node => {
+        const box = node.getBoundingClientRect();
+        return box.width > 0 && box.left >= rail.left && box.right <= rail.right + 0.5 && box.bottom <= rail.bottom + 0.5;
+      };
       return {
         height: topbar.height,
         refreshInside: refresh.right <= topbar.right + 0.5 && refresh.left >= topbar.left,
-        clockShown: clock.width > 0,
-        railClockShown: railClock.width > 0,
-        expectClock: width >= 1280,
+        clocks: document.querySelectorAll('.clock-zone').length,
+        clockInRail: inRail(document.querySelector('.rail-foot .clock-zone')),
+        connInRail: inRail(document.getElementById('meta-text')),
       };
     }, width);
     assert.ok(bar.height <= 64, `top bar wraps at ${width}px (${bar.height})`);
     assert.equal(bar.refreshInside, true, `Refresh leaves the bar at ${width}px`);
-    assert.equal(bar.clockShown, bar.expectClock, `top-bar clock visibility at ${width}px`);
-    assert.equal(bar.railClockShown, !bar.expectClock, `rail clock visibility at ${width}px`);
+    assert.equal(bar.clocks, 1, `one UTC/Local control at ${width}px`);
+    assert.equal(bar.clockInRail, true, `the rail foot shows the clock at ${width}px`);
+    assert.equal(bar.connInRail, true, `the rail foot shows the refresh line at ${width}px`);
   }
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, failures }, null, 2));
 } finally {
