@@ -67,7 +67,7 @@
   },
   {
     "name": "orbit_agents_scorecard",
-    "description": "Rank one agent role's crews and models over the window: each term's count per 100 units of the role's work, weighted and summed, then pulled toward the fleet average. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "description": "Rank one agent role's crews and models over the window: each term's count per 100 units of the role's work, weighted and summed, then pulled down toward the fleet average when above it. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
     "inputSchema": {
       "type": "object",
       "properties": {

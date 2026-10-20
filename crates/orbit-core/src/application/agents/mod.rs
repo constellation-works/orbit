@@ -12,8 +12,8 @@
 //! dashboard) answers another selection without rescanning.
 //!
 //! Every role shares one score: each term's count per 100 units of the
-//! role's work, weighted and summed, then pulled toward the fleet average
-//! with K = 10. Cost is never a term.
+//! role's work, weighted and summed, then, above the fleet average, pulled
+//! down toward it with K = 30. Cost is never a term.
 
 mod attribution;
 mod candidates;

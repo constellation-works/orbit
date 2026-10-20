@@ -49,7 +49,7 @@ export function pilotCard() {
   ];
   for (const each of rows) each.raw = pilotTerms.reduce((sum, term) => sum + term.weight * each.per_100[term.key], 0);
   const fleet = rows.reduce((sum, each) => sum + each.units * each.raw, 0) / rows.reduce((sum, each) => sum + each.units, 0);
-  rows.forEach(each => { each.score = (each.units * each.raw + 10 * fleet) / (each.units + 10); });
+  rows.forEach(each => { each.score = Math.min(each.raw, (each.units * each.raw + 30 * fleet) / (each.units + 30)); });
   return {
     role: 'pilots', unit: 'assessed tasks', status: 'ok', window: '30d', requested_window: '30d',
     since: '2026-09-19T08:00:00Z', computed_at: '2026-10-19T08:00:00.000Z', min_support: 10,

@@ -31,7 +31,7 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 - **Problem**: a recorded occurrence that counts against a role: a spec edit, review reject, repeat run, regression, false alarm, wasted lock wait.
 - **Term**: one counted component of a role's score, with a fixed weight.
 - **Raw score**: the weighted sum of a row's terms, each per 100 units of the role's work.
-- **Score**: the raw score pulled toward the fleet average in proportion to how little work backs it.
+- **Score**: the raw score, pulled down toward the fleet average when above it, in proportion to how little work backs it.
 - **Not scored**: problems with no agent at fault (infrastructure, nondeterminism, no recorded cause). They are shown so they can be fixed, never charged to anyone.
 
 ## 3. At a Glance

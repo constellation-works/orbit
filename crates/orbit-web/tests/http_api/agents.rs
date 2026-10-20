@@ -871,8 +871,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 }
                 let (raw, score) = (as_f64(&row["raw"]), as_f64(&row["score"]));
                 assert!(
-                    (score - fleet).abs() < (raw - fleet).abs() && (score - raw).abs() > 0.0,
-                    "the score is pulled from the raw score toward the fleet average: {row}"
+                    score <= raw && score >= raw.min(fleet),
+                    "the score is the raw score, pulled down toward the fleet average at most: {row}"
                 );
             }
 
