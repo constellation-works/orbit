@@ -524,6 +524,34 @@ impl<C> McpClient<C> {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn task_update_refusal_names_a_reachable_status() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "Fallback lifecycle guidance");
+    let mut client = workspace.serve();
+
+    let refused = client.call_tool_err(
+        "orbit_task_update",
+        json!({ "id": task_id, "status": "review", "model": "codex" }),
+    );
+    assert_eq!(
+        refused["code"], "invalid_input",
+        "wrong error category: {refused}"
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("backlog")),
+        "the refusal should name a status reachable from proposed: {refused}"
+    );
+
+    let unchanged = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(
+        unchanged["status"], "proposed",
+        "a refused status was written"
+    );
+}
+
+#[test]
 fn agent_task_deletion_is_denied_through_every_dispatch_path() {
     const CHILD_ENV: &str = "ORBIT_TEST_AUTHORIZATION_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
