@@ -799,7 +799,23 @@ fn implement_invocation(runtime: &OrbitRuntime, run_id: &str, activity: &str, ms
 }
 
 fn cost_analytics_compare_runs_with_and_without_explorers() {
+    compare_explorer_invocations("agent_implement", "agent_explore");
+}
+
+fn cost_analytics_compare_production_step_invocations() {
+    // The dispatcher persists step.id, while explorer parent_activity carries
+    // the catalog activity name. These are deliberately different identities.
+    compare_explorer_invocations("implement_one", "explore");
+}
+
+fn compare_explorer_invocations(implement_step: &str, explore_step: &str) {
     let fx = fixture(BUDGETS);
+    let empty = fx
+        .runtime
+        .explore_comparison(None)
+        .expect("empty comparison");
+    assert_eq!(empty.runs_scanned, 0);
+    assert!(empty.crews.is_empty());
     let task = fx
         .runtime
         .add_task(orbit_core::application::task::TaskAddParams {
@@ -814,16 +830,20 @@ fn cost_analytics_compare_runs_with_and_without_explorers() {
     let cwd = fx.worktree.display().to_string();
     let explorer = explore(&fx.runtime, ask(&cwd, &session));
 
-    implement_invocation(
-        &fx.runtime,
-        &fx.parent.run_id,
-        "agent_implement",
-        60_000,
-        2.0,
-    );
-    implement_invocation(&fx.runtime, &plain.run_id, "agent_implement", 180_000, 4.0);
-    implement_invocation(&fx.runtime, &plain.run_id, "agent_implement", 60_000, 1.0);
-    implement_invocation(&fx.runtime, &explorer.run_id, "agent_explore", 5_000, 0.25);
+    implement_invocation(&fx.runtime, &fx.parent.run_id, implement_step, 60_000, 2.0);
+    implement_invocation(&fx.runtime, &plain.run_id, implement_step, 180_000, 4.0);
+    implement_invocation(&fx.runtime, &plain.run_id, implement_step, 60_000, 1.0);
+    implement_invocation(&fx.runtime, &explorer.run_id, explore_step, 5_000, 0.25);
+
+    // Other pipeline steps in the same run must not inflate implement cost
+    // or duration, or create an implementing cohort of their own.
+    implement_invocation(&fx.runtime, &plain.run_id, "review", 900_000, 100.0);
+    let empty_window = fx
+        .runtime
+        .explore_comparison(Some(Utc::now() + chrono::Duration::hours(1)))
+        .expect("empty future window");
+    assert_eq!(empty_window.runs_scanned, 0);
+    assert!(empty_window.crews.is_empty());
 
     let comparison = fx.runtime.explore_comparison(None).expect("compare");
     assert_eq!(
@@ -871,6 +891,7 @@ crate::scenario_table!(
     other_agents_and_explorers_themselves_are_refused,
     the_operator_path_is_unchanged_by_exploration,
     cost_analytics_compare_runs_with_and_without_explorers,
+    cost_analytics_compare_production_step_invocations,
     answer_caps_smaller_than_the_supported_shape_are_refused,
     serialized_explorer_answers_fit_at_the_minimum_and_larger_caps
 );

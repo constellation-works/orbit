@@ -31,8 +31,11 @@ pub const EXPLORE_COMPARISON_SCHEMA_VERSION: u32 = 1;
 /// The implementing activity the comparison measures.
 const IMPLEMENT_ACTIVITY: &str = "agent_implement";
 
-/// The explorer activity whose spend is reported beside each cohort.
-const EXPLORE_ACTIVITY: &str = "agent_explore";
+// Invocation activity_id stores the pipeline step id, unlike an explorer's
+// parent_activity, which stores the catalog activity name. Keep activity-name
+// aliases for records written by older callers; no backfill is needed.
+const IMPLEMENT_INVOCATION_IDS: &[&str] = &["implement_one", IMPLEMENT_ACTIVITY];
+const EXPLORE_INVOCATION_IDS: &[&str] = &["explore", "agent_explore"];
 
 /// Newest implement invocations read for one comparison. A window holding
 /// more reports `truncated`.
@@ -102,13 +105,12 @@ impl OrbitRuntime {
         since: Option<DateTime<Utc>>,
     ) -> Result<ExploreComparison, OrbitError> {
         let until = Utc::now();
-        let implement = self.workspace_invocation_records(InvocationQuery {
-            activity_id: Some(IMPLEMENT_ACTIVITY.to_string()),
+        let implement = self.comparison_invocations(
+            IMPLEMENT_INVOCATION_IDS,
             since,
-            until: Some(until),
-            limit: IMPLEMENT_SCAN_LIMIT,
-            ..InvocationQuery::default()
-        })?;
+            until,
+            IMPLEMENT_SCAN_LIMIT,
+        )?;
         let truncated = implement.len() >= IMPLEMENT_SCAN_LIMIT;
         let mut by_run: BTreeMap<String, Vec<InvocationRecord>> = BTreeMap::new();
         for record in implement {
@@ -126,13 +128,12 @@ impl OrbitRuntime {
             include_steps: false,
             ..JobRunQuery::default()
         })?;
-        let explorer_cost = per_run_cost(&self.workspace_invocation_records(InvocationQuery {
-            activity_id: Some(EXPLORE_ACTIVITY.to_string()),
+        let explorer_cost = per_run_cost(&self.comparison_invocations(
+            EXPLORE_INVOCATION_IDS,
             since,
-            until: Some(until),
-            limit: EXPLORE_SCAN_LIMIT,
-            ..InvocationQuery::default()
-        })?);
+            until,
+            EXPLORE_SCAN_LIMIT,
+        )?);
         let mut explore_by_parent: BTreeMap<String, (u64, f64)> = BTreeMap::new();
         for explorer in &explorers {
             let input = explorer.input.as_ref();
@@ -188,6 +189,33 @@ impl OrbitRuntime {
             });
         }
         Ok(compare(&facts, truncated))
+    }
+
+    /// Read a bounded population across production step ids and older aliases.
+    fn comparison_invocations(
+        &self,
+        activity_ids: &[&str],
+        since: Option<DateTime<Utc>>,
+        until: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<InvocationRecord>, OrbitError> {
+        let mut records = Vec::new();
+        for activity_id in activity_ids {
+            records.extend(self.workspace_invocation_records(InvocationQuery {
+                activity_id: Some((*activity_id).to_string()),
+                since,
+                until: Some(until),
+                limit,
+                ..InvocationQuery::default()
+            })?);
+        }
+        // Apply the original newest-first scan budget to the combined rows,
+        // rather than allowing each alias to consume a separate budget.
+        records.sort_unstable_by(|left, right| {
+            right.ts.cmp(&left.ts).then_with(|| right.id.cmp(&left.id))
+        });
+        records.truncate(limit);
+        Ok(records)
     }
 
     /// The runs that widened `task_id`'s footprint; `None` when its history
