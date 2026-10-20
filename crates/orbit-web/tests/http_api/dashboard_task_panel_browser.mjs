@@ -319,6 +319,50 @@ try {
     results.inlineActions = true;
   }
 
+  // A comment draft keeps the detail node alive across crew saves. The crew
+  // control must still follow the saved task so its original value can be
+  // selected again and sent as a second update.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-2').locator('.title').click();
+    await waitShown(page, 'PANEL-2');
+    await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
+    const comment = pane(page).locator('.comment-form');
+    const crew = pane(page).locator('#detail-PANEL-2-crew');
+    await comment.waitFor({ state: 'visible' });
+    assert.equal(await crew.inputValue(), 'opus', 'The detail starts with the task\'s explicit crew');
+
+    await crew.selectOption('sol');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === 'sol');
+    await page.waitForTimeout(25);
+    const firstFeedbackVisible = await pane(page).locator('.crew-cell .mutation-feedback.success').isVisible();
+    const draftStillOpenAfterSave = await comment.isVisible();
+    assert.equal(await crew.inputValue(), 'sol', 'The draft-held detail reflects the first saved crew');
+    await capture(page, 'tasks-crew-draft-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'tasks-crew-draft-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await crew.selectOption('opus');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 2, undefined, { timeout: 2000 }).catch(() => {});
+    const patches = await page.evaluate(() => globalThis.panelFixture.patches);
+    assert.deepEqual(patches, [
+      { id: 'PANEL-2', body: { crew: 'sol' } },
+      { id: 'PANEL-2', body: { crew: 'opus' } },
+    ], 'Reverting to the crew shown before the draft-held change sends a second PATCH');
+    assert.equal(firstFeedbackVisible, true, 'A saved crew paints feedback in the draft-held detail');
+    assert.equal(draftStillOpenAfterSave, true, 'Saving the crew leaves the comment draft open');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === 'opus');
+    await page.waitForTimeout(25);
+    assert.equal(await crew.inputValue(), 'opus', 'The detail shows the reverted crew');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), 'opus', 'The list row shows the reverted crew');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), 'opus', 'The API fixture stores the reverted crew');
+    assert.equal(await comment.isVisible(), true, 'Both crew changes leave the comment draft open');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.draftHeldCrewRevert = true;
+  }
+
   // Filter membership must not change the full-page crew's label, position,
   // styling or ability to save. Each width compares a done task with a listed
   // task, using the same crew value so their control geometry is comparable.

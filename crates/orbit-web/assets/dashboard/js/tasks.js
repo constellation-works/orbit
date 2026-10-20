@@ -440,6 +440,16 @@ function applyUpdatedTask(updatedTask, context) {
   return merged;
 }
 
+function currentCrewTask(task, context) {
+  if (!task || !task.id) return task;
+  return taskList(context).find((current) => current && current.id === task.id) ||
+    (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === task.id
+      ? pinnedExternalTask.task
+      : null) ||
+    taskDetails.get(task.id) ||
+    task;
+}
+
 // Read the full projection behind a summary row. One read per summary object:
 // a repeat call for the same row returns the same promise, settled or not, so
 // renders and a status change racing on the same row share it.
@@ -3689,31 +3699,32 @@ function statusTransitionEvidenceUnavailable(requiredField) {
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {
+  const currentTask = currentCrewTask(task, context);
   const visit = captureWorkspaceVisit();
-  const mutationPath = visit.path(taskMutationPath(task));
-  const previousValue = explicitCrewValue(task);
-  if (nextValue === previousValue || !canMutateTask(task)) return;
-  crewFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  const mutationPath = visit.path(taskMutationPath(currentTask));
+  const previousValue = explicitCrewValue(currentTask);
+  if (nextValue === previousValue || !canMutateTask(currentTask)) return;
+  crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(crewFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // A failed action is announced when it appears: the row's own controls are the
@@ -4045,6 +4056,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
     if (note) note.textContent = osReadoutNote(task);
   }
+  refreshDraftCrewControl(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
@@ -4064,6 +4076,28 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   if (!parent) return;
   parent.insertBefore(replacement, current);
   parent.removeChild(current);
+}
+
+function refreshDraftCrewControl(wrap, task, context) {
+  const control = wrap.querySelector(".task-meta-block .crew-cell.task-chip-crew");
+  const select = control && control.querySelector("select");
+  if (!select) return;
+
+  const refreshed = buildCrewUpdateControl(task, context, { withChip: false });
+  const refreshedSelect = refreshed.querySelector("select");
+  if (!refreshedSelect) return;
+
+  select.replaceChildren(...refreshedSelect.children);
+  select.value = refreshedSelect.value;
+  select.disabled = refreshedSelect.disabled;
+  select.title = refreshedSelect.title;
+  select.dataset.currentValue = refreshedSelect.dataset.currentValue;
+  select.dataset.staleCurrentValue = refreshedSelect.dataset.staleCurrentValue;
+
+  const oldFeedback = control.querySelector(":scope > .mutation-feedback");
+  if (oldFeedback) oldFeedback.remove();
+  const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
+  if (newFeedback) control.appendChild(newFeedback);
 }
 
 // The pinned resolver result shares the normal detail's crew control. Only
