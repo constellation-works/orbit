@@ -39,6 +39,8 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Enable the loopback-only latest-release endpoint seam in CLI process tests.
+orbit-cmd = { path = "../orbit-cmd", features = ["test-release-api-base"] }
 # Real sandbox broker integration against the built CLI and MCP transport.
 orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec" }

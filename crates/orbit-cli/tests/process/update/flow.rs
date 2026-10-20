@@ -2,6 +2,10 @@
 //! input bounds, candidate admission, downgrade authority, the bundled
 //! Bubblewrap refresh and the recovery command a failed convergence prints.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread::JoinHandle;
+
 use orbit_cmd::update::channel::release_archive_name;
 use orbit_cmd::update::source::MIRROR_LATEST_FILE;
 use orbit_cmd::update::{UpdateOutcome, UpdateReport, UpdateRequest, run_update};
@@ -13,6 +17,162 @@ use super::release_fixture::{FakeBinary, Fixture, TEST_TARGET, request};
 
 /// Larger than every release input limit; sparse, so it costs no disk.
 const OVERSIZED_INPUT_BYTES: u64 = 1 << 30;
+const RELEASE_METADATA_LIMIT_BYTES: usize = 256 * 1024;
+
+fn read_http_request_head(stream: &mut impl Read) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("HTTP request head");
+        head.push(byte[0]);
+    }
+    head
+}
+
+fn release_metadata(tag: &str, size: usize) -> Vec<u8> {
+    let prefix = format!("{{\"tag_name\":\"{tag}\",\"body\":\"");
+    let suffix = b"\"}";
+    assert!(size > prefix.len() + suffix.len());
+    let mut body = prefix.into_bytes();
+    body.resize(size - suffix.len(), b'x');
+    body.extend_from_slice(suffix);
+    body
+}
+
+fn release_api_server(
+    body: Vec<u8>,
+    content_length: bool,
+    send_body: bool,
+) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("local release API fixture");
+    let address = listener.local_addr().expect("release API address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("release API request");
+        let request = read_http_request_head(&mut stream);
+        assert!(
+            String::from_utf8_lossy(&request)
+                .starts_with("GET /repos/constellation-works/orbit/releases/latest "),
+            "unexpected release API request: {}",
+            String::from_utf8_lossy(&request)
+        );
+        if content_length {
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("release API headers");
+        } else {
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .expect("release API headers");
+        }
+        if send_body {
+            stream.write_all(&body).expect("release API body");
+        }
+    });
+    (format!("http://{address}"), server)
+}
+
+fn update_check_accepts_release_metadata_above_64_kib() {
+    let version = env!("CARGO_PKG_VERSION");
+    let (base, server) =
+        release_api_server(release_metadata(&format!("v{version}"), 85_541), true, true);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run update check");
+    server.join().expect("release API server completed");
+
+    assert!(
+        output.status.success(),
+        "update check failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("update report JSON");
+    assert_eq!(report["outcome"], "already_current", "{report}");
+    assert_eq!(report["target_version"], version, "{report}");
+}
+
+fn update_check_refuses_streamed_metadata_over_its_release_limit() {
+    let over_limit = release_metadata(
+        &format!("v{}", env!("CARGO_PKG_VERSION")),
+        RELEASE_METADATA_LIMIT_BYTES + 1,
+    );
+    let (base, server) = release_api_server(over_limit, false, true);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run oversized update check");
+    server.join().expect("release API server completed");
+
+    assert!(!output.status.success(), "oversized metadata was accepted");
+    let error: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("structured update error");
+    assert_eq!(error["code"], "execution_failed", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("262144-byte release input limit")),
+        "oversized metadata should stop at the release limit: {error}"
+    );
+}
+
+fn update_check_refuses_declared_oversized_metadata_before_reading_its_body() {
+    let over_limit = release_metadata(
+        &format!("v{}", env!("CARGO_PKG_VERSION")),
+        RELEASE_METADATA_LIMIT_BYTES + 1,
+    );
+    let (base, server) = release_api_server(over_limit, true, false);
+    let temp = tempfile::tempdir().expect("CLI fixture root");
+    let cwd = temp.path().join("cwd");
+    let home = temp.path().join("home");
+    let mirror = temp.path().join("mirror");
+    for path in [&cwd, &home, &mirror] {
+        std::fs::create_dir_all(path).expect("CLI fixture directory");
+    }
+
+    let mut command = super::orbit(&cwd, &home, &mirror);
+    command
+        .args(["update", "--check", "--json"])
+        .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+        .env("ORBIT_TEST_RELEASE_API_BASE", base);
+    let output = super::output_of(&mut command).expect("run oversized update check");
+    server.join().expect("release API server completed");
+
+    assert!(!output.status.success(), "oversized metadata was accepted");
+    let error: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("structured update error");
+    assert_eq!(error["code"], "execution_failed", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("262144-byte release input limit")),
+        "declared oversized metadata should be refused before reading its body: {error}"
+    );
+}
 
 fn oversized_mirror_inputs_fail_before_executable_replacement() {
     for asset_class in [
@@ -222,6 +382,18 @@ fn update_flow_contracts_1() {
     }
     let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
+        (
+            "update_check_accepts_release_metadata_above_64_kib",
+            update_check_accepts_release_metadata_above_64_kib as fn(),
+        ),
+        (
+            "update_check_refuses_streamed_metadata_over_its_release_limit",
+            update_check_refuses_streamed_metadata_over_its_release_limit as fn(),
+        ),
+        (
+            "update_check_refuses_declared_oversized_metadata_before_reading_its_body",
+            update_check_refuses_declared_oversized_metadata_before_reading_its_body as fn(),
+        ),
         (
             "an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release",
             an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release as fn(),
