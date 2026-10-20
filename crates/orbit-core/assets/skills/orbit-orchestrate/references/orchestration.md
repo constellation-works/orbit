@@ -681,7 +681,14 @@ It cannot be combined with `--pull` or `--stop`.
   failed, timed-out or interrupted leaf, rewound to completion, when the task
   is in `review` or was blocked or requeued by that leaf's own delivery. The
   same ledger bounds it, each hand-back is recorded as `pr_auto_fix_out_of_run`,
-  and `orbit run readiness` lists the live ones under `out_of_run_auto_fix`.
+  and `orbit run readiness` lists live repairs and the latest drain pass's
+  skipped candidates under `out_of_run_auto_fix`. Skips carry `state: "skipped"`,
+  the PR, reason, detail, observation time and whether the drain is still live;
+  a blocker is null when the refusal preceded a forge read. Read the full
+  persisted pass with `orbit run show <drain-run> --step adopt_orphans --json`
+  under `step_output.auto_fix.skipped`. Capacity and resource holds name the
+  candidates without forge reads; the scan covers the newest 200 delivery
+  leaves. A write-free pass scans and persists nothing.
   Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
   started with `--complete` under a drain without it are left alone.
 

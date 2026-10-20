@@ -136,6 +136,14 @@ struct PassReads {
     catalog: Option<Result<(), String>>,
 }
 
+/// Facts learned before a candidate is refused. A policy hold can precede
+/// the forge read, so a missing blocker must remain unknown.
+#[derive(Default)]
+struct RepairObservation {
+    pr_number: Option<String>,
+    blocker: Option<PrAutoFixBlocker>,
+}
+
 enum BlockerRead {
     /// The forge could read the pull request's blockers (or determined it is
     /// no longer open).
@@ -155,12 +163,13 @@ impl OrbitRuntime {
         authority: &AdoptionAuthority<'_>,
         budget: usize,
     ) -> Value {
-        if !authority.auto_fix || budget == 0 || self.is_write_free() {
+        if !authority.auto_fix {
             return json!({ "started": [], "skipped": [] });
         }
-        if self.resource_admission().throttle.is_some() {
-            return json!({ "started": [], "skipped": [] });
+        if self.is_write_free() {
+            return json!({ "started": [], "skipped": [], "hold_reason": "write_free" });
         }
+        let throttled = self.resource_admission().throttle.is_some();
         let leaves = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             job_id: Some(DELIVERY_LEAF_JOB.to_string()),
             order_by: JobRunOrder::Recency,
@@ -187,9 +196,6 @@ impl OrbitRuntime {
         let mut skipped = Vec::new();
         let mut reads = PassReads::default();
         for run in leaves {
-            if started.len() >= budget {
-                break;
-            }
             let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
             let mut carried = task_ids.iter();
             let (Some(task_id), None) = (carried.next(), carried.next()) else {
@@ -199,7 +205,28 @@ impl OrbitRuntime {
             if !seen.insert(task_id.clone()) {
                 continue;
             }
-            let verdict = match self.repair_verdict(&run, task_id, authority, &mut reads) {
+            let hold = if throttled {
+                Some((
+                    "resource_throttled",
+                    "host resource pressure holds this pass",
+                ))
+            } else if started.len() >= budget {
+                Some((
+                    "no_capacity",
+                    "no free leaf slot remains after adoption and earlier repairs",
+                ))
+            } else {
+                None
+            };
+            let mut observation = RepairObservation::default();
+            let verdict = match self.repair_verdict(
+                &run,
+                task_id,
+                authority,
+                &mut reads,
+                &mut observation,
+                hold,
+            ) {
                 Verdict::Repair(repair) => self.start_repair(&run, authority, *repair),
                 verdict => verdict,
             };
@@ -218,6 +245,8 @@ impl OrbitRuntime {
                     skipped.push(json!({
                         "task_id": task_id,
                         "source_run_id": run.run_id,
+                        "pr_number": observation.pr_number,
+                        "blocker": observation.blocker,
                         "reason": reason,
                         "detail": detail,
                     }));
@@ -235,6 +264,8 @@ impl OrbitRuntime {
         task_id: &str,
         authority: &AdoptionAuthority<'_>,
         reads: &mut PassReads,
+        observation: &mut RepairObservation,
+        hold: Option<(&'static str, &str)>,
     ) -> Verdict {
         let skip = |reason, detail: String| Verdict::Skip(reason, detail);
         // A live leaf watches its own pull request; a finished or cancelled
@@ -263,7 +294,13 @@ impl OrbitRuntime {
         let Some(pr_number) = task.github_pr_number().map(str::to_string) else {
             return Verdict::Ignore;
         };
-        // From here the task has an Orbit pull request and its leaf has
+        observation.pr_number = Some(pr_number.clone());
+        // Report held candidates without spending forge reads or admitting
+        // repairs; the newest-leaf scan remains bounded even at capacity.
+        if let Some((reason, detail)) = hold {
+            return skip(reason, detail.to_string());
+        }
+        // From here the task records a pull request and its leaf has
         // stopped: every refusal is reported.
         if !self.task_run_is_local(&task) {
             return skip(
@@ -456,6 +493,7 @@ impl OrbitRuntime {
                 ),
             );
         };
+        observation.blocker = Some(blocker);
         if let Err(skipped) = ledger_admits(&history, &number, &blockers.head_sha, blocker) {
             return skipped;
         }
