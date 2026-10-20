@@ -175,13 +175,33 @@ fn assert_no_replay(leaf: &ReviewedLeaf, case: &str, requirements: usize) {
 /// both host records on the certificate. The handoff pins both results and
 /// logs, and the owner refuses it without them.
 fn a_broader_run_deferring_only_host_tests_settles_on_their_replays() {
+    settles_on_their_replays(BROAD);
+}
+
+/// [ORB-17106] A broader run with a benign option next to its one target
+/// (`--locked`, `--no-fail-fast`) names the same target, so its deferrals
+/// settle on the same replays as the plain shape.
+fn a_broader_run_with_non_selecting_options_settles_on_its_replays() {
+    for broad in [
+        "cargo test -p orbit-exec --locked --test probe fixture_children -- --nocapture",
+        "cargo test --no-fail-fast -p orbit-exec --test probe fixture_children -- --nocapture",
+    ] {
+        settles_on_their_replays(broad);
+    }
+}
+
+fn settles_on_their_replays(broad_command: &str) {
     let (leaf, attempt_id) = leaf_with_probe(&probe(&[]));
-    Deferred::covering(&[A, B]).report(&leaf, &attempt_id);
+    Deferred {
+        broad: broad_command.into(),
+        ..Deferred::covering(&[A, B])
+    }
+    .report(&leaf, &attempt_id);
 
     let settled = leaf
         .settle()
-        .expect("the host's replays complete the review");
-    assert_eq!(settled["gate"], "passed", "{settled}");
+        .unwrap_or_else(|refused| panic!("{broad_command}: {refused}"));
+    assert_eq!(settled["gate"], "passed", "{broad_command}: {settled}");
     assert!(leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none());
     let repo = &leaf.pair.follower_repo;
     let head = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
@@ -199,7 +219,7 @@ fn a_broader_run_deferring_only_host_tests_settles_on_their_replays() {
             (exact(B).as_str(), true, tree.as_str())
         ]
     );
-    let broad = broad_record(&certificate, BROAD);
+    let broad = broad_record(&certificate, broad_command);
     assert_eq!(broad.executed_outcome(), ValidationOutcome::Passed);
     assert!(broad.deferred.is_empty(), "{broad:?}");
     for (index, test) in [A, B].into_iter().enumerate() {
@@ -466,6 +486,7 @@ fn a_deferral_owed_to_another_os_holds_the_review_for_it() {
 crate::scenario_table!(
     a_broader_run_deferring_only_host_tests_scenarios,
     a_broader_run_deferring_only_host_tests_settles_on_their_replays,
+    a_broader_run_with_non_selecting_options_settles_on_its_replays,
     a_broader_run_the_host_cannot_establish_runs_no_replay,
     a_replay_short_of_executing_its_test_leaves_the_broader_run_short,
     a_deferral_owed_to_another_os_holds_the_review_for_it
