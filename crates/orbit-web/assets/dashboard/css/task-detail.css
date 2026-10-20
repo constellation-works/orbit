@@ -2,8 +2,8 @@
    relations, artifacts, field blocks and editors, history, runs, comments,
    and the action forms. */
 
-/* ORB-00037: full workspace location in a task's Details section. */
-.task-meta .ws-location {
+/* ORB-00037: full workspace location in a task's delivery card. */
+.task-delivery-card .ws-location {
   font-size: 11px;
   color: var(--fg-dim);
   word-break: break-all;
@@ -327,24 +327,223 @@
   flex-direction: column;
   gap: 10px;
 }
-/* The Details section above the tabs: the levers an operator sets beside the
-   recorded facts, stacked in a narrow pane and side by side once it is wide. */
+
+/* The detail's head: the levers as one row of chips, the lifecycle strip,
+   then the delivery card. */
 .task-meta-block {
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
-.task-meta-body { display: grid; gap: 2px; }
-.task-meta {
+.task-levers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-control);
+  color: var(--fg-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.task-chip::before,
+.task-levers .complexity-cell::before {
+  content: "";
+  flex: none;
+  width: 13px;
+  height: 13px;
+  background: var(--fg-mute);
+  -webkit-mask: var(--chip-icon) center / contain no-repeat;
+  mask: var(--chip-icon) center / contain no-repeat;
+}
+.task-chip-crew {
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'/%3E%3C/svg%3E");
+}
+.task-chip-host {
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='2' width='20' height='8' rx='2'/%3E%3Crect x='2' y='14' width='20' height='8' rx='2'/%3E%3Cpath d='M6 6h.01M6 18h.01'/%3E%3C/svg%3E");
+}
+.task-chip .fact-note { color: var(--fg-mute); font-weight: 400; }
+.task-chip .value { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Status: a pill tinted by its status colour, the dot over the select. */
+.task-levers .status-cell {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.task-levers .status-cell::before {
+  position: absolute;
+  top: 10.5px;
+  left: 11px;
+  pointer-events: none;
+}
+.task-levers .status-cell .task-select-chip { display: none; }
+.task-levers .task-status-select,
+.task-levers .task-complexity-select {
+  width: auto;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-transform: capitalize;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%238b95a3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.task-levers .task-status-select {
+  padding: 0 28px 0 24px;
+  border-color: color-mix(in srgb, var(--dot) 40%, transparent);
+  background-color: color-mix(in srgb, var(--dot) 12%, transparent);
+  color: var(--fg-strong);
+}
+.task-levers .task-status-select:hover:not(:disabled),
+.task-levers .task-status-select:focus {
+  border-color: var(--dot);
+  background-color: color-mix(in srgb, var(--dot) 18%, transparent);
+}
+/* Complexity: a neutral pill, its gauge icon over the select. */
+.task-levers .complexity-cell {
+  position: relative;
+  align-items: flex-start;
+  gap: 4px;
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000'%3E%3Crect x='3' y='14' width='4' height='7' rx='1'/%3E%3Crect x='10' y='9' width='4' height='12' rx='1'/%3E%3Crect x='17' y='3' width='4' height='18' rx='1'/%3E%3C/svg%3E");
+}
+.task-levers .complexity-cell::before {
+  position: absolute;
+  top: 7.5px;
+  left: 11px;
+  pointer-events: none;
+}
+.task-levers .task-complexity-select {
+  padding: 0 28px 0 30px;
+  border-color: var(--border-strong);
+  background-color: var(--bg-control);
+  color: var(--fg-soft);
+}
+.task-levers .task-complexity-select:hover:not(:disabled),
+.task-levers .task-complexity-select:focus { border-color: var(--fg-mute); }
+
+/* Tags close the row: dashed pills, with Edit after them; the open editor
+   takes the whole line. */
+.task-levers-tags { display: flex; min-width: 0; }
+.task-levers-tags:has(.field-editor-input) { flex: 1 0 100%; }
+.task-levers .field-editor-cell { width: 100%; min-width: 0; }
+.task-levers .field-editor { width: 100%; }
+.task-levers .field-editor:has(> .field-edit) {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 28px;
+}
+.task-levers .detail-tag-row .chip {
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.task-levers .detail-tag-row .chip.os-chip { color: var(--accent); border-color: var(--accent-line); }
+.task-levers .field-empty { font-style: normal; }
+
+/* Where the status sits on the way to done. */
+.task-lifecycle {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
 }
-.task-meta .property-list,
-.task-meta-tags { gap: 2px; }
-.task-meta-body .property-row { grid-template-columns: 96px minmax(0, 1fr); --hint-left: 110px; }
-@container task-pane (min-width: 640px) {
-  .task-meta { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 32px; }
+.task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
+.task-lifecycle-step.past .task-lifecycle-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
+.task-lifecycle-step.current .task-lifecycle-bar { background: var(--dot); }
+.task-lifecycle-label {
+  font-size: 11px;
+  color: var(--fg-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
+
+/* The pull request, the run and who carried the task, in one card. */
+.task-delivery-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
+}
+.task-delivery-card .property-row {
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  --hint-left: 110px;
+  padding: 9px 14px;
+}
+.task-delivery-card .property-row + .property-row { border-top: 1px solid var(--hair); }
+.task-delivery-card .property-row .label { font-size: 12px; line-height: 20px; }
+.task-delivery-card .property-row.fact .value { padding: 0; }
+.task-delivery-pr { font-size: 12.5px; font-weight: 500; }
+.task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.task-hand {
+  --hand: var(--fg-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 12px;
+  line-height: 20px;
+}
+.task-hand::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--hand); }
+.task-hand[data-agent="claude"] { --hand: var(--ag-claude); background: var(--ag-claude-low); }
+.task-hand[data-agent="codex"] { --hand: var(--ag-codex); background: var(--ag-codex-low); }
+.task-hand[data-agent="gemini"] { --hand: var(--ag-gemini); background: var(--ag-gemini-low); }
+.task-hand[data-agent="grok"] { --hand: var(--ag-grok); background: var(--ag-grok-low); }
+.task-hand-name { color: var(--fg); font-weight: 500; }
+.task-hand-verb { color: var(--fg-dim); }
+.task-hand-sep {
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--fg-disabled);
+  border-top: 1.5px solid var(--fg-disabled);
+  transform: rotate(45deg);
+}
+
+/* Created and updated close the detail on one quiet line. */
+.task-stamps {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: -4px;
+}
+.task-stamps .property-row { display: inline-flex; gap: 6px; }
+.task-stamps .property-row .label,
+.task-stamps .property-row.fact .label { font-size: 12px; line-height: 20px; }
+.task-stamps .property-row.fact .value {
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
 .property-row {
   position: relative;
   --hint-left: 126px;
@@ -384,31 +583,6 @@
 }
 .property-row.fact .fact-note { color: var(--fg-mute); }
 .property-row.fact .run-value .exec-origin { font-size: 12px; color: var(--fg-dim); }
-.property-row .task-complexity-select {
-  width: 120px;
-  min-width: 0;
-}
-.property-row .field-editor-cell {
-  width: 100%;
-  min-width: 0;
-  align-items: flex-start;
-}
-.property-row .field-editor {
-  width: 100%;
-  align-items: flex-start;
-}
-.property-row .detail-tag-row {
-  justify-content: flex-start;
-}
-/* Read mode puts the edit link after the tags on their line; the open editor
-   keeps the column layout. */
-.property-row .field-editor:has(> .field-edit) {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  min-height: 28px;
-}
 .detail-tag-row .chip {
   cursor: default;
 }
@@ -422,22 +596,45 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.relation-group {
+.relation-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  margin: 0 -8px;
+}
+.relation-row {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr) 8px;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.relation-group:last-child {
-  margin-bottom: 0;
+.relation-row::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--fg-disabled);
+  border-top: 1.5px solid var(--fg-disabled);
+  transform: rotate(45deg);
 }
-.relation-group .label {
-  min-width: 112px;
-  color: var(--fg-mute);
-  font-size: 13px;
+.relation-row:hover { background: var(--bg-hover); }
+.relation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.relation-row .label { color: var(--fg-mute); font-size: 12.5px; }
+.relation-row .label::first-letter { text-transform: uppercase; }
+.relation-row .relation-target {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12.5px;
 }
-.relation-group .label::first-letter { text-transform: uppercase; }
 .relation-target {
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -517,8 +714,7 @@
   }
 }
 
-/* A section of the detail: a small uppercase label over its content, no
-   card around it. */
+/* A section of the detail: a sentence-case heading over its content. */
 .field-block {
   margin: 0;
   padding: 0;
@@ -526,14 +722,12 @@
 }
 
 .field-block h4 {
-  margin: 0 0 10px 0;
+  margin: 0 0 12px 0;
   min-height: 20px;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.4;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-mute);
+  color: var(--fg-strong);
   transition: color 0.2s ease;
   display: flex;
   align-items: center;
@@ -547,7 +741,6 @@
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
-.field-block h4 .field-count::before { content: "· "; }
 .field-block h4 .field-actions {
   margin-left: auto;
   display: flex;
@@ -568,7 +761,7 @@
 }
 
 .field-block.collapsible h4:hover {
-  color: var(--fg);
+  color: var(--fg-strong);
 }
 
 /* A chevron after the title: down while open, right while collapsed. */
@@ -595,6 +788,30 @@
 .field-block.collapsible.collapsed > :not(h4) {
   display: none;
 }
+
+/* Plan, execution summary and the other folded sections read as one group
+   of disclosure rows, the chevron leading each. */
+.detail-disclosures {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+.detail-disclosures > .field-block + .field-block { border-top: 1px solid var(--hair); }
+.detail-disclosures > .field-block > h4 {
+  margin: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  gap: 10px;
+}
+.detail-disclosures > .field-block > h4:hover { background: var(--bg-hover); }
+.detail-disclosures > .field-block > h4:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.detail-disclosures > .field-block.collapsible > h4::after {
+  order: -1;
+  margin: 0 2px 2px 2px;
+}
+.detail-disclosures > .field-block.collapsible.collapsed > h4::after { margin: 0 2px; }
+.detail-disclosures > .field-block > :not(h4) { padding: 2px 14px 16px 34px; }
 
 /* ORB-12235: an editable field block shows its value with an `edit`
    affordance, and swaps in a textarea with save/cancel while editing. The
@@ -720,38 +937,50 @@ input.field-editor-input {
   counter-reset: ac;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  line-height: 1.5;
+  line-height: 1.6;
   overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
 }
 .row-detail .ac-list > li {
   position: relative;
   min-height: 22px;
-  padding: 2px 0 0 34px;
+  padding: 12px 16px 12px 48px;
   color: var(--fg-soft);
   counter-increment: ac;
 }
+.row-detail .ac-list > li + li { border-top: 1px solid var(--hair); }
 .row-detail .ac-list > li::before {
   content: counter(ac);
   position: absolute;
-  top: 0;
-  left: 0;
+  top: 13px;
+  left: 14px;
   box-sizing: border-box;
   width: 22px;
   height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--fg-mute);
+  border-radius: var(--radius-sm);
+  background: var(--bg-selected);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
   font-size: 11.5px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
 /* A long description opens clamped behind a fade, with a toggle below. */
-.description-block .markdown-body { color: var(--fg-soft); }
+.description-block .markdown-body { color: var(--fg-soft); line-height: 1.7; }
+.task-detail .markdown-body :not(pre) > code,
+.task-detail .ac-list code {
+  padding: 0 4px;
+  border: 1px solid var(--hair);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--fg-soft);
+  font-size: 12px;
+}
 .description-block.clamped .markdown-body {
   max-height: 13.5em;
   overflow: hidden;
@@ -759,16 +988,19 @@ input.field-editor-input {
   mask-image: linear-gradient(to bottom, #000 65%, transparent);
 }
 .description-toggle {
-  margin-top: 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
+  margin-top: 12px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-control);
+  color: var(--fg-soft);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
 }
-.description-toggle:hover { color: var(--accent-hover); text-decoration: underline; }
+.description-toggle:hover { border-color: var(--fg-mute); color: var(--fg-strong); }
 .description-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .task-detail[data-editing*="description"] .description-toggle { display: none; }
 .row-detail .file-list {
@@ -777,15 +1009,24 @@ input.field-editor-input {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   word-break: break-all;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-well);
 }
-.row-detail .file-list .selector-dim {
-  color: var(--fg-mute);
+.row-detail .file-list > li { padding: 9px 14px; }
+.row-detail .file-list > li + li { border-top: 1px solid var(--hair); }
+.row-detail .file-list .context-selector {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
 }
+.row-detail .file-list .selector-base { grid-row: 1; grid-column: 1 / -1; font-weight: 500; }
+.row-detail .file-list .selector-kind,
+.row-detail .file-list .selector-dim { grid-row: 2; color: var(--fg-mute); }
+.row-detail .file-list .selector-kind[data-kind="file"] { display: none; }
 .row-detail .file-list .context-contended-backlog .context-selector,
 .row-detail .file-list .context-contended-backlog .selector-dim {
   color: #fbbf24;

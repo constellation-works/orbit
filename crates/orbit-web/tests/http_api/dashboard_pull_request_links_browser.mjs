@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Runs inside the full dashboard browser harness. A delivered task links its
-// pull request from the review row and from the detail's External refs; a ref
-// without an http(s) page stays text in both places.
+// pull request from the review row and from the detail's delivery card; a ref
+// without an http(s) page stays text in the row and in External refs.
 export async function assertPullRequestLinks(page, evidence) {
   await page.evaluate(async () => {
     const { setWorkspace } = await import('/js/common.js');
@@ -106,18 +106,23 @@ export async function assertPullRequestLinks(page, evidence) {
     }
     await page.setViewportSize({ width: 1440, height: 1100 });
 
-    const detailRefs = async (id) => {
+    const detailRefs = async (id, selector = '.external-ref-line') => {
       await page.locator(`#tasks-body [data-key="task-${id}"] .title`).click();
-      const refs = page.locator(`#detail-${id} .external-ref-line`);
+      const refs = page.locator(`#detail-${id} ${selector}`);
       await refs.first().waitFor({ timeout: 5000 });
       return refs.evaluateAll(lines => lines.map(line => {
         const link = line.querySelector('a');
         return { text: line.textContent, href: link ? link.getAttribute('href') : null };
       }));
     };
-    const linked = await detailRefs('PRL-1');
-    if (JSON.stringify(linked) !== JSON.stringify([{ text: 'PR #4067', href: 'https://github.com/constellation-works/orbit/pull/4067' }])) {
+    // The delivery card links the pull request, and External refs does not
+    // repeat it.
+    const linked = await detailRefs('PRL-1', '.task-delivery-row.pr .value');
+    if (JSON.stringify(linked) !== JSON.stringify([{ text: '#4067', href: 'https://github.com/constellation-works/orbit/pull/4067' }])) {
       throw new Error(`The detail must link the delivered pull request: ${JSON.stringify(linked)}`);
+    }
+    if (await page.locator('#detail-PRL-1 .external-ref-line').count() !== 0) {
+      throw new Error('External refs must not repeat the pull request the delivery card links');
     }
     await page.screenshot({ path: path.join(evidence, 'pull-request-links.png') });
     const unlinked = await detailRefs('PRL-3');

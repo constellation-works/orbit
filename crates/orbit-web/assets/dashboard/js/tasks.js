@@ -1414,22 +1414,21 @@ function buildRelations(relations, context) {
     byType.get(key).push(target);
   }
 
-  const wrap = el("div");
+  // One row per related task: how it relates, then its id.
+  const wrap = el("div", { class: "relation-list" });
   for (const [key, label] of RELATION_GROUPS) {
-    const targets = byType.get(key);
-    if (!targets || targets.length === 0) continue;
-    const group = el("div", { class: "relation-group" }, [
-      el("span", { class: "label", text: label }),
-    ]);
-    for (const target of targets) {
-      const btn = el("button", { class: "relation-target mono", text: target });
+    for (const target of byType.get(key) || []) {
+      const btn = el("button", { class: "relation-row", type: "button" }, [
+        el("span", { class: "label", text: label }),
+        el("span", { class: "relation-target mono", text: target }),
+      ]);
+      btn.dataset.relation = key;
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         openVisibleTask(target, context);
       });
-      group.appendChild(btn);
+      wrap.appendChild(btn);
     }
-    wrap.appendChild(group);
   }
   return wrap;
 }
@@ -1801,15 +1800,21 @@ onTaskRuntimeChange(() => {
   }
 });
 
-// A context selector is `kind:target`. The kind and, for path selectors, the
-// directory are dimmed so the basename — what an operator scans for — reads
-// first; the text content is still the whole selector.
+// A context selector is `kind:target`. The basename — what an operator scans
+// for — leads on its own line, with the kind and, for path selectors, the
+// directory dimmed under it; the text content is still the whole selector.
 function selectorParts(selector) {
   const match = /^([a-z]+):(.*)$/.exec(selector);
-  if (!match) return [selector];
+  if (!match) return [el("span", { class: "selector-base", text: selector })];
   const [, kind, target] = match;
   const cut = kind === "file" || kind === "dir" ? target.lastIndexOf("/") + 1 : 0;
-  return [el("span", { class: "selector-dim", text: `${kind}:${target.slice(0, cut)}` }), target.slice(cut)];
+  const kindNode = el("span", { class: "selector-kind", text: `${kind}:` });
+  kindNode.dataset.kind = kind;
+  return [
+    kindNode,
+    el("span", { class: "selector-dim", text: target.slice(0, cut) }),
+    el("span", { class: "selector-base", text: target.slice(cut) }),
+  ];
 }
 
 function linesToText(values) {
@@ -2706,27 +2711,30 @@ function buildTaskDetail(task, context, drain = null) {
 
   // Criteria the delivery owes until the deployed build is measured; an
   // operator records each with a `post-deploy: met|failed <N>` comment.
+  // The folded sections read as one group of disclosure rows.
+  const disclosures = el("div", { class: "detail-disclosures" });
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
-    addField(leftCol, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
+    addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
       count: task.owed_criteria.length,
     });
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(leftCol, "Plan", markdownView(task.plan), true, true);
+    addField(disclosures, "Plan", markdownView(task.plan), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(leftCol, "Execution summary", markdownView(task.execution_summary), true, true);
+    addField(disclosures, "Execution summary", markdownView(task.execution_summary), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
-    addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
+    addField(disclosures, "Review gate", buildReviewGate(task.review), true, true);
   }
+  if (disclosures.children.length) leftCol.appendChild(disclosures);
 
   // The side column holds what gates the task, then the graph around it; what
   // the task is and where it stands sits above the tabs.
-  const metaBlock = buildTaskMeta(task, context, { addField, editor, showsEditor });
+  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor });
 
   const readiness = readinessOf(task);
   if (readiness || drain) {
@@ -2734,13 +2742,16 @@ function buildTaskDetail(task, context, drain = null) {
     addField(rightCol, "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id), false, false, count > 0 ? { count } : {});
   }
 
-  if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
-    addField(rightCol, "External refs", buildExternalRefs(task.external_refs));
+  // The delivery card already links the pull request; the rest stay here.
+  const otherRefs = (Array.isArray(task.external_refs) ? task.external_refs : []).filter((ref) =>
+    !(pullRequest && ref && ref.system === GITHUB_PR_REF_SYSTEM && ref.url === pullRequest.url));
+  if (otherRefs.length > 0) {
+    addField(rightCol, "External refs", buildExternalRefs(otherRefs));
   }
 
   if (Array.isArray(task.relations) && task.relations.length > 0) {
     const relations = buildRelations(task.relations, context);
-    if (relations.children.length > 0) addField(rightCol, "Relations", relations);
+    if (relations.children.length > 0) addField(rightCol, "Related tasks", relations);
   }
 
   if (showsEditor("context_files")) {
@@ -2791,67 +2802,138 @@ function buildTaskDetail(task, context, drain = null) {
   }));
   renderTaskRuns(runs, task, context);
   detail.appendChild(buildActionsRow(task, detail, context));
+  const stamps = buildTaskTimestamps(task, context);
+  if (stamps) detail.appendChild(stamps);
   // Activated once the panels exist: the Runs tab reads its runs then.
   detail.activateTab(activeDetailTab);
 
   return detail;
 }
 
-// The detail's Details section, above the tabs: what the task is and where it
-// stands. The levers an operator sets (status, complexity, tags) and the read
-// facts (crew, host, provenance, run, pull request, timestamps) share one card,
-// two columns once the pane is wide. The pane head carries only the id and
-// title, so nothing here is repeated there.
-function buildTaskMeta(task, context, { addField, editor, showsEditor }) {
-  const row = (label, value, extraClass = "") =>
-    el("div", { class: `property-row${extraClass ? ` ${extraClass}` : ""}` }, [el("span", { class: "label", text: label }), value]);
-  const fact = (label, value) => row(label, typeof value === "string" ? el("span", { class: "value", text: value }) : value, "fact");
-
-  const levers = el("div", { class: "property-list task-meta-levers" });
-  levers.appendChild(row("Status", buildStatusUpdateControl(task, context)));
-  levers.appendChild(row("Complexity", buildComplexityUpdateControl(task, context)));
+// The detail's head, above the tabs: what the task is and where it stands.
+// The levers an operator sets (status, complexity, crew, host, tags) share
+// one row of chips; the lifecycle strip places the status on the way to done;
+// the delivery card gathers the pull request, the run and the hands that
+// carried the task. The pane head carries only the id and title, so nothing
+// here is repeated there, and the timestamps close the detail.
+function buildTaskMeta(task, context, { editor, showsEditor }) {
+  const levers = el("div", { class: "task-levers" });
+  levers.appendChild(buildStatusUpdateControl(task, context));
+  levers.appendChild(buildComplexityUpdateControl(task, context));
   const crew = explicitCrewValue(task);
-  levers.appendChild(fact("Crew", el("span", { class: "value" }, crew
-    ? [crew]
-    : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })])));
-  levers.appendChild(fact("Runs on", buildOsReadout(task)));
+  levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+    el("span", { class: "visually-hidden", text: "Crew: " }),
+    ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
+  ]));
+  levers.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
+    el("span", { class: "visually-hidden", text: "Runs on: " }),
+    buildOsReadout(task),
+  ]));
+  if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
-  const facts = el("div", { class: "property-list task-meta-facts" });
-  for (const [key, label] of TASK_PEOPLE_FIELDS) {
-    if (task[key] != null && task[key] !== "") facts.appendChild(fact(label, String(task[key])));
-  }
-  if (task.job_run_id != null && task.job_run_id !== "") facts.appendChild(fact("Run", buildRunValue(task)));
+  const head = el("div", { class: "task-meta-block" }, [levers]);
+  const lifecycle = buildLifecycleStrip(task.status);
+  if (lifecycle) head.appendChild(lifecycle);
+  const delivery = buildDeliveryCard(task);
+  if (delivery) head.appendChild(delivery);
+  return head;
+}
+
+// The statuses a task passes through on its way to done. Any other status
+// (blocked, rejected, archived, someday) sits off this line and shows no strip.
+const TASK_LIFECYCLE = [
+  ["proposed", "Proposed"],
+  ["backlog", "Backlog"],
+  ["in-progress", "In progress"],
+  ["review", "Review"],
+  ["done", "Done"],
+];
+
+function buildLifecycleStrip(status) {
+  const at = TASK_LIFECYCLE.findIndex(([key]) => key === status);
+  if (at < 0) return null;
+  const list = el("ol", { class: "task-lifecycle", "aria-label": "Lifecycle" });
+  TASK_LIFECYCLE.forEach(([key, label], index) => {
+    const state = index < at ? "past" : index === at ? "current" : "future";
+    const step = el("li", { class: `task-lifecycle-step ${state}` }, [
+      el("span", { class: "task-lifecycle-bar" }),
+      el("span", { class: "task-lifecycle-label", text: label }),
+    ]);
+    if (state === "current") {
+      step.dataset.status = key;
+      step.setAttribute("aria-current", "step");
+    }
+    list.appendChild(step);
+  });
+  return list;
+}
+
+// The verb each recorded hand did, in the order the task met them.
+const TASK_HAND_VERBS = {
+  created_by: "created",
+  planned_by: "planned",
+  implemented_by: "implemented",
+  orchestrator: "orchestrated",
+};
+const AGENT_FAMILIES = ["claude", "codex", "gemini", "grok"];
+
+function buildHandsChain(task) {
+  const hands = TASK_PEOPLE_FIELDS
+    .filter(([key]) => task[key] != null && task[key] !== "")
+    .map(([key, label]) => {
+      const name = String(task[key]);
+      const family = AGENT_FAMILIES.find((agent) => name.toLowerCase().includes(agent));
+      const hand = el("span", { class: "task-hand", title: `${label} ${name}` }, [
+        el("span", { class: "task-hand-name", text: name }),
+        el("span", { class: "task-hand-verb", text: ` ${TASK_HAND_VERBS[key]}` }),
+      ]);
+      if (family) hand.dataset.agent = family;
+      return hand;
+    });
+  if (!hands.length) return null;
+  const chain = hands.flatMap((hand, index) =>
+    index ? [el("span", { class: "task-hand-sep", "aria-hidden": "true" }), hand] : [hand]);
+  return el("span", { class: "value task-hands" }, chain);
+}
+
+function buildDeliveryCard(task) {
+  const row = (kind, label, value) =>
+    el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
+  const rows = [];
   const pullRequest = pullRequestLink(task);
   if (pullRequest || task.pr_number) {
     const value = el("span", { class: "value" });
     if (pullRequest) {
-      const link = el("a", { text: pullRequest.number ? `#${pullRequest.number}` : "Pull request" });
+      const link = el("a", { class: "mono task-delivery-pr", text: pullRequest.number ? `#${pullRequest.number}` : "Pull request" });
       link.href = pullRequest.url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       value.appendChild(link);
     } else {
-      value.appendChild(document.createTextNode(`#${task.pr_number}`));
+      value.appendChild(el("span", { class: "mono", text: `#${task.pr_number}` }));
     }
     if (task.pr_status) value.appendChild(el("span", { class: "fact-note", text: ` · ${task.pr_status}` }));
-    facts.appendChild(fact("Pull request", value));
+    rows.push(row("pr", "Pull request", value));
   }
-  if (task.created_at) facts.appendChild(fact("Created", absTimeNode(context, task.created_at, { class: "value" })));
-  if (task.updated_at) facts.appendChild(fact("Updated", absTimeNode(context, task.updated_at, { class: "value" })));
+  if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
+  const hands = buildHandsChain(task);
+  if (hands) rows.push(row("hands", "Handled by", hands));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
   if (task.workspace_root) {
-    facts.appendChild(fact("Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
+    rows.push(row("location", "Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
   }
+  return rows.length ? el("div", { class: "task-delivery-card" }, rows) : null;
+}
 
-  const grid = el("div", { class: "task-meta" }, facts.children.length ? [levers, facts] : [levers]);
-  const body = el("div", { class: "task-meta-body" }, [grid]);
-  // Tags close the section on a full-width row: a long list wraps there rather
-  // than squeezing one column. Its edit button follows the tags, not the
-  // section header, where it would read as editing every detail.
-  if (showsEditor("tags")) body.appendChild(el("div", { class: "property-list task-meta-tags" }, [row("Tags", editor("tags"))]));
-  return addField(null, "Details", body, false, false, { class: "task-meta-block" });
+// When the task was filed and last changed, closing the detail.
+function buildTaskTimestamps(task, context) {
+  const facts = el("div", { class: "property-list task-meta-facts task-stamps" });
+  const fact = (label, value) => el("div", { class: "property-row fact" }, [el("span", { class: "label", text: label }), value]);
+  if (task.created_at) facts.appendChild(fact("Created", absTimeNode(context, task.created_at, { class: "value" })));
+  if (task.updated_at) facts.appendChild(fact("Updated", absTimeNode(context, task.updated_at, { class: "value" })));
+  return facts.children.length ? facts : null;
 }
 
 // Where the task may run, as a word or two: "any", or the operating systems
