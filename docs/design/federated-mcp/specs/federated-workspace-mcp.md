@@ -129,6 +129,12 @@ id-routed task tool follows the task-id-prefix route described above.
 
 v1 (`crates/orbit-mcp/src/remote/discovery.rs`) returns `{"machine_id": "hm_…", "workspaces": […]}` with `machine_id` on the **envelope**, and filters to `Active` workspaces that are locally checked out on the accepting machine.
 
+Each destination validates checkout roots against its filesystem on every
+list call without persisting status changes. A removed checkout is excluded
+from the v1 list; the federated destination envelope retains its row with
+`status: invalid`, which the mux projects as `checkout_health: invalid`.
+Restoring the checkout makes it active on the next discovery call.
+
 Federated list does **not** inherit that envelope or that filter:
 
 1. **Session-unbound.** The tool must not require a workspace selector. Session/initialize workspace metadata is not an input and not a filter.

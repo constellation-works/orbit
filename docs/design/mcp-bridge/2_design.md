@@ -195,7 +195,9 @@ On the accepting server:
 
 - `orbit.workspace.list` reads the machine-local registry and returns active
   logical workspaces with a checkout registered on that machine, including
-  locally registered replicas;
+  locally registered replicas. Discovery validates checkout roots against the
+  filesystem in memory: a removed checkout is excluded immediately, without
+  persisting its status to the registry;
 - workspace-scoped tools accept a stable workspace selector from the call or
   initialization metadata;
 - the selector is resolved to a server-local checkout;
