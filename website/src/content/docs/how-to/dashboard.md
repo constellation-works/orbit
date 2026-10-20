@@ -215,8 +215,10 @@ owner. The status list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has two tabs. **Drain** shows **Start a window** (see
-[auto-drain](#auto-drain)) and the files tasks currently lock. **Log** is a
+The right dock has two tabs. **Drain** shows the auto-drain card, **Start a
+window** (see [auto-drain](#auto-drain)) and the files tasks currently lock.
+There the card states a host throttle as its own amber note and draws each
+forecast peak as a bar against its threshold. **Log** is a
 live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
 **warn**. Opening a task replaces the dock with the task's detail; below
 1000px wide the dock is only on the Drain page.
@@ -287,8 +289,10 @@ The card shows:
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
 - **Admission forecast.** The last pass's forecast time, CPU and memory peaks
-  against the admit thresholds (for example `85.6% peak at +10m`, then
-  `27.4 cores · 12.4 pts under the 98% ceiling`), and any candidate enforce held. A pass that built no
+  against the admit thresholds (for example `85.6% / 98%`, then
+  `peak at +10m · 27.4 cores · 12.4 pts under the ceiling`), the tasks it
+  admitted with the profile that priced each one, and any candidate enforce
+  held. A pass that built no
   forecast says `no forecast this pass` and, when an earlier forecast was
   kept, shows that one too. Shadow decisions are marked hypothetical; they
   do not hold anyone.

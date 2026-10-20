@@ -238,11 +238,12 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Tasks carries the dock beside the list: Start a window and the locks,
-      // not the Drain page's status, waits and fleet cards.
+      // Tasks carries the dock beside the list: the Auto-drain status card,
+      // Start a window and the locks, not the Drain page's waits and fleet cards.
+      await page.locator('#tasks-main #side-dock #auto-drain-panel').waitFor({ state: 'visible' });
       await page.locator('#tasks-main #side-dock #auto-drain-start').waitFor({ state: 'visible' });
       await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
-      if (await page.locator('#tasks-main #auto-drain-panel').isVisible()) throw new Error('The Tasks dock must not show the Drain status card');
+      if (await page.locator('#tasks-main #drain-waits-panel').isVisible() || await page.locator('#tasks-main #drain-fleet-panel').isVisible()) throw new Error('The Tasks dock must leave the waits and fleet cards on Drain');
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
       if (await page.locator('#tasks-main #side-dock').isVisible()) throw new Error('An open task takes the dock\'s place');
       await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();

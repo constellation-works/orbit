@@ -280,12 +280,12 @@ try {
         drainStatusShown: document.getElementById('auto-drain-panel').getClientRects().length > 0,
       };
     });
-    // The Tasks dock sits beside the list above 1000px and gives way below it;
-    // the Drain status card stays hidden on Tasks at every width.
+    // The Tasks dock sits beside the list above 1000px, leading with the
+    // Auto-drain status card, and gives way below it.
     const docked = width > 1000;
     const dockSpace = docked ? tasks.gap + tasks.dockWidth : 0;
-    if (tasks.tracks !== (docked ? 2 : 1) || (tasks.dockWidth > 0) !== docked || tasks.drainStatusShown || Math.abs(tasks.listWidth + dockSpace - tasks.mainWidth) > 1) {
-      throw new Error(`Tasks should fill its page beside the dock above 1000px and alone below it, with no Drain status card, at ${width}px: ${JSON.stringify(tasks)}`);
+    if (tasks.tracks !== (docked ? 2 : 1) || (tasks.dockWidth > 0) !== docked || tasks.drainStatusShown !== docked || Math.abs(tasks.listWidth + dockSpace - tasks.mainWidth) > 1) {
+      throw new Error(`Tasks should fill its page beside the dock and its Auto-drain card above 1000px and alone below it, at ${width}px: ${JSON.stringify(tasks)}`);
     }
   }
   await page.click('.tab[data-tab="operations"]');

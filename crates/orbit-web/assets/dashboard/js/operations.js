@@ -2483,13 +2483,17 @@ function throttleGauge(item) {
 // gauge per resource. The full sentence (each reading, both thresholds and
 // since-when) is what assistive technology announces; the visible parts say
 // the same in short.
-function autoDrainThrottleNote(capacity) {
-  const resources = throttledResources(capacity);
-  if (resources.length === 0) return null;
+function throttleSentence(resources) {
   const held = resources
     .map(item => `${throttleReading(item.resource, item.percent)} (throttled at ≥ ${throttleReading(item.resource, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item.resource, item.resume_percent, true)})`)
     .join("; ");
-  const sentence = `Admissions throttled: ${held}. Running tasks are not touched.`;
+  return `Admissions throttled: ${held}. Running tasks are not touched.`;
+}
+
+function autoDrainThrottleNote(capacity) {
+  const resources = throttledResources(capacity);
+  if (resources.length === 0) return null;
+  const sentence = throttleSentence(resources);
   const resumes = resources
     .map(item => `${throttleName(item.resource)} falls below ${throttleReading(item.resource, item.resume_percent, true)}`)
     .join(" and ");
@@ -2510,6 +2514,17 @@ function autoDrainThrottleNote(capacity) {
     el("div", { class: "drain-banner-gauges", "aria-hidden": "true" }, resources.map(throttleGauge).filter(Boolean)),
     el("span", { class: "visually-hidden", text: sentence }),
   ]);
+  note.setAttribute("role", "status");
+  return note;
+}
+
+// The status card's own copy of the throttle: the full sentence as one amber
+// note. The Tasks dock hides the page banner, so drain.css shows this note
+// there and nowhere else.
+function autoDrainThrottleLine(capacity) {
+  const resources = throttledResources(capacity);
+  if (resources.length === 0) return null;
+  const note = el("p", { class: "operation-control-note drain-throttle-line", text: throttleSentence(resources) });
   note.setAttribute("role", "status");
   return note;
 }
@@ -2694,12 +2709,11 @@ function forecastTaskRef(forecast, taskId) {
   return el("span", { class: "drain-forecast-task-name" }, [link, " ", String(title)]);
 }
 
-// Tasks a pass admitted are not listed: the run list and the window's
-// figures already show them. Only the candidates it held explain a wait.
 function forecastHasDecisions(forecast) {
   if (!forecast) return false;
+  const admitted = Array.isArray(forecast.admitted) && forecast.admitted.some(task => task?.task_id);
   const skipped = Array.isArray(forecast.skipped) && forecast.skipped.some(task => task?.task_id);
-  return skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
+  return admitted || skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
 }
 
 function forecastTime(at) {
@@ -2754,7 +2768,8 @@ function forecastSpark(series, peak, admitNumber, label, hypothetical) {
 
 // Each peak against its admit threshold, with both figures beside it: a
 // sparkline of the forecast's first hour when the record keeps one, or else
-// a meter whose fill is the peak and whose tick is the threshold. The amount,
+// (and always in the Tasks dock) a meter whose fill is the peak and whose
+// tick is the threshold. The amount,
 // minute and headroom (in percentage points) are in the row's tooltip and
 // read aloud. A shadow forecast's chart is marked hypothetical.
 function forecastPeaks(forecast) {
@@ -2781,29 +2796,34 @@ function forecastPeaks(forecast) {
     const name = resource === "cpu" ? "CPU" : "Memory";
     const detail = `${name} peak ${[`${figure}${amount ? ` (${amount})` : ""}`, when, admit, room].filter(Boolean).join(" · ")}`;
     const series = known ? forecastSeries(forecast, resource) : null;
-    let graphic;
+    const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
+    const meter = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
+      known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
+      Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
+    ]);
+    // With a series the chart leads and the meter follows it for the narrow
+    // Tasks dock, which draws the meter instead (drain.css, tasks.css).
+    const graphic = [meter];
     if (series) {
       const limit = Number.isFinite(admitNumber) ? `admit limit ${admitNumber}%` : "admit limit unknown";
       const label = `${hypothetical ? "Hypothetical " : ""}${name} forecast over the next ${FORECAST_SERIES_MINUTES} minutes: peak ${figure} ${when}, ${limit}`;
-      graphic = forecastSpark(series, peak, admitNumber, label, hypothetical);
-    } else {
-      const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
-      graphic = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
-        known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
-        Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
-      ]);
+      graphic.unshift(forecastSpark(series, peak, admitNumber, label, hypothetical));
     }
-    // The figure reads as the peak and when, then the amount and how far it
-    // sits from the admit ceiling, in percentage points.
-    const margin = Number.isFinite(roomNumber) && Number.isFinite(admitNumber)
-      ? `${Math.abs(roomNumber).toFixed(1)} pts ${roomNumber < 0 ? "over" : "under"} the ${admitNumber}% ceiling`
-      : Number.isFinite(admitNumber) ? `${admitNumber}% ceiling` : "";
+    // The figure reads as the peak against its admit threshold, then when it
+    // peaks, the amount and how far it sits from that ceiling, in percentage
+    // points.
+    const margin = Number.isFinite(roomNumber)
+      ? `${Math.abs(roomNumber).toFixed(1)} pts ${roomNumber < 0 ? "over" : "under"} the ceiling`
+      : "";
     return el("div", { class: `drain-forecast-peak${over ? " over" : ""}`, title: detail }, [
       el("dt", { text: name }),
-      el("dd", { class: "drain-forecast-bar" }, [graphic]),
+      el("dd", { class: "drain-forecast-bar" }, graphic),
       el("dd", { class: "drain-forecast-figure" }, [
-        el("span", { class: "drain-forecast-figure-main", "aria-hidden": "true", text: known ? `${percent.toFixed(1)}% peak${when ? ` ${when}` : ""}` : "host capacity unknown" }),
-        el("span", { class: "drain-forecast-figure-sub", "aria-hidden": "true", text: [amount, margin].filter(Boolean).join(" · ") }),
+        el("span", { class: "drain-forecast-figure-main mono", "aria-hidden": "true" }, [
+          known ? `${percent.toFixed(1)}%` : "host capacity unknown",
+          Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-threshold", text: ` / ${admitNumber}%` }) : null,
+        ]),
+        el("span", { class: "drain-forecast-figure-sub", "aria-hidden": "true", text: [when ? `peak ${when}` : "", amount, margin].filter(Boolean).join(" · ") }),
         el("span", { class: "visually-hidden", text: detail }),
       ]),
     ]);
@@ -2816,7 +2836,21 @@ function forecastPeaks(forecast) {
 
 function forecastDecisions(forecast, hypothetical) {
   const items = [];
+  const admitVerb = hypothetical ? "Would admit " : "Admitted ";
   const holdVerb = hypothetical ? "Would hold " : "Held ";
+  for (const task of Array.isArray(forecast.admitted) ? forecast.admitted : []) {
+    if (!task?.task_id) continue;
+    const notes = [`profile ${task.profile_source || "unknown"}`];
+    if (task.idle_host) notes.push(String(task.idle_host));
+    // An admitted task stays on one line; its full text is the tooltip.
+    const item = el("li", { class: "drain-forecast-task admitted" }, [
+      admitVerb,
+      forecastTaskRef(forecast, task.task_id),
+      ` · ${notes.join(" · ")}`,
+    ]);
+    item.title = item.textContent;
+    items.push(item);
+  }
   for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
     if (!task?.task_id) continue;
     items.push(el("li", { class: "drain-forecast-task held" }, [
@@ -2907,8 +2941,8 @@ function autoDrainForecast(payload) {
 // the slots it competes for and why nothing more starts, any provider or crew
 // hold, the last admission forecast, then the run and Stop. Its deadline sits
 // in the header. A host throttle leads the page as a banner above the summary
-// tiles, and starting a window is its own card beside, hidden in a read-only
-// view.
+// tiles (the Tasks dock, which hides the banner, shows the card's own note),
+// and starting a window is its own card beside, hidden in a read-only view.
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   const waits = $("drain-waits-panel");
@@ -2926,8 +2960,8 @@ function renderAutoDrain(payload) {
   renderAutoDrainHead(payload);
   const reasons = autoDrainReasons(payload);
   const holds = [
-    // A page without the banner slot keeps the note in the card.
-    $("drain-banner") ? null : autoDrainThrottleNote(payload.capacity),
+    // Shown only where the banner is not (the Tasks dock).
+    autoDrainThrottleLine(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
     drainCrewNote(payload),
