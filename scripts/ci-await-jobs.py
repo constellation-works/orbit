@@ -12,6 +12,13 @@ and its conclusion stays the gate's result. It reads the run's jobs through
 the latest attempt of each job. A job that completes with any conclusion but
 success fails the wait at once. API errors are retried until the timeout.
 
+--timeout-seconds is one absolute budget for the whole wait. Each `gh api`
+listing runs under the remaining budget, and the poll sleep is clipped to it. A
+listing still running at expiry is killed and reaped (at most
+CLEANUP_SECONDS more), and the wait fails naming the unavailable listing. A
+listing that returns after expiry is not accepted as success: the wait fails
+with a timeout even when every awaited job succeeded.
+
 With --step, a job also counts as done once its step of that name succeeds,
 while its later steps still run. The shard jobs wait this way for the test
 build's archive upload, not for the partition guard after it. A step that
@@ -27,22 +34,42 @@ import subprocess
 import sys
 import time
 
+# Bound on reaping a listing killed at the deadline, added to --timeout-seconds.
+CLEANUP_SECONDS = 5
+
 FIELDS = (".jobs[] | {name, status, conclusion, started_at, completed_at, html_url,"
           " steps: [.steps[]? | {name, status, conclusion}]}")
 
 
-def list_jobs(repository, run_id):
-    """Return {name: job}, or None on an API error."""
-    result = subprocess.run(
+class ListingTimeout(Exception):
+    """The job listing was still running when the wait budget ran out."""
+
+
+def list_jobs(repository, run_id, remaining):
+    """Return {name: job}, or None on an API error; raise ListingTimeout past `remaining` seconds."""
+    child = subprocess.Popen(
         ["gh", "api", "--paginate", "--jq", FIELDS,
          f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        print(f"ci-await: job listing failed (exit {result.returncode}): {result.stderr.strip()}",
+    try:
+        stdout, stderr = child.communicate(timeout=max(remaining, 0))
+    except subprocess.TimeoutExpired:
+        child.kill()
+        try:
+            child.communicate(timeout=CLEANUP_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(f"ci-await: job listing child {child.pid} did not exit within "
+                  f"{CLEANUP_SECONDS} s of being killed", file=sys.stderr)
+        raise ListingTimeout from None
+    finally:
+        if child.poll() is None:
+            child.kill()
+    if child.returncode != 0:
+        print(f"ci-await: job listing failed (exit {child.returncode}): {stderr.strip()}",
               file=sys.stderr)
         return None
     jobs = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         if line.strip():
             job = json.loads(line)
             jobs[job["name"]] = job
@@ -70,8 +97,18 @@ def main():
 
     deadline = time.monotonic() + args.timeout_seconds
     reported = set()
+    pending = []
     while True:
-        jobs = list_jobs(repository, run_id)
+        remaining = deadline - time.monotonic()
+        jobs = None
+        blocked = False
+        listing = "listing unavailable"
+        if remaining > 0:
+            try:
+                jobs = list_jobs(repository, run_id, remaining)
+            except ListingTimeout:
+                blocked = True
+                listing = "job listing still running at the deadline, killed"
         if jobs is not None:
             pending = []
             for name in args.jobs:
@@ -99,16 +136,27 @@ def main():
                     reported.add(name)
                     print(f"ci-await: {name} succeeded started={started} completed={completed} "
                           f"elapsed_s={elapsed(started, completed)}")
-            if not pending:
+            if not pending and time.monotonic() < deadline:
                 reached = f" or passed step '{args.step}'" if args.step else ""
                 print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}")
                 return 0
-        if time.monotonic() >= deadline:
-            waiting = ", ".join(pending) if jobs is not None else "every job (listing unavailable)"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if jobs is None and pending:
+                waiting = ", ".join(pending)
+                if blocked:
+                    waiting += f" (latest {listing})"
+            elif jobs is None:
+                waiting = f"every job ({listing})"
+            elif pending:
+                waiting = ", ".join(pending)
+            else:
+                waiting = (f"the final job listing, which reported all {len(args.jobs)} "
+                           "awaited jobs successful only after the deadline")
             print(f"ci-await: timed out after {args.timeout_seconds:g} s waiting for {waiting}",
                   file=sys.stderr)
             return 1
-        time.sleep(args.poll_seconds)
+        time.sleep(min(args.poll_seconds, remaining))
 
 
 if __name__ == "__main__":

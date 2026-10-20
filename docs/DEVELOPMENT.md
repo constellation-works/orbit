@@ -446,6 +446,16 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
   job. A shard's wait prints `ci-await: Test build step 'Upload nextest
   archive' succeeded started=...` instead.
+  `--timeout-seconds` (default 2400) is one absolute budget for the whole
+  wait, for the Check job and each shard's upload wait alike: every `gh api`
+  listing runs under the remaining budget, the poll sleep is clipped to it, and a
+  listing still running at expiry is killed and reaped. A blocked listing
+  therefore ends the wait at the timeout plus at most 5 s of cleanup, with a
+  `timed out` diagnostic naming the unavailable listing or the jobs still
+  pending. A listing that arrives after expiry is never accepted as success,
+  even when every awaited job succeeded. Failed, skipped or cancelled jobs and
+  steps still fail the wait at once, and transient API errors are retried within
+  the remaining budget.
 
 Locally, `make ci` keeps the single-process full mode: the folded build, then
 nextest from its binary listing.
