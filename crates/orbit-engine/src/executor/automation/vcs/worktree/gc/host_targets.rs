@@ -232,7 +232,7 @@ pub(super) fn collect_host_targets(
         Ok(Some(root)) => root,
         Ok(None) => return Vec::new(),
         Err(error) => {
-            let mut report = blank_report(
+            let mut report = WorktreeGcReport::blank(
                 repo_root
                     .join(HOST_VALIDATION_TARGETS_DIR.iter().collect::<PathBuf>())
                     .as_path(),
@@ -244,7 +244,7 @@ pub(super) fn collect_host_targets(
     let names = match root.held.names() {
         Ok(names) => names,
         Err(error) => {
-            let mut report = blank_report(&root.path);
+            let mut report = WorktreeGcReport::blank(&root.path);
             report.action = format!("failed:inventory host validation targets: {error}");
             return vec![report];
         }
@@ -278,9 +278,7 @@ pub(super) fn collect_host_targets(
             },
             None => attribution.runs[0],
         };
-        let mut report = blank_report(&target.path);
-        report.run_id = Some(selected.run_id.clone());
-        report.run_state = Some(selected.state);
+        let mut report = WorktreeGcReport::for_run(&target.path, selected);
         let task_ids = attributed_task_ids(selected);
         report.task_id = (!task_ids.is_empty()).then(|| task_ids.join(","));
         report.detail = Some(format!(
@@ -379,7 +377,7 @@ fn collect_scratch_target(
     owner: Option<ScratchOwner>,
     options: &WorktreeGcOptions,
 ) -> WorktreeGcReport {
-    let mut report = blank_report(&target.path);
+    let mut report = WorktreeGcReport::blank(&target.path);
     let Some(owner) = owner else {
         report.action = "skipped:unattributed_host_target".to_string();
         report.detail = Some(UNATTRIBUTED_DETAIL.to_string());
@@ -515,23 +513,6 @@ fn reclaim(
         })?;
     report.action = "reclaimed".to_string();
     Ok(())
-}
-
-fn blank_report(path: &Path) -> WorktreeGcReport {
-    WorktreeGcReport {
-        path: path.to_path_buf(),
-        run_id: None,
-        run_state: None,
-        task_id: None,
-        task_status: None,
-        pr_status: None,
-        action: String::new(),
-        bytes_reclaimed: 0,
-        detail: None,
-        reclaim: Vec::new(),
-        recovery: None,
-        retained_bytes: None,
-    }
 }
 
 // Replacing a component between the last check and the removal is a race in

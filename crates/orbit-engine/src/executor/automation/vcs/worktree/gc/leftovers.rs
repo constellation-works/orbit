@@ -117,20 +117,7 @@ pub(super) fn reclaim_trash_directory(
     registered: &BTreeSet<PathBuf>,
     options: &WorktreeGcOptions,
 ) -> Result<WorktreeGcReport, OrbitError> {
-    let mut report = WorktreeGcReport {
-        path: path.to_path_buf(),
-        run_id: None,
-        run_state: None,
-        task_id: None,
-        task_status: None,
-        pr_status: None,
-        action: String::new(),
-        bytes_reclaimed: 0,
-        detail: None,
-        reclaim: Vec::new(),
-        recovery: None,
-        retained_bytes: None,
-    };
+    let mut report = WorktreeGcReport::blank(path);
     if path_is_registered(registered, path) {
         report.action = "skipped:registered_worktree".to_string();
         report.detail = Some(

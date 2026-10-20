@@ -13,18 +13,9 @@ use std::path::{Path, PathBuf};
 pub(super) fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> WorktreeGcReport {
     let task_ids = attributed_task_ids(run);
     WorktreeGcReport {
-        path: PathBuf::new(),
-        run_id: Some(run.run_id.clone()),
-        run_state: Some(run.state),
         task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
-        task_status: None,
-        pr_status: None,
         action: format!("failed:{error}"),
-        bytes_reclaimed: 0,
-        detail: None,
-        reclaim: Vec::new(),
-        recovery: None,
-        retained_bytes: None,
+        ..WorktreeGcReport::for_run(Path::new(""), run)
     }
 }
 

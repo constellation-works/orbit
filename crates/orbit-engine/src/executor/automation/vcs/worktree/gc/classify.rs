@@ -105,20 +105,12 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
     });
 
     let mut report = WorktreeGcReport {
-        path: path.to_path_buf(),
-        run_id: Some(run.run_id.clone()),
-        run_state: Some(run.state),
         // A bundle worktree serves several tasks; name all of them until a
         // single one is identified as the reason it is retained.
         task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
         task_status: first_task.as_ref().map(|(status, _)| *status),
         pr_status: first_task.and_then(|(_, pr_status)| pr_status),
-        action: String::new(),
-        bytes_reclaimed: 0,
-        detail: None,
-        reclaim: Vec::new(),
-        recovery: None,
-        retained_bytes: None,
+        ..WorktreeGcReport::for_run(path, run)
     };
 
     // Secondary gate: never disturb a worktree that may still back a live
