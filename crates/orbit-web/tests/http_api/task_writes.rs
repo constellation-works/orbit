@@ -79,13 +79,30 @@ fn dashboard_task_writes_return_the_core_preflight_warnings() {
                 );
             }
 
+            let chore_without_scope = json_ok(server.send(
+                "POST",
+                &format!("/api/tasks{WORKSPACE}"),
+                json!({
+                    "title": "Chore filed without scope",
+                    "description": "Exercises missing-context warnings for the default task type.",
+                    "complexity": "low",
+                }),
+            ));
+            let chore_warnings = warnings(&chore_without_scope);
+            assert_eq!(chore_warnings.len(), 1, "{chore_without_scope}");
+            assert!(
+                chore_warnings[0].contains("context_files"),
+                "a default chore warns about missing context: {chore_without_scope}"
+            );
+
             let clean = json_ok(server.send(
                 "POST",
                 &format!("/api/tasks{WORKSPACE}"),
                 json!({
-                    "title": "Chore with nothing to warn about",
-                    "description": "Exercises a clean add.",
+                    "title": "No-diff chore without scope",
+                    "description": "Exercises a clean add that needs no file scope.",
                     "complexity": "low",
+                    "tags": ["no-diff-expected"],
                 }),
             ));
             assert!(clean.get("warnings").is_none(), "{clean}");
