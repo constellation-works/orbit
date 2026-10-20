@@ -80,8 +80,9 @@ pub(crate) fn validate_staged_workspace_document(
 /// admission rule that spans both layers applies (both review layers on,
 /// resource-throttle resume against high, crews a workspace pool or
 /// `default_crew` names). Without this a global edit that is valid alone saves
-/// cleanly and leaves that workspace's config unloadable, including for the
-/// `config set` that would repair it.
+/// cleanly and leaves that workspace's config unloadable. `orbit config set`
+/// cannot repair an unloadable config: runtime construction refuses it before
+/// the command runs.
 pub(crate) fn validate_staged_global_document(
     roots: &ConfigRoots,
     global_path: &Path,

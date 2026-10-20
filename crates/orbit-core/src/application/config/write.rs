@@ -73,9 +73,23 @@ pub fn set_key(
 ) -> Result<ConfigWriteOutcome, OrbitError> {
     admit_config_key(key)?;
     let literal = toml_literal(value)?;
+    set_key_literal(runtime, key, &literal, scope, init)
+}
+
+/// Write a raw TOML literal, falling back to a plain string when it does not
+/// parse as one. This preserves the local CLI's value syntax while sharing
+/// the typed JSON write's admission, transaction, and outcome.
+pub fn set_key_literal(
+    runtime: &OrbitRuntime,
+    key: &str,
+    literal: &str,
+    scope: ConfigScope,
+    init: ConfigWriteInit,
+) -> Result<ConfigWriteOutcome, OrbitError> {
+    admit_config_key(key)?;
     let (store, old_value) = write_store(runtime, scope, init, |store| {
         let old_value = effective_value(runtime, key)?;
-        store.set_value(key, &literal)?;
+        store.set_value(key, literal)?;
         match scope {
             ConfigScope::Global => {
                 store.validate()?;
