@@ -2,10 +2,39 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::facts::{CodebaseFacts, TaskFacts};
-use super::sections::{LARGE_FOOTPRINT_CAP, Params, rate_fields};
+use super::sections::{Params, rate_fields};
+
+/// Landed diffs and reservations above this many paths are bulk in the
+/// one-file view and excluded from it. Higher than the coupling ranking's
+/// [`super::sections::LARGE_FOOTPRINT_CAP`] so a release cut, which bumps a
+/// dozen manifests together, still counts.
+pub(super) const RELATED_FOOTPRINT_CAP: usize = 20;
+
+/// Why the one-file view lists no partner.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum EmptyReason {
+    /// No attributable landed task in the window changed the file.
+    NoLandedChange,
+    /// Fewer landed tasks changed the file than the minimum shared support,
+    /// so no partner can reach it.
+    PathBelowMinimum {
+        path_support: usize,
+        min_support: usize,
+    },
+    /// The file reaches the minimum, but every landed task changed it alone.
+    NoPartner { path_support: usize },
+    /// Partners exist, and none shares the minimum number of landed tasks.
+    PartnersBelowMinimum {
+        min_support: usize,
+        partners: usize,
+        max_shared: usize,
+    },
+}
 
 fn declares(task: &TaskFacts, path: &str) -> bool {
     task.footprint.iter().any(|anchor| {
@@ -45,13 +74,15 @@ pub(super) fn related(
     let mut misses = BTreeMap::<&str, Vec<&TaskFacts>>::new();
     for task in &facts.tasks {
         let Some(landed) = &task.landed else {
-            unavailable += usize::from(task.delivery_at.is_some_and(|at| params.within(at)));
+            // A task meant to change no files misses no evidence.
+            unavailable +=
+                usize::from(!task.no_diff && task.delivery_at.is_some_and(|at| params.within(at)));
             continue;
         };
         if !params.within(landed.at) {
             continue;
         }
-        if landed.paths.len() > LARGE_FOOTPRINT_CAP {
+        if landed.paths.len() > RELATED_FOOTPRINT_CAP {
             excluded_large += 1;
             continue;
         }
@@ -71,7 +102,7 @@ pub(super) fn related(
     let mut reserved = BTreeMap::<String, usize>::new();
     let mut reserved_both = BTreeMap::<String, (usize, BTreeSet<String>)>::new();
     for reservation in &facts.reservations {
-        if !params.within(reservation.at) || reservation.files.len() > LARGE_FOOTPRINT_CAP {
+        if !params.within(reservation.at) || reservation.files.len() > RELATED_FOOTPRINT_CAP {
             continue;
         }
         let keys: BTreeSet<_> = reservation
@@ -152,8 +183,28 @@ pub(super) fn related(
             .then_with(|| a["path"].as_str().cmp(&b["path"].as_str()))
     });
     rows.truncate(top);
+    let empty_reason = rows.is_empty().then(|| {
+        if path_count == 0 {
+            EmptyReason::NoLandedChange
+        } else if path_count < params.min_support {
+            EmptyReason::PathBelowMinimum {
+                path_support: path_count,
+                min_support: params.min_support,
+            }
+        } else if both.is_empty() {
+            EmptyReason::NoPartner {
+                path_support: path_count,
+            }
+        } else {
+            EmptyReason::PartnersBelowMinimum {
+                min_support: params.min_support,
+                partners: both.len(),
+                max_shared: both.values().map(Vec::len).max().unwrap_or(0),
+            }
+        }
+    });
     Ok(
-        json!({"path": path, "rows": rows, "top": top, "row_limit": top, "rollup": "file", "touched": "landed_diff", "path_support": path_count, "excluded_large": excluded_large, "unavailable_landed_tasks": unavailable, "large_footprint_cap": LARGE_FOOTPRINT_CAP}),
+        json!({"path": path, "rows": rows, "top": top, "row_limit": top, "rollup": "file", "touched": "landed_diff", "path_support": path_count, "excluded_large": excluded_large, "unavailable_landed_tasks": unavailable, "large_footprint_cap": RELATED_FOOTPRINT_CAP, "empty_reason": empty_reason}),
     )
 }
 

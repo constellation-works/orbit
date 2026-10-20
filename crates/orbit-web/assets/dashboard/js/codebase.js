@@ -1299,15 +1299,39 @@ async function fetchRelated(path, key = relatedFetchKey(path)) {
   }
 }
 
+// Why no related file is listed, from the response's empty reason, with a
+// rerun at a minimum that can list one.
+function relatedEmpty(data) {
+  const reason = data.empty_reason || {};
+  const rerun = (support) => Number(support) >= 1 && Number(support) < Number(data.min_support)
+    ? el("div", { class: "codebase-actions" }, [actionButton(`Rerun with minimum ${count(support)}`, () => updateQuery({ min_support: Number(support) }))])
+    : null;
+  const empty = (text, action = null) => [el("p", { class: "codebase-empty", text }), action].filter(Boolean);
+  switch (reason.kind) {
+    case "no_landed_change":
+      return empty(`No landed task with a recorded landing changed ${data.path} in this window.`);
+    case "path_below_minimum":
+      return empty(`${data.path} changed in ${plural(reason.path_support, "landed task")} in this window, fewer than the minimum of ${count(reason.min_support)} shared tasks, so no partner can qualify.`, rerun(reason.path_support));
+    case "no_partner":
+      return empty(`Every landed task in this window changed ${data.path} alone.`);
+    case "partners_below_minimum":
+      return empty(`${plural(reason.partners, "file")} changed alongside ${data.path}, but none in ${count(reason.min_support)} or more landed tasks; the most shared is ${count(reason.max_shared)}.`, rerun(reason.max_shared));
+    default:
+      return empty("No related files reach minimum shared support in this window.");
+  }
+}
+
 function renderRelated() {
   const results = $("codebase-related-results");
   if (!results || !relatedData) return;
   results.textContent = "";
   results.appendChild(el("h4", { text: relatedData.path }));
-  results.appendChild(el("p", { class: "codebase-note", text: `${count(relatedData.path_support)} landed tasks changed this file · ${count(relatedData.excluded_large)} bulk tasks excluded · ${count(relatedData.unavailable_landed_tasks)} done tasks lack readable landed evidence. File-level measures use the selected window and minimum shared tasks.` }));
+  const unavailable = Number(relatedData.unavailable_landed_tasks) || 0;
+  results.appendChild(el("p", { class: "codebase-note", text: `${count(relatedData.path_support)} landed tasks changed this file · ${count(relatedData.excluded_large)} bulk tasks excluded (over ${count(relatedData.large_footprint_cap)} files) · ${count(unavailable)} done tasks without a recorded landing. File-level measures use the selected window and minimum shared tasks.` }));
+  if (unavailable > 0) results.appendChild(note("Done tasks without a recorded landing were finished by hand or before Orbit recorded landings, so the files they changed are unknown. Tasks tagged no-diff-expected are not counted."));
   const rows = [...(relatedData.rows || [])];
   if (!rows.length) {
-    results.appendChild(el("p", { class: "codebase-empty", text: "No related files reach minimum shared support in this window." }));
+    for (const node of relatedEmpty(relatedData)) results.appendChild(node);
     return;
   }
   const sorts = el("div", { class: "codebase-related-sorts", role: "group", "aria-label": "Sort related files" });

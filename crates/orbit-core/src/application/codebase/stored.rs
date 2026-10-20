@@ -31,7 +31,7 @@ use crate::OrbitRuntime;
 
 /// Bump when [`HistoryFacts`] or anything it serializes changes shape or
 /// meaning: every stored row is then recomputed and replaced.
-pub(super) const FACTS_FORMAT_VERSION: u32 = 1;
+pub(super) const FACTS_FORMAT_VERSION: u32 = 2;
 
 /// One task's facts during a scan, and whether they need writing back.
 pub(super) struct Entry {

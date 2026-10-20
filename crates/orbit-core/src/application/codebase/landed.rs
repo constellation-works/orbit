@@ -2,12 +2,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::CodebaseDeliveryScan;
+use crate::application::task::{
+    EXTERNAL_MERGE_SETTLED_EVENT, pull_request_delivery, settled_merge_commit,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct Landed {
@@ -67,7 +70,30 @@ impl Scanner {
 
 /// The verified landing receipt in task history, without touching delivery runs
 /// or Git. Its timestamp also excludes old receipts from unavailable counts.
+///
+/// An owner `landing_completed` event wins. Otherwise the latest transition
+/// into done whose note records a full merge commit: the ordinary owner PR
+/// completion (`delivered by pull request #N merged as <sha>`) or a
+/// settlement from a pull request merged outside Orbit. The transition's time
+/// is the landing time.
 pub(super) fn receipt(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<Utc>)> {
+    landing_completed(history).or_else(|| {
+        history.iter().rev().find_map(|entry| {
+            if entry.to_status != Some(TaskStatus::Done) {
+                return None;
+            }
+            let note = entry.note.as_deref()?;
+            let commit = if entry.event == EXTERNAL_MERGE_SETTLED_EVENT {
+                settled_merge_commit(note)?
+            } else {
+                pull_request_delivery(note)?.1
+            };
+            Some((commit.to_string(), entry.at))
+        })
+    })
+}
+
+fn landing_completed(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<Utc>)> {
     // Owner landings have no local delivery run; their completion event is
     // written only after the owner verifies the provider or target ref.
     history.iter().rev().find_map(|entry| {

@@ -18,6 +18,7 @@ use orbit_types::task::{
     TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskComplexity, TaskDecision,
     TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
 };
+use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -238,13 +239,7 @@ pub(super) fn init_repo(fixture: &Fixture) -> PathBuf {
 /// Commit `files` as `task`'s landed diff and record its owner landing at
 /// `at`, as the landing evidence the landed-diff facts read.
 pub(super) fn land(fixture: &Fixture, repo: &Path, task: &str, files: &[&str], at: DateTime<Utc>) {
-    for file in files {
-        fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
-        fs::write(repo.join(file), task).unwrap();
-    }
-    git(repo, &[&["add", "--"][..], files].concat());
-    git(repo, &["commit", "-qm", task]);
-    let commit = git(repo, &["rev-parse", "HEAD"]);
+    let commit = commit_files(repo, task, files);
     append_event(
         fixture,
         task,
@@ -253,6 +248,17 @@ pub(super) fn land(fixture: &Fixture, repo: &Path, task: &str, files: &[&str], a
         Some(json!({"delivery": {"merge_commit": commit}}).to_string()),
         Some(TaskStatus::Done),
     );
+}
+
+/// Commit `files`, each written with `task`'s ID, and return the commit.
+fn commit_files(repo: &Path, task: &str, files: &[&str]) -> String {
+    for file in files {
+        fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
+        fs::write(repo.join(file), task).unwrap();
+    }
+    git(repo, &[&["add", "--"][..], files].concat());
+    git(repo, &["commit", "-qm", task]);
+    git(repo, &["rev-parse", "HEAD"])
 }
 
 pub(super) fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime<Utc>) {
@@ -2219,7 +2225,7 @@ fn codebase_related_uses_landed_diffs_and_filters_support_and_window() {
                 &["src/a.rs"],
                 now - Duration::days(40),
             );
-            let mut bulk: Vec<_> = (0..13).map(|n| format!("bulk/{n}")).collect();
+            let mut bulk: Vec<_> = (0..19).map(|n| format!("bulk/{n}")).collect();
             bulk.extend(["src/a.rs".into(), "docs/b.md".into()]);
             seed(
                 "bulk",
@@ -2301,6 +2307,187 @@ fn codebase_related_uses_landed_diffs_and_filters_support_and_window() {
                     .iter()
                     .any(|p| p == "docs/b.md")
             );
+        },
+    );
+}
+
+/// The owner's PR completion and a settlement from a PR merged outside Orbit
+/// are landing evidence in the one-file view, as an owner landing is; a
+/// no-diff task without a landing misses nothing; a release cut of up to 20
+/// paths counts while the coupling ranking keeps its 12-path cap; empty rows
+/// say why; and facts stored in the previous format are recomputed.
+#[test]
+fn codebase_related_reads_completion_and_settlement_landings_and_explains_empty_rows() {
+    isolated(
+        "codebase::codebase_related_reads_completion_and_settlement_landings_and_explains_empty_rows",
+        || {
+            let fixture = Fixture::new();
+            let repo = init_repo(&fixture);
+            let now = Utc::now();
+            let done = |title: &str, tags: &[&str]| {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "codebase analytics fixture".into(),
+                        tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                        status: Some(TaskStatus::Done),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .id
+                    .to_string()
+            };
+            let completed = done("completed by its pull request", &[]);
+            let completed_commit = commit_files(&repo, &completed, &["CHANGELOG.md", "Cargo.toml"]);
+            append_event(
+                &fixture,
+                &completed,
+                now,
+                "status_changed",
+                Some(format!(
+                    "completed by run jrun-1; delivered by pull request #41 merged as {completed_commit}"
+                )),
+                Some(TaskStatus::Done),
+            );
+            let settled = done("settled from its pull request", &[]);
+            let settled_commit = commit_files(
+                &repo,
+                &settled,
+                &["CHANGELOG.md", "Cargo.toml", "server.json"],
+            );
+            append_event(
+                &fixture,
+                &settled,
+                now,
+                EXTERNAL_MERGE_SETTLED_EVENT,
+                Some(format!(
+                    "settled from pull request #42, merged into agent-main as {settled_commit} outside Orbit"
+                )),
+                Some(TaskStatus::Done),
+            );
+            let abbreviated = done("abbreviated commit", &[]);
+            let short = commit_files(&repo, &abbreviated, &["CHANGELOG.md", "Cargo.toml"]);
+            append_event(
+                &fixture,
+                &abbreviated,
+                now,
+                "status_changed",
+                Some(format!(
+                    "completed; delivered by pull request #43 merged as {}",
+                    &short[..12]
+                )),
+                Some(TaskStatus::Done),
+            );
+            done("finished by hand", &[]);
+            done("survey", &["no-diff-expected"]);
+            let mut release: Vec<String> = (0..12).map(|n| format!("plugin/{n}.json")).collect();
+            release.extend(["CHANGELOG.md", "Cargo.toml", "server.json"].map(String::from));
+            let release: Vec<&str> = release.iter().map(String::as_str).collect();
+            let cut = done("release cut", &[]);
+            land(&fixture, &repo, &cut, &release, now);
+            let mut bulk: Vec<String> = (0..20).map(|n| format!("bulk/{n}")).collect();
+            bulk.push("CHANGELOG.md".into());
+            let bulk: Vec<&str> = bulk.iter().map(String::as_str).collect();
+            let sweep = done("bulk sweep", &[]);
+            land(&fixture, &repo, &sweep, &bulk, now);
+            for (title, files) in [
+                ("solo one", &["solo.rs"][..]),
+                ("solo two", &["solo.rs"]),
+                ("pair x", &["pair.rs", "x.rs"]),
+                ("pair y", &["pair.rs", "y.rs"]),
+            ] {
+                let task = done(title, &[]);
+                land(&fixture, &repo, &task, files, now);
+            }
+            reserve(&fixture, "release-reservation", &cut, &release, now);
+            let related = |query: &str| {
+                json_ok(
+                    fixture
+                        .server(false)
+                        .get(&format!("/api/codebase/related?{WS}&window=30d&{query}")),
+                )
+            };
+
+            let payload = related("path=CHANGELOG.md&min_support=1");
+            assert_eq!(payload["path_support"], 3, "{payload}");
+            assert_eq!(payload["excluded_large"], 1, "{payload}");
+            assert_eq!(payload["large_footprint_cap"], 20);
+            assert_eq!(
+                payload["unavailable_landed_tasks"], 2,
+                "the abbreviated commit and the hand-finished task lack evidence; the no-diff survey misses nothing: {payload}"
+            );
+            assert!(payload["empty_reason"].is_null(), "{payload}");
+            let partner = payload["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["path"] == "Cargo.toml")
+                .unwrap_or_else(|| panic!("Cargo.toml partner: {payload}"));
+            assert_eq!(partner["support"]["both"], 3, "{partner}");
+            let commits: Vec<(&str, &str)> = partner["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|task| {
+                    (
+                        task["task_id"].as_str().unwrap(),
+                        task["commit"].as_str().unwrap(),
+                    )
+                })
+                .collect();
+            for (task, commit) in [
+                (completed.as_str(), completed_commit.as_str()),
+                (settled.as_str(), settled_commit.as_str()),
+            ] {
+                assert!(commits.contains(&(task, commit)), "{task}: {commits:?}");
+            }
+            assert_eq!(
+                partner["reservation_coupling"]["numerator"], 1,
+                "a 15-file reservation counts in the one-file view: {partner}"
+            );
+            let analytics = json_ok(fixture.server(false).get(&format!(
+                "/api/codebase/analytics?{WS}&window=30d&min_support=1"
+            )));
+            let coupling = &analytics["change_coupling"];
+            assert_eq!(coupling["large_footprint_cap"], 12, "{coupling}");
+            assert_eq!(coupling["excluded_large"], 1, "{coupling}");
+
+            assert_eq!(
+                related("path=CHANGELOG.md&min_support=15")["empty_reason"],
+                json!({"kind": "path_below_minimum", "path_support": 3, "min_support": 15})
+            );
+            assert_eq!(
+                related("path=solo.rs&min_support=2")["empty_reason"],
+                json!({"kind": "no_partner", "path_support": 2})
+            );
+            assert_eq!(
+                related("path=pair.rs&min_support=2")["empty_reason"],
+                json!({"kind": "partners_below_minimum", "min_support": 2, "partners": 2, "max_shared": 1})
+            );
+            assert_eq!(
+                related("path=unknown.md&min_support=1")["empty_reason"],
+                json!({"kind": "no_landed_change"})
+            );
+
+            // A row stored by the previous format, which read only owner
+            // landings, is recomputed rather than reused.
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let stale = store
+                .connection()
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE codebase_task_facts SET format_version = 1,
+                       facts_json = json_set(facts_json, '$.receipt', json('null'), '$.landed_paths', json('null'))
+                     WHERE task_id = ?1",
+                    [&completed],
+                )
+                .unwrap();
+            assert_eq!(stale, 1, "the scan stored the completed task's facts");
+            let recomputed = related("path=CHANGELOG.md&min_support=1");
+            assert_eq!(recomputed["path_support"], 3, "{recomputed}");
+            assert_eq!(recomputed["unavailable_landed_tasks"], 2, "{recomputed}");
         },
     );
 }

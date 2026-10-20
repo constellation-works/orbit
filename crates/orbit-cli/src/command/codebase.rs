@@ -429,6 +429,38 @@ fn percent(rate: &Value) -> String {
     }
 }
 
+/// Why no partner is listed, from the payload's typed empty reason.
+fn related_empty_message(value: &Value) -> String {
+    let reason = &value["empty_reason"];
+    let path = text(&value["path"]);
+    match reason["kind"].as_str() {
+        Some("no_landed_change") => {
+            format!("no attributable landed task in this window changed {path}")
+        }
+        Some("path_below_minimum") => format!(
+            "{path} changed in {} landed task{} in this window, fewer than the minimum of {} \
+             shared tasks, so no partner can qualify; rerun with --min-support {}",
+            count(&reason["path_support"]),
+            if reason["path_support"] == 1 { "" } else { "s" },
+            count(&reason["min_support"]),
+            count(&reason["path_support"])
+        ),
+        Some("no_partner") => format!(
+            "every landed task in this window changed {path} alone ({} tasks)",
+            count(&reason["path_support"])
+        ),
+        Some("partners_below_minimum") => format!(
+            "{} partners share at most {} landed tasks with {path}, below the minimum of {}; \
+             rerun with --min-support {}",
+            count(&reason["partners"]),
+            count(&reason["max_shared"]),
+            count(&reason["min_support"]),
+            count(&reason["max_shared"])
+        ),
+        _ => "no partners reach minimum shared support".into(),
+    }
+}
+
 fn related_blocks(value: &Value) -> Vec<Block> {
     let mut table = Table::new(vec![
         Column::new("PATH").path(),
@@ -438,7 +470,7 @@ fn related_blocks(value: &Value) -> Vec<Block> {
         Column::new("RESERVATION").number(),
         Column::new("MISSES").number(),
     ])
-    .empty_message("no partners reach minimum shared support");
+    .empty_message(related_empty_message(value));
     for row in value["rows"].as_array().into_iter().flatten() {
         table.add_row(vec![
             text(&row["path"]),
@@ -455,7 +487,7 @@ fn related_blocks(value: &Value) -> Vec<Block> {
     }
     vec![
         Block::text(format!(
-            "{}\n{}\n{} bulk tasks excluded; {} done tasks lack readable landed evidence",
+            "{}\n{}\n{} bulk tasks excluded; {} done tasks without a recorded landing",
             text(&value["path"]),
             selection_line(value),
             count(&value["excluded_large"]),

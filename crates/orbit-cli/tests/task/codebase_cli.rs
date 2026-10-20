@@ -260,6 +260,22 @@ fn codebase_related_cli_reports_landed_markdown_partner() {
     assert_eq!(partner["footprint_miss_count"], 1);
     assert!(partner["reservation_coupling"].is_null());
     assert_eq!(partner["tasks"][0]["task_id"], task);
+
+    // At the default minimum the file's one landed task cannot reach it: the
+    // command says so and names the minimum that lists a partner.
+    let output = fixture
+        .command(&["codebase", "related", "src/lib.rs", "--format", "plain"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "src/lib.rs changed in 1 landed task in this window, fewer than the minimum of 15"
+        ) && stderr.contains("rerun with --min-support 1"),
+        "{stderr}"
+    );
 }
 
 /// The bundle directory of task `id` under `root`.
