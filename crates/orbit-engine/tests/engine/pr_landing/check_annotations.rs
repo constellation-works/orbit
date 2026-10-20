@@ -11,7 +11,10 @@ fn check_annotations_return_only_complete_bound_unchanged_provider_answers() {
         |sandbox| {
             for (case, refusal) in [
                 ("authentic", ""),
-                ("duplicate", "2 latest check runs named 'CodeQL'"),
+                (
+                    "duplicate",
+                    "2 latest check runs named 'CodeQL' on the head",
+                ),
                 ("truncated_listing", "truncated check run listing"),
                 ("foreign_app", "foreign or changed check app"),
                 ("foreign_repo", "foreign or changed check repository"),
@@ -53,7 +56,12 @@ fn check_annotations_return_only_complete_bound_unchanged_provider_answers() {
                         assert_eq!(answer["annotations"][1]["start_line"], 9);
                     } else {
                         let error = answer.expect_err(case).to_string();
-                        assert!(error.contains(refusal), "{case}: {error}");
+                        assert!(
+                            error.contains(&format!(
+                                "required check annotations are unavailable ({refusal})"
+                            )),
+                            "{case}: {error}"
+                        );
                     }
                 });
             }

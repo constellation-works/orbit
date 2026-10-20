@@ -2,7 +2,9 @@
 //! The engine receives verified generic evidence; no workflow is special-cased.
 use super::super::completion_deadline::Deadline;
 use super::{
-    MAX_WORKFLOW_SOURCE_BYTES, ci::ci_job_log, input::required_string,
+    MAX_WORKFLOW_SOURCE_BYTES,
+    ci::ci_job_log,
+    input::{number, required_string, same, text},
     workflow_dependency::dependency,
 };
 use orbit_common::OrbitError;
@@ -14,24 +16,6 @@ pub(super) fn unreadable(reason: &str) -> OrbitError {
     OrbitError::Execution(format!(
         "workflow prerequisite evidence is unavailable ({reason})"
     ))
-}
-pub(super) fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, OrbitError> {
-    value[key]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| unreadable(key))
-}
-pub(super) fn number(value: &Value, key: &str) -> Result<u64, OrbitError> {
-    value[key]
-        .as_u64()
-        .filter(|n| *n > 0)
-        .ok_or_else(|| unreadable(key))
-}
-pub(super) fn same(actual: &Value, expected: Value, label: &str) -> Result<(), OrbitError> {
-    if *actual != expected {
-        return Err(unreadable(&format!("foreign or changed {label}")));
-    }
-    Ok(())
 }
 pub(super) fn api(
     deadline: Deadline,
@@ -91,8 +75,8 @@ pub(super) fn snapshot(
         return Err(unreadable("PR/head selector"));
     }
     let repo = api(deadline, workspace, "repos/{owner}/{repo}")?;
-    let repository = text(&repo, "full_name")?.to_string();
-    let repository_id = number(&repo, "id")?;
+    let repository = text(&repo, "full_name", unreadable)?.to_string();
+    let repository_id = number(&repo, "id", unreadable)?;
     let pull = api(
         deadline,
         workspace,
@@ -100,26 +84,29 @@ pub(super) fn snapshot(
     )?;
     same(
         &pull["number"],
-        json!(pr.parse::<u64>().map_err(|_| unreadable("PR number"))?),
+        &json!(pr.parse::<u64>().map_err(|_| unreadable("PR number"))?),
         "PR",
+        unreadable,
     )?;
-    same(&pull["state"], json!("open"), "PR state")?;
-    same(&pull["merged"], json!(false), "merged PR")?;
+    same(&pull["state"], &json!("open"), "PR state", unreadable)?;
+    same(&pull["merged"], &json!(false), "merged PR", unreadable)?;
     for side in ["head", "base"] {
         same(
             &pull[side]["repo"]["id"],
-            json!(repository_id),
+            &json!(repository_id),
             "repository",
+            unreadable,
         )?;
         same(
             &pull[side]["repo"]["full_name"],
-            json!(repository),
+            &json!(repository),
             "repository name",
+            unreadable,
         )?;
     }
-    same(&pull["head"]["sha"], json!(head), "head")?;
-    same(&pull["head"]["ref"], json!(branch), "branch")?;
-    same(&pull["base"]["ref"], json!(base), "base")?;
+    same(&pull["head"]["sha"], &json!(head), "head", unreadable)?;
+    same(&pull["head"]["ref"], &json!(branch), "branch", unreadable)?;
+    same(&pull["base"]["ref"], &json!(base), "base", unreadable)?;
     // GraphQL supplies the effective classic rule for this exact base. The
     // active branch-rules endpoint adds organization/repository rulesets.
     let query = "query($pr:Int!,$owner:String!,$repo:String!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid baseRefName reviewDecision baseRef{branchProtectionRule{id requiredStatusChecks{context app{databaseId slug}}}}}}}";
@@ -146,8 +133,18 @@ pub(super) fn snapshot(
         return Err(unreadable("classic policy errors"));
     }
     let policy_pr = &classic["data"]["repository"]["pullRequest"];
-    same(&policy_pr["headRefOid"], json!(head), "policy head")?;
-    same(&policy_pr["baseRefName"], json!(base), "policy base")?;
+    same(
+        &policy_pr["headRefOid"],
+        &json!(head),
+        "policy head",
+        unreadable,
+    )?;
+    same(
+        &policy_pr["baseRefName"],
+        &json!(base),
+        "policy base",
+        unreadable,
+    )?;
     if !policy_pr["baseRef"].is_object()
         || policy_pr["baseRef"].get("branchProtectionRule").is_none()
     {
@@ -169,11 +166,11 @@ pub(super) fn snapshot(
                 .get("app")
                 .ok_or_else(|| unreadable("classic integration identity"))?;
             required.push(RequiredGate {
-                context: text(check, "context")?.into(),
+                context: text(check, "context", unreadable)?.into(),
                 app_id: if app.is_null() {
                     None
                 } else {
-                    Some(number(app, "databaseId")?)
+                    Some(number(app, "databaseId", unreadable)?)
                 },
             });
         }
@@ -191,7 +188,7 @@ pub(super) fn snapshot(
         .filter(|rules| rules.len() < 100)
         .ok_or_else(|| unreadable("truncated effective rules"))?;
     for rule in rules_list {
-        let kind = text(rule, "type")?;
+        let kind = text(rule, "type", unreadable)?;
         if !matches!(
             kind,
             "required_status_checks"
@@ -205,9 +202,9 @@ pub(super) fn snapshot(
             ));
         }
         if kind == "required_status_checks" {
-            number(rule, "ruleset_id")?;
-            text(rule, "ruleset_source")?;
-            text(rule, "ruleset_source_type")?;
+            number(rule, "ruleset_id", unreadable)?;
+            text(rule, "ruleset_source", unreadable)?;
+            text(rule, "ruleset_source_type", unreadable)?;
             for check in rule["parameters"]["required_status_checks"]
                 .as_array()
                 .ok_or_else(|| unreadable("effective required checks"))?
@@ -226,7 +223,7 @@ pub(super) fn snapshot(
                     )
                 };
                 let gate = RequiredGate {
-                    context: text(check, "context")?.into(),
+                    context: text(check, "context", unreadable)?.into(),
                     app_id,
                 };
                 if !required.contains(&gate) {
@@ -243,10 +240,10 @@ pub(super) fn snapshot(
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page=100&filter=latest"),
     )?;
     for check in complete_list(&checks, "check_runs")? {
-        same(&check["head_sha"], json!(head), "check head")?;
-        number(check, "id")?;
-        text(check, "name")?;
-        number(&check["app"], "id")?;
+        same(&check["head_sha"], &json!(head), "check head", unreadable)?;
+        number(check, "id", unreadable)?;
+        text(check, "name", unreadable)?;
+        number(&check["app"], "id", unreadable)?;
     }
     // Combined status pins the latest legacy contexts to this repository and
     // commit. A context has no app identity and cannot satisfy an app-bound gate.
@@ -255,25 +252,31 @@ pub(super) fn snapshot(
         workspace,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page=100"),
     )?;
-    same(&statuses["sha"], json!(head), "status head")?;
+    same(&statuses["sha"], &json!(head), "status head", unreadable)?;
     same(
         &statuses["repository"]["id"],
-        json!(repository_id),
+        &json!(repository_id),
         "status repository",
+        unreadable,
     )?;
     same(
         &statuses["repository"]["full_name"],
-        json!(repository),
+        &json!(repository),
         "status repository name",
+        unreadable,
     )?;
     for status in complete_list(&statuses, "statuses")? {
-        number(status, "id")?;
-        text(status, "context")?;
-        text(status, "state")?;
+        number(status, "id", unreadable)?;
+        text(status, "context", unreadable)?;
+        text(status, "state", unreadable)?;
         same(
             &status["url"],
-            json!(format!("{}/statuses/{head}", text(&repo, "url")?)),
+            &json!(format!(
+                "{}/statuses/{head}",
+                text(&repo, "url", unreadable)?
+            )),
             "status context repository/head",
+            unreadable,
         )?;
     }
     let runs = api(
@@ -301,10 +304,10 @@ pub(super) fn checked_run(
     run: &Value,
 ) -> Result<Value, OrbitError> {
     // Snapshot has already pinned these fields to the requested completion.
-    let head = text(&snapshot.pr["head"], "sha")?;
-    let branch = text(&snapshot.pr["head"], "ref")?;
-    let base = text(&snapshot.pr["base"], "ref")?;
-    let run_id = number(run, "id")?;
+    let head = text(&snapshot.pr["head"], "sha", unreadable)?;
+    let branch = text(&snapshot.pr["head"], "ref", unreadable)?;
+    let base = text(&snapshot.pr["base"], "ref", unreadable)?;
+    let run_id = number(run, "id", unreadable)?;
     let current = api(
         deadline,
         workspace,
@@ -312,44 +315,79 @@ pub(super) fn checked_run(
     )?;
     same(
         &current["run_attempt"],
-        run["run_attempt"].clone(),
+        &run["run_attempt"],
         "latest attempt",
+        unreadable,
     )?;
     same(
         &current["workflow_id"],
-        run["workflow_id"].clone(),
+        &run["workflow_id"],
         "workflow",
+        unreadable,
     )?;
-    same(&current["id"], json!(run_id), "run")?;
+    same(&current["id"], &json!(run_id), "run", unreadable)?;
     same(
         &current["repository"]["id"],
-        json!(snapshot.repository_id),
+        &json!(snapshot.repository_id),
         "run repository",
+        unreadable,
     )?;
     same(
         &current["head_repository"]["id"],
-        json!(snapshot.repository_id),
+        &json!(snapshot.repository_id),
         "run head repository",
+        unreadable,
     )?;
-    same(&current["head_sha"], json!(head), "run head")?;
-    same(&current["head_branch"], json!(branch), "run branch")?;
-    same(&current["event"], json!("pull_request"), "workflow event")?;
+    same(&current["head_sha"], &json!(head), "run head", unreadable)?;
+    same(
+        &current["head_branch"],
+        &json!(branch),
+        "run branch",
+        unreadable,
+    )?;
+    same(
+        &current["event"],
+        &json!("pull_request"),
+        "workflow event",
+        unreadable,
+    )?;
     let pulls = current["pull_requests"]
         .as_array()
         .filter(|pulls| pulls.len() == 1)
         .ok_or_else(|| unreadable("run PR linkage"))?;
-    same(&pulls[0]["number"], snapshot.pr["number"].clone(), "run PR")?;
-    same(&pulls[0]["head"]["sha"], json!(head), "run PR head")?;
-    same(&pulls[0]["base"]["ref"], json!(base), "run PR base")?;
+    same(
+        &pulls[0]["number"],
+        &snapshot.pr["number"],
+        "run PR",
+        unreadable,
+    )?;
+    same(
+        &pulls[0]["head"]["sha"],
+        &json!(head),
+        "run PR head",
+        unreadable,
+    )?;
+    same(
+        &pulls[0]["base"]["ref"],
+        &json!(base),
+        "run PR base",
+        unreadable,
+    )?;
     same(
         &pulls[0]["base"]["repo"]["id"],
-        json!(snapshot.repository_id),
+        &json!(snapshot.repository_id),
         "run PR repository",
+        unreadable,
     )?;
-    number(&current, "run_attempt")?;
-    number(&current, "check_suite_id")?;
-    number(&current["actor"], "id")?;
-    same(&current["actor"], run["actor"].clone(), "original actor")?;
+    number(&current, "run_attempt", unreadable)?;
+    number(&current, "check_suite_id", unreadable)?;
+    number(&current["actor"], "id", unreadable)?;
+    same(
+        &current["actor"],
+        &run["actor"],
+        "original actor",
+        unreadable,
+    )?;
     Ok(current)
 }
 pub(super) fn workflow(
@@ -357,14 +395,14 @@ pub(super) fn workflow(
     workspace: &Path,
     run: &Value,
 ) -> Result<(String, String, String), OrbitError> {
-    let id = number(run, "workflow_id")?;
+    let id = number(run, "workflow_id", unreadable)?;
     let workflow = api(
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/workflows/{id}"),
     )?;
-    same(&workflow["id"], json!(id), "workflow identity")?;
-    let path = text(&workflow, "path")?.to_string();
+    same(&workflow["id"], &json!(id), "workflow identity", unreadable)?;
+    let path = text(&workflow, "path", unreadable)?.to_string();
     let parts = path.split('/').collect::<Vec<_>>();
     if parts.len() != 3
         || parts[0] != ".github"
@@ -375,20 +413,35 @@ pub(super) fn workflow(
     {
         return Err(unreadable("workflow path"));
     }
-    same(&run["path"], json!(path), "run workflow source")?;
-    let head = text(run, "head_sha")?;
+    same(
+        &run["path"],
+        &json!(path),
+        "run workflow source",
+        unreadable,
+    )?;
+    let head = text(run, "head_sha", unreadable)?;
     let contents = api(
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={head}"),
     )?;
-    same(&contents["type"], json!("file"), "workflow file")?;
-    same(&contents["path"], json!(path), "workflow file path")?;
-    let blob = text(&contents, "sha")?.to_string();
+    same(
+        &contents["type"],
+        &json!("file"),
+        "workflow file",
+        unreadable,
+    )?;
+    same(
+        &contents["path"],
+        &json!(path),
+        "workflow file path",
+        unreadable,
+    )?;
+    let blob = text(&contents, "sha", unreadable)?.to_string();
     // pull_request executes the merge ref. Requiring the event base and PR
     // head to carry the identical workflow blob proves the merge cannot
     // substitute a different DAG. Changed workflow definitions hold.
-    let source_base = text(&run["pull_requests"][0]["base"], "sha")?;
+    let source_base = text(&run["pull_requests"][0]["base"], "sha", unreadable)?;
     if !super::input::valid_expected_remote_sha(Some(source_base)) {
         return Err(unreadable("workflow event base commit"));
     }
@@ -399,18 +452,21 @@ pub(super) fn workflow(
     )?;
     same(
         &base_contents["sha"],
-        json!(blob),
+        &json!(blob),
         "workflow event-base source",
+        unreadable,
     )?;
     same(
         &base_contents["type"],
-        json!("file"),
+        &json!("file"),
         "workflow event-base file",
+        unreadable,
     )?;
     same(
         &base_contents["path"],
-        json!(path),
+        &json!(path),
         "workflow event-base path",
+        unreadable,
     )?;
     let revision = format!("{head}:{path}");
     let local_blob = deadline.execute(
@@ -512,8 +568,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         if run["status"] != "completed" || run["conclusion"] != "failure" {
             return Err(unreadable("running, superseded or non-failed attempt"));
         }
-        let run_id = number(&run, "id")?;
-        let attempt = number(&run, "run_attempt")?;
+        let run_id = number(&run, "id", unreadable)?;
+        let attempt = number(&run, "run_attempt", unreadable)?;
         let jobs = api(
             deadline,
             workspace,
@@ -524,12 +580,17 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         let job_list = complete_list(&jobs, "jobs")?;
         let mut job_ids = std::collections::BTreeSet::new();
         for job in job_list {
-            if !job_ids.insert(number(job, "id")?) {
+            if !job_ids.insert(number(job, "id", unreadable)?) {
                 return Err(unreadable("duplicate provider job identity"));
             }
-            same(&job["run_id"], json!(run_id), "job run")?;
-            same(&job["head_sha"], json!(head), "job head")?;
-            same(&job["run_attempt"], json!(attempt), "job attempt")?;
+            same(&job["run_id"], &json!(run_id), "job run", unreadable)?;
+            same(&job["head_sha"], &json!(head), "job head", unreadable)?;
+            same(
+                &job["run_attempt"],
+                &json!(attempt),
+                "job attempt",
+                unreadable,
+            )?;
             if !matches!(
                 job["conclusion"].as_str(),
                 Some("success" | "skipped" | "failure")
@@ -549,7 +610,9 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         };
         let (path, blob, source) = workflow(deadline, workspace, &run)?;
         for gate in &missing {
-            let Ok(dependency) = dependency(&source, &gate.context, text(failed, "name")?) else {
+            let Ok(dependency) =
+                dependency(&source, &gate.context, text(failed, "name", unreadable)?)
+            else {
                 continue;
             };
             let failed_steps = failed["steps"]
@@ -564,29 +627,31 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             super::workflow_read::api_step(
                 &dependency.workflow,
                 &dependency.prerequisite,
-                text(failed_step, "name")?,
+                text(failed_step, "name", unreadable)?,
             )?;
             let suite = api(
                 deadline,
                 workspace,
                 &format!(
                     "repos/{{owner}}/{{repo}}/check-suites/{}",
-                    number(&run, "check_suite_id")?
+                    number(&run, "check_suite_id", unreadable)?
                 ),
             )?;
-            same(&suite["id"], run["check_suite_id"].clone(), "suite")?;
-            same(&suite["head_sha"], json!(head), "suite head")?;
+            same(&suite["id"], &run["check_suite_id"], "suite", unreadable)?;
+            same(&suite["head_sha"], &json!(head), "suite head", unreadable)?;
             same(
                 &suite["repository"]["id"],
-                json!(snapshot.repository_id),
+                &json!(snapshot.repository_id),
                 "suite repository",
+                unreadable,
             )?;
             same(
                 &suite["app"]["slug"],
-                json!("github-actions"),
+                &json!("github-actions"),
                 "workflow integration",
+                unreadable,
             )?;
-            let app_id = number(&suite["app"], "id")?;
+            let app_id = number(&suite["app"], "id", unreadable)?;
             if gate.app_id.is_some_and(|app| app != app_id) {
                 return Err(unreadable("protected integration differs"));
             }
@@ -596,8 +661,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 &snapshot.required,
                 app_id,
             )?;
-            let job_id = number(failed, "id")?;
-            let check_url = text(failed, "check_run_url")?;
+            let job_id = number(failed, "id", unreadable)?;
+            let check_url = text(failed, "check_run_url", unreadable)?;
             let check_prefix = format!(
                 "https://api.github.com/repos/{}/check-runs/",
                 snapshot.repository
@@ -620,7 +685,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             if log["truncated"] != false || !log["fallback_error"].is_null() {
                 return Err(unreadable("truncated/unreadable prerequisite log"));
             }
-            let log = text(&log, "log")?;
+            let log = text(&log, "log", unreadable)?;
             // Narrow evidence: an explicit gh HTTP 502/503/504 API failure.
             // A credential/permission diagnostic anywhere vetoes admission.
             let lower = log.to_ascii_lowercase();
@@ -650,11 +715,11 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 head_sha: head.into(),
                 head_branch: branch.into(),
                 base_branch: base.into(),
-                base_sha: text(&snapshot.pr["base"], "sha")?.into(),
+                base_sha: text(&snapshot.pr["base"], "sha", unreadable)?.into(),
                 required: snapshot.required.clone(),
                 missing: (*gate).clone(),
                 app_id,
-                workflow_id: number(&run, "workflow_id")?,
+                workflow_id: number(&run, "workflow_id", unreadable)?,
                 workflow_path: path.clone(),
                 workflow_blob: blob.clone(),
                 workflow_source: source.clone(),
@@ -721,14 +786,14 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         .find(|run| run["id"].as_u64() == Some(evidence.run_id))
         .ok_or_else(|| unreadable("reserved run disappeared"))?;
     let run = checked_run(deadline, workspace, &snapshot, listed)?;
-    if number(&run, "workflow_id")? != evidence.workflow_id
-        || text(&run, "path")? != evidence.workflow_path
-        || text(&run, "event")? != evidence.event
+    if number(&run, "workflow_id", unreadable)? != evidence.workflow_id
+        || text(&run, "path", unreadable)? != evidence.workflow_path
+        || text(&run, "event", unreadable)? != evidence.event
         || run["actor"] != evidence.run["actor"]
     {
         return Err(unreadable("reserved workflow/event changed"));
     }
-    let attempt = number(&run, "run_attempt")?;
+    let attempt = number(&run, "run_attempt", unreadable)?;
     if attempt < u64::from(evidence.run_attempt) || attempt > u64::from(evidence.run_attempt) + 1 {
         return Err(unreadable("superseded/ambiguous reserved attempt"));
     }
@@ -745,7 +810,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
                 && check["status"] == "completed"
                 && check["conclusion"] == "success"
         });
-    let state = text(&run, "status")?;
+    let state = text(&run, "status", unreadable)?;
     if !matches!(
         state,
         "completed" | "queued" | "in_progress" | "waiting" | "requested" | "pending"
