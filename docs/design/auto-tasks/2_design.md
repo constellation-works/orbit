@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -34,14 +34,16 @@ semantics remain current.
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
-— `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
+— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`, or
+`{ deliveries_landed: { … } }`. Delivery schedules use source evaluation and
+durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
-`crew`, optional `context_files`, and `status` (default `backlog`).
+`crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
 An explicit complexity must be an
-assessed `low`, `medium`, or `hard` value and is copied to every minted task.
+assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
 definitions that omit `complexity` remain valid and mint
 `complexity: unassessed`, preserving the historical automated-creation behavior
@@ -283,7 +285,8 @@ and merged only after the lock is acquired, so unnamed fields retain edits
 committed while the command was waiting. The registry tool's `template`
 object remains a full replacement: omitted fields take the template defaults,
 including clearing optional crew and complexity. Both surfaces validate the schedule
-(cron parse / interval > 0) and crew at write time, so a bad definition is never
+(cron parse / interval from 1 through 525,600 minutes / delivery-trigger validation)
+and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
@@ -311,7 +314,7 @@ that silently stopped firing is discoverable as a `faulty` row on the
 happens to touch it.
 
 The CLI's `auto-task add` and `auto-task update` accept `--complexity
-<low|medium|hard>`. Registry-tool callers supply the same optional field inside
+<low|medium|hard|xhard>`. Registry-tool callers supply the same optional field inside
 the template object. Add, update, YAML persistence, list/show, and mint all use
 the shared typed template, so an explicit value round-trips without a separate
 projection or default. Omitting the field remains supported for compatible
@@ -573,7 +576,7 @@ validation correctly produces only task-side effects.
 
 The workspace-local `model-price-audit` definition (ORB-10583) is an enabled
 weekly report-only consumer: it runs Monday at 06:00 in the host-local timezone,
-uses `skip_if_open`, mints a backlog chore for crew `terra`, and carries
+uses `skip_if_open`, mints a backlog chore with its configured crew, and carries
 `model-price-audit`, `pricing`, and `no-diff-expected`. Its template compares
 exact `InvocationRecord.model` strings and every current price-table row against
 authoritative provider pricing/model/cache documentation. It records source
@@ -586,12 +589,12 @@ workspace-local definition.
 
 Operators may inspect it with `orbit auto-task show model-price-audit --json` and
 use scheduler dry-run inspection before the weekly slot. The generated task's
-`execution_summary` is the audit report and must include no-diff evidence,
-observed models, checked sources, and effective periods when the table is
+`execution_summary` is the audit report and must include observed models,
+checked sources, and effective periods when the table is
 accurate.
 
-- **Definitions are not full-text indexed.** Unlike indexed docs, auto-task
-  YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
+- **Definitions are not full-text indexed.** Auto-task YAML is not in a
+  SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
 - **Workspace-local definitions, host-wide tick.** The scheduler loads definitions
   from the current runtime's workspace. The host tick evaluates auto-task
