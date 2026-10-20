@@ -382,7 +382,7 @@
         <section class="panel" id="audit-pane">
           <header><span id="audit-title">Events</span><span class="count" id="audit-count">-</span></header>
           <div class="controls" id="audit-events-controls">
-            <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" />
+            <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" aria-label="Search audit events by command, tool, or target" />
             <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
             <div id="audit-filter"></div>
           </div>
@@ -685,7 +685,7 @@
             </div>
           </div>
           <div class="controls">
-            <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" />
+            <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" aria-label="Search frictions" />
             <label class="friction-filter-control" for="friction-status-filter">
               <span>Show</span>
               <select id="friction-status-filter" aria-controls="frictions-body">
