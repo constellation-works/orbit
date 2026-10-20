@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Retired agent backend selection and its migration"
 tags: ["activity-job"]
-last_validated: 2026-10-18
+last_validated: 2026-10-19
 ---
 
 # Spec: Retired Agent Backend Selection
@@ -38,7 +38,7 @@ work without saying so.
 
 | Declaration | `cli` | `http` / `auto` |
 |---|---|---|
-| `backend:` in an activity or job asset | parses, ignored | refused at asset load |
+| `backend:` in an activity asset | parses, ignored | refused at asset load |
 | `[runtime] backend` in `config.toml` | accepted, ignored | refused at config load |
 | `ORBIT_BACKEND` | accepted, ignored | refused at config load |
 | `[crews.<name>] backend` | accepted, ignored | refused at config load |
