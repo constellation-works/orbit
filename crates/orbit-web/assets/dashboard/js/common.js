@@ -190,6 +190,29 @@ export function setWorkspace(id) {
   for (const listener of workspaceListeners) listener();
 }
 
+// The names `/api/workspaces` gives each workspace id. Labels show the name the
+// header picker shows; an id the list does not name yet is shown as given, and
+// listeners re-render labels when the list arrives.
+let workspaceNames = new Map();
+const workspaceNameListeners = new Set();
+
+export function setWorkspaceNames(workspaces) {
+  workspaceNames = new Map((Array.isArray(workspaces) ? workspaces : [])
+    .filter((workspace) => workspace && workspace.id && workspace.name)
+    .map((workspace) => [workspace.id, workspace.name]));
+  for (const listener of workspaceNameListeners) listener();
+}
+
+export function onWorkspaceNamesChange(listener) {
+  workspaceNameListeners.add(listener);
+  return () => workspaceNameListeners.delete(listener);
+}
+
+/// The name a workspace id is shown by, or the id itself when no name is known.
+export function workspaceDisplayName(id) {
+  return workspaceNames.get(id) || id;
+}
+
 // Workspace ids belong to a host. Keep each host's choice separately so a
 // remembered local workspace cannot become a remote host's default.
 function rememberedWorkspaceKey() {
