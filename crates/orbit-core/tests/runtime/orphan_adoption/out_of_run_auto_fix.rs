@@ -191,6 +191,23 @@ impl Fixture {
             .unwrap();
     }
 
+    /// A delivery run of `input` that ended `success`, as an ordinary
+    /// delivery does.
+    fn finish_delivery(&self, input: Value) -> String {
+        let run = self
+            .jobs
+            .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
+            .unwrap()
+            .run_id;
+        self.jobs
+            .mark_job_run_running(&run, Utc::now(), std::process::id())
+            .unwrap();
+        self.jobs
+            .finalize_job_run(&run, JobRunState::Success, Utc::now(), None)
+            .unwrap();
+        run
+    }
+
     /// The forge reports `leaf`'s pull request open at `head_sha`, opened by
     /// `author`, conflicting and with `failed` required checks.
     fn blocked(&self, leaf: &Leaf, head_sha: &str, author: &str, conflict: bool, failed: &[&str]) {
@@ -671,6 +688,39 @@ fn the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs() {
     assert_eq!(fx.retries(&resumed).len(), 1);
 }
 
+fn a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(110, "review", Shelf::Escalated);
+    fx.blocked(&leaf, "old-head", "orbit-bot", true, &[]);
+    // More finished deliveries of other tasks than any fixed window of recent
+    // leaves could hold.
+    for index in 0..201 {
+        fx.finish_delivery(json!({"task_ids": [format!("ORB-9{index}")], "completion": "review"}));
+    }
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(
+        started(&pass, &leaf.task).is_some() || repair_skip(&pass, &leaf.task).is_some(),
+        "the task's stopped leaf is neither repaired nor reported: {pass}"
+    );
+    assert_eq!(fx.retries(&leaf.run).len(), 1, "{pass}");
+}
+
+fn a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resuming() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(111, "review", Shelf::Review);
+    fx.blocked(&leaf, "stale-head", "orbit-bot", true, &[]);
+    fx.finish_delivery(json!({"task_ids": [leaf.task], "completion": "review"}));
+    for index in 0..201 {
+        fx.finish_delivery(json!({"task_ids": [format!("ORB-8{index}")], "completion": "review"}));
+    }
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &leaf.task).is_none(), "{pass}");
+    assert_eq!(repair_skip(&pass, &leaf.task), None, "{pass}");
+    assert!(fx.retries(&leaf.run).is_empty());
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
@@ -680,6 +730,8 @@ crate::scenario_table!(
     a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
+    a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,
+    a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resuming,
 );
 
 #[cfg(unix)]

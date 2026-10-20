@@ -1185,8 +1185,11 @@ recovery escalated or requeued the task, its worker died after a resume), the
 pull request can go red or conflict with its base while nothing watches it.
 
 A drain started with `orbit run auto --auto-fix` repairs it. After adoption, each
-pass looks at every task's newest `task_pr_pipeline` run and hands the task back
-to that run's completion step when all of these hold:
+pass takes every task in `review`, `blocked` or `backlog` that records a GitHub
+pull request, however long ago its run ended and however many deliveries ran
+since, looks at that task's newest `task_pr_pipeline` run and hands the task back
+to that run's completion step when all of these hold. No window of recent runs
+bounds the pass; a task whose newest run finished is left alone:
 
 - the run carries only that task, ended `failed`, `timeout` or `interrupted`,
   and is not a claimed execution. A leaf that finished (a review-only handoff)
@@ -1223,8 +1226,7 @@ skipped candidates under `out_of_run_auto_fix`. Skipped entries have
 `drain_run_id`, `drain_live` and `observed_at`. A `blocker` is present when the
 pass verified a conflict or failed required checks; it is null for a refusal
 before the forge read, such as an operator hold or no capacity. These entries
-are a bounded snapshot of the newest 200 delivery leaves, not a fresh forge
-query. When no drain is live, readiness labels the most recent drain's snapshot
+are a snapshot of the latest pass, not a fresh forge query. When no drain is live, readiness labels the most recent drain's snapshot
 as ended. `orbit run show <run>` shows a live repair in the resumed run's input.
 
 For the full persisted pass, including every skip and any `pass_error`, run
