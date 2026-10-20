@@ -204,7 +204,7 @@ its first hour as percentages of the host, one point per `bucket_minutes` (5)
 from minute 0 to +60m, each the highest minute of its bucket, so the highest
 point equals the peak whenever the peak is within the hour. It is absent when
 the host could not be measured and in records written before it was kept.
-The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, and each candidate enforce held. It does not list the tasks a pass admitted. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
+The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, each admitted task with its profile source, and each candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
 
 `orbit run profiles --accuracy` checks the forecast itself. Each local drain
 pass under `shadow` or `enforce` that built a forecast records it at +5, +10,

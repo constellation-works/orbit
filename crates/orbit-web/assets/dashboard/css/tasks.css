@@ -790,10 +790,10 @@
   #tasks-body > .row[data-group="in-progress"] { --task-action-width: 108px; }
 }
 
-/* The list, then the Drain dock (Start a window, Locks held, Log) moved here
-   from the Drain page while Tasks shows. An open task takes the dock's place,
-   and below 1000px, where shell.css stacks every main grid, the dock stays on
-   the Drain page. */
+/* The list, then the Drain dock (the Auto-drain status card, Start a window,
+   Locks held, Log) moved here from the Drain page while Tasks shows. An open
+   task takes the dock's place, and below 1000px, where shell.css stacks every
+   main grid, the dock stays on the Drain page. */
 main.tasks-layout { grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px); }
 main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns: minmax(0, 1fr); }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -804,12 +804,26 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
   .tasks-dock { display: none; }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
+/* The page's heading, banner, tiles, waits and fleet cards stay on Drain; the
+   status card comes along and carries the throttle as its own note. */
 .tasks-dock .drain-page-head,
 .tasks-dock .drain-banner,
 .tasks-dock .drain-summary,
-.tasks-dock .drain-col-main { display: none !important; }
+.tasks-dock #drain-waits-panel,
+.tasks-dock #drain-fleet-panel { display: none !important; }
+.tasks-dock .drain-throttle-line { display: block; }
 .tasks-dock #dock-pane-drain { overflow-y: auto; padding-bottom: 16px; }
 .tasks-dock .drain-columns { display: block; }
+.tasks-dock .drain-col { gap: 12px; }
+.tasks-dock .drain-col + .drain-col { margin-top: 12px; }
+/* Each forecast peak is a meter against its threshold with the figure
+   beside it; the hour's chart, when, amount and margin stay on Drain and in
+   the row's tooltip. */
+.tasks-dock .drain-forecast-spark { display: none; }
+.tasks-dock .drain-forecast-spark + .drain-forecast-meter { display: block; }
+.tasks-dock .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr) auto; }
+.tasks-dock .drain-forecast-figure { grid-column: auto; min-width: 0; }
+.tasks-dock .drain-forecast-figure-sub { display: none; }
 .tasks-dock .drain-col-side { max-width: none; }
 .tasks-dock .dock-pane > .panel,
 .tasks-dock #dock-pane-drain .panel { flex: 0 0 auto; min-height: 0; }

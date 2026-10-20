@@ -499,6 +499,10 @@ assert(
 assert(!drainText().includes('89% ≥'), 'hysteresis band reading must not render a false comparison against high threshold');
 assert(descendants(drainBanner).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle banner is announced as status');
 assert(!drainBanner.hidden && !drainBody.querySelector('.drain-throttle-note'), 'the throttle leads the page once, not again in the status card');
+// The card keeps its own one-line copy for the Tasks dock, which hides the
+// banner; on the Drain page that copy is not drawn.
+const throttleLine = drainBody.querySelector('.drain-throttle-line');
+assert(throttleLine?.getAttribute('role') === 'status' && throttleLine.textContent.startsWith('Admissions throttled: memory 93%') && throttleLine.getClientRects().length === 0, `the card's throttle note is held back on Drain: ${throttleLine?.outerHTML}`);
 resourceThrottle = null;
 await fetchAndRenderOperations();
 assert(!drainText().includes('Admissions throttled') && drainBanner.hidden, 'the note clears with the throttle');
@@ -1313,8 +1317,8 @@ assert(forecast.querySelector('time')?.dateTime === forecastAt && forecastText.i
 assert(forecastText.includes('90.0%') && forecastText.includes('7.2 cores') && forecastText.includes('at +6m') && forecastText.includes('admit 89%') && forecastText.includes('headroom -1.0'), `cpu peak, threshold and headroom: ${forecastText}`);
 assert(forecast.querySelector('.drain-forecast-peak.over')?.textContent.includes('CPU peak'), 'a peak over its admit threshold is marked');
 assert(forecastText.includes('40.0%') && forecastText.includes('1.0 KiB') && forecastText.includes('at +2m') && forecastText.includes('admit 74%') && forecastText.includes('headroom 34.0'), `memory peak, threshold and headroom: ${forecastText}`);
-assert(!forecastText.includes('Admitted') && !forecastText.includes('Fitting candidate') && !forecast.querySelector('a[href*="ORB-FIT"]'), `admitted tasks are not listed: ${forecastText}`);
-assert(forecast.querySelector('a[href*="ORB-HELD"]'), `held tasks link: ${forecastText}`);
+assert(forecastText.includes('Admitted') && forecastText.includes('Fitting candidate') && forecastText.includes('profile without_complexity') && forecastText.includes('admitted on an idle host'), `admitted task and profile: ${forecastText}`);
+assert(forecast.querySelector('a[href*="ORB-FIT"]') && forecast.querySelector('a[href*="ORB-HELD"]'), `admitted and held tasks link: ${forecastText}`);
 assert(forecastText.includes('Held') && forecastText.includes('Heavy candidate') && forecastText.includes('cpu 94% at +6m') && forecastText.includes('profile exact'), `held candidate shows the hold: ${forecastText}`);
 assert(forecastText.includes('Small candidate') && forecastText.includes('waiting for the protected queue head to fit') && forecastText.includes('profile heaviest_on_host'), `a starvation hold names the guard, not a stored sentence: ${forecastText}`);
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Stuck head') && forecastText.includes('change/medium via exact') && forecastText.includes('3 protected passes'), `protected and stuck head: ${forecastText}`);
@@ -1325,7 +1329,7 @@ drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shado
 await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
-assert(forecastText.includes('shadow · hypothetical') && !forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
+assert(forecastText.includes('shadow · hypothetical') && forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
 
 // With the recorded first hour each peak is a sparkline: 13 five-minute
 // points over 0-60 minutes, the admit threshold as a dashed line, and a dot on
@@ -1340,10 +1344,10 @@ drainCapacityOverride = { admission_forecast: { ...enforceForecast, series: fore
 await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
-assert(!forecast.querySelector('.drain-forecast-meter'), `a series replaces the bars: ${forecastText}`);
+assert([...forecast.querySelectorAll('.drain-forecast-meter')].every(meter => meter.getClientRects().length === 0), `a series replaces the bars on Drain: ${forecastText}`);
 const sparkExpect = [
-  { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% peak at +6m' },
-  { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% peak at +2m' },
+  { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% / 89%', sub: 'peak at +6m · 7.2 cores · 1.0 pts over the ceiling' },
+  { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% / 74%', sub: 'peak at +2m · 1.0 KiB · 34.0 pts under the ceiling' },
 ];
 sparkRows().forEach((row, index) => {
   const want = sparkExpect[index];
@@ -1359,7 +1363,7 @@ sparkRows().forEach((row, index) => {
   assert(peakLabel?.textContent === want.label && chart.dataset.peakMinute === want.minute, `${want.name}: peak label: ${peakLabel?.textContent}`);
   const marker = chart.querySelector('.drain-forecast-spark-peak');
   assert(Math.abs(parseFloat(marker.style.left) - want.left) < 1e-3 && Math.abs(parseFloat(peakLabel.style.left) - want.left) < 1e-3, `${want.name}: the marker is on the peak's bucket: ${marker.style.left}`);
-  assert(row.querySelector('.drain-forecast-figure')?.textContent.startsWith(want.text), `${want.name}: the figures stay beside the chart: ${row.textContent}`);
+  assert(row.querySelector('.drain-forecast-figure-main')?.textContent === want.text && row.querySelector('.drain-forecast-figure-sub')?.textContent === want.sub, `${want.name}: the peak against its threshold, then when and how far: ${row.textContent}`);
 });
 assert(sparkRows()[0].classList.contains('over') && getComputedStyle(sparkRows()[0].querySelector('.drain-forecast-spark-line')).stroke !== getComputedStyle(sparkRows()[1].querySelector('.drain-forecast-spark-line')).stroke, 'a series over its threshold reads as a warning');
 drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow', series: forecastSeries } };
@@ -1396,7 +1400,7 @@ assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector(
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
 const retained = forecast.querySelector('.drain-forecast-retained');
 const retainedText = retained?.textContent || '';
-assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && !retainedText.includes('Fitting candidate'), `retained forecast: ${retainedText}`);
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retainedText.includes('Fitting candidate') && retainedText.includes('profile exact'), `retained forecast: ${retainedText}`);
 assert([...retained.querySelectorAll('.drain-forecast-spark-label')].map(label => label.textContent).join() === '+4m,+1m', `the Last forecast panel draws its series: ${retainedText}`);
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
