@@ -185,13 +185,16 @@ pub struct ServeArgs {
 
 impl ServeArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        if root_override.is_some() {
+        if matches!(self.mode, Some(ServeMode::Remote))
+            && (root_override.is_some()
+                || std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty()))
+        {
             return Err(OrbitError::InvalidInput(
-                "orbit mcp serve does not accept a workspace root override; select a workspace per initialize or tool call"
+                "orbit mcp serve --mode remote cannot apply a local Orbit data root override (--root or ORBIT_ROOT); configure the Orbit root on the SSH destination instead"
                     .to_string(),
             ));
         }
-        let global_root = orbit_core::runtime::resolve_global_root()?;
+        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
         let worker = orbit_core::OrbitRuntime::current_worker_invocation(&global_root)?;
         if worker.is_some()
             && (self.operator
@@ -229,11 +232,13 @@ impl ServeArgs {
                     )));
                 }
                 super::server::serve_mcp_federated_stdio(
+                    global_root,
                     self.orchestrator,
                     requested_authority(self.operator),
                 )?
             }
             None => super::server::serve_mcp_stdio(
+                global_root,
                 self.remote_caller_machine_id,
                 requested_authority(self.operator),
                 self.workspace

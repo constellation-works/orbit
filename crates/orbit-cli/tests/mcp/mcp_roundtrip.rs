@@ -4562,9 +4562,9 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // `mcp serve` takes no root override: `ORBIT_ROOT` locates the canonical
-    // root and the session selects the registered checkout, while the server
-    // itself still runs from the linked worktree like a managed executor.
+    // `ORBIT_ROOT` locates the canonical data root and the session selects
+    // the registered checkout, while the server itself still runs from the
+    // linked worktree like a managed executor.
     let initialize = McpClient::initialize_params(
         "readonly-managed-executor",
         Some(workspace.work.to_str().expect("utf8 checkout")),
@@ -5552,6 +5552,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
 
 mod desktop;
 
+mod root_selection;
 mod transport_operations;
 
 mod internal_drain;
