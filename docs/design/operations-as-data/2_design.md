@@ -1,15 +1,15 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-18
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters, CLI action subcommands) as built on friction, auto-task, drain, workspace claim, every task tool, the workflow-run tools and search; the migration is complete with explicit verdicts for the remaining single-surface or wider CLI contracts.
+summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, and the read-only codebase noun. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
@@ -922,6 +922,17 @@ order, descriptions and scope, and the authorization matrix remain unchanged.
 Accepted aliases and retired lexical-only fields live in the spec. Unknown
 fields start in warn-and-audit mode, as for other migrated reads. The behaviour
 comparison is recorded in [4_decisions.md](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
+
+After phase 5, the read-only `codebase` noun also adopted the registry pattern:
+`analytics`, `show`, and `related` are declared by `CodebaseVerb` in
+[governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs),
+rendered by the CLI adapter in
+[command/codebase.rs](../../../crates/orbit-cli/src/command/codebase.rs), and
+dispatched by Orbit Core in
+[codebase_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/codebase_tools.rs).
+Each operation has `Effect::Read` and a workspace-required MCP scope. This
+later addition does not reopen the original phase 0–5 migration plan or change
+the hand-wired tool verdicts below.
 
 Every remaining hand-wired builtin was inspected rather than inferred from its
 name. Similar CLI names do not establish equivalent operations:
