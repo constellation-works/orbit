@@ -94,7 +94,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
       return text.startsWith('refreshed') && text.endsWith(label);
     }, label);
     const switchClock = async (zone, label) => {
-      const button = page.locator(`.topbar .clock-zone-btn[data-zone="${zone}"]`);
+      const button = page.locator(`.rail-foot .clock-zone-btn[data-zone="${zone}"]`);
       await button.click();
       await refreshed(label);
       check(await button.evaluate((node) => document.activeElement === node), `The refresh after choosing ${zone} must leave focus on its button`);
