@@ -2,7 +2,7 @@
 use super::super::{completion_deadline::Deadline, operations};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
-    auto_fix::{AutoFix, stopped, stopped_by},
+    auto_fix::{AutoFix, attach_evidence, stopped, stopped_by},
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
@@ -24,23 +24,17 @@ fn record<H: RuntimeHost + ?Sized>(
     suffix: &str,
     value: &Value,
 ) -> Result<(), OrbitError> {
-    let primary = auto_fix.primary_task()?;
-    let owner = host.get_task(primary)?.job_run_id.ok_or_else(|| {
-        stopped(
-            &evidence.pr_number,
-            "infrastructure evidence has no owning run",
-        )
-    })?;
     let path = format!(
         "auto-fix/{}/infrastructure-{}-{suffix}.json",
         auto_fix.run_id, evidence.run_id
     );
-    let redacted = orbit_common::security::redaction::redact_all_json(value.clone());
-    host.attach_task_validation_log(
-        primary,
-        &owner,
+    attach_evidence(
+        host,
+        auto_fix,
+        &evidence.pr_number,
+        "infrastructure evidence has no owning run",
         &path,
-        serde_json::to_vec(&redacted).map_err(|error| OrbitError::Execution(error.to_string()))?,
+        value,
     )
 }
 fn exact_remote(
