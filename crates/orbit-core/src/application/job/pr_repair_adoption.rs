@@ -40,9 +40,10 @@
 //!
 //! A pass starts at most as many repairs as the drain has free slots after
 //! adoption. A pull request found unblocked is not read again for
-//! [`CLEAN_RECHECK`]. The first forge error defers the pass's remaining
-//! reads. Nothing here ends the drain: each refusal is reported in the step
-//! output and a later pass reconsiders it.
+//! [`CLEAN_RECHECK`]. A forge read failure defers the pass's remaining reads;
+//! GitHub's `UNKNOWN` mergeability answer skips only that pull request.
+//! Nothing here ends the drain: each refusal is reported in the step output
+//! and a later pass reconsiders it.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -133,6 +134,15 @@ struct PassReads {
     authors: Option<Result<Vec<String>, String>>,
     /// The activity catalog's load result, once read.
     catalog: Option<Result<(), String>>,
+}
+
+enum BlockerRead {
+    /// The forge could read the pull request's blockers (or determined it is
+    /// no longer open).
+    Complete(Option<crate::runtime::task_pr_forge::PullRequestBlockers>),
+    /// GitHub is still calculating this pull request's mergeability. This is
+    /// local to that candidate and must not defer the rest of the pass.
+    MergeabilityUnknown,
 }
 
 impl OrbitRuntime {
@@ -381,7 +391,13 @@ impl OrbitRuntime {
             );
         }
         let Some(blockers) = (match self.read_blockers(pull_number, reads) {
-            Ok(blockers) => blockers,
+            Ok(BlockerRead::Complete(blockers)) => blockers,
+            Ok(BlockerRead::MergeabilityUnknown) => {
+                return skip(
+                    "mergeability_unknown",
+                    format!("GitHub is still calculating mergeability for #{number}"),
+                );
+            }
             Err(error) => return skip("forge_unreadable", error),
         }) else {
             return skip(
@@ -479,26 +495,32 @@ impl OrbitRuntime {
         }
     }
 
-    /// The forge's answer for `number`, or why it was not read: once a pass
-    /// met a forge error, it does not ask again.
-    fn read_blockers(
-        &self,
-        number: u64,
-        reads: &mut PassReads,
-    ) -> Result<Option<crate::runtime::task_pr_forge::PullRequestBlockers>, String> {
+    /// The forge's answer for `number`, or why it was not read. A genuine
+    /// forge failure is latched for the pass; unknown mergeability is local
+    /// to one pull request.
+    fn read_blockers(&self, number: u64, reads: &mut PassReads) -> Result<BlockerRead, String> {
         if let Some(error) = &reads.forge_error {
             return Err(format!(
                 "not read after this pass's earlier forge failure: {error}"
             ));
         }
         let repo_root = self.context.paths().repo_root.clone();
-        self.task_pr_forge()
+        match self
+            .task_pr_forge()
             .pull_request_blockers(&repo_root, number)
-            .map_err(|error| {
+        {
+            Ok(blockers) => Ok(BlockerRead::Complete(blockers)),
+            Err(OrbitError::PullRequestMergeabilityUnknown { number: unknown })
+                if unknown == number =>
+            {
+                Ok(BlockerRead::MergeabilityUnknown)
+            }
+            Err(error) => {
                 let error = error.to_string();
                 reads.forge_error = Some(error.clone());
-                error
-            })
+                Err(error)
+            }
+        }
     }
 
     /// Resume `run` to repair `repair`, re-checking first that its task has

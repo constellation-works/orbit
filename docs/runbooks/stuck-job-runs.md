@@ -1091,7 +1091,9 @@ pass considers the leaf again:
 - `store_unreadable`: an unreadable store;
 - `forge_unreadable`: an unreadable forge. After the first failed read, a pass
   defers its remaining leaves without asking the forge again, so an unreachable
-  GitHub delays admission by at most one read;
+  GitHub delays admission by at most one read. In the separate out-of-run
+  auto-fix scan, GitHub's `UNKNOWN` mergeability answer is a per-pull-request
+  `mergeability_unknown` skip, so other repair candidates are still checked;
 - `resume_unplannable`: a resume that could not be planned for a reason other than
   validation, including an activity catalog that does not load (a file caught
   mid-edit);
@@ -1158,6 +1160,8 @@ the drain's latest `adopt_orphans` step output. The reasons are:
 - `not_orbit_pull_request`: a branch, body or author that is not Orbit's;
 - `pull_request_not_recorded`, `pull_request_not_open` or `no_pull_request`;
 - `no_blocker` and `checked_recently`: nothing to repair;
+- `mergeability_unknown`: GitHub is still calculating this pull request's
+  mergeability; other candidates in the pass are still checked;
 - `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused;
 - `live_run` or `claimed_execution`: another run or machine owns the delivery;
 - `not_resumable`: checkpoint resume refused the run, for example one that
