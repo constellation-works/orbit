@@ -12,7 +12,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     cli_path: &["artifact", "put"],
     tool_name: "orbit.task.artifact.put",
     tool_description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, one delivery_examinations entry per delivery (examined and skipped paths matching its diff, verdict, rationale), examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale, unauthorized or path-mismatched evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change, and `repaired_blob` maps a target the review's own repair changed to the blob of its repaired state.",
-    cli_about: "Store a UTF-8 source file under a task's artifacts directory",
+    cli_about: "Store a source file under a task's artifacts directory",
     cli_help: CliHelp {
         long_about: None,
         after_help: None,
@@ -38,7 +38,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
                     rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
                     sources under `/tmp` are outside the workspace and are refused.",
                 CliArgKind::Positional,
-                "UTF-8 source file to store as a task artifact",
+                "Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
             ),
             &["sourcePath", "source-path"],
         )),
@@ -112,7 +112,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
                     it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths \
                     and `..` are rejected.",
                     CliArgKind::Positional,
-                    "Artifact path relative to the task artifacts directory, as listed by `orbit artifacts <ID> --task`",
+                    "Artifact path relative to the task artifacts directory, as listed by `orbit task show <ID> --fields artifacts`",
                 ),
                 &["artifact_path", "artifactPath"],
             )),

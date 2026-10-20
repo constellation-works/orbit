@@ -1,4 +1,4 @@
-Store a UTF-8 source file under a task's artifacts directory
+Store a source file under a task's artifacts directory
 
 Usage: orbit task artifact put [OPTIONS] <ID> <SOURCE_PATH>
 
@@ -7,7 +7,7 @@ Arguments:
           Task ID
 
   <SOURCE_PATH>
-          UTF-8 source file to store as a task artifact
+          Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)
 
 Options:
       --host <HOST>
