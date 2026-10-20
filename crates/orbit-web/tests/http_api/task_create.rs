@@ -26,6 +26,37 @@ fn workspace_listing_omits_source_remote_even_for_legacy_credentials() {
     );
 }
 
+#[test]
+fn workspace_listing_revalidates_removed_checkout_without_persisting_status() {
+    isolated(
+        "task_create::workspace_listing_revalidates_removed_checkout_without_persisting_status",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let initial = json_ok(server.get("/api/workspaces"));
+            assert_eq!(initial[0]["status"], "active");
+            let registry_path = fixture.global.join("workspaces.json");
+            let before = std::fs::read(&registry_path).unwrap();
+            let moved = fixture.work.with_extension("removed");
+            std::fs::rename(&fixture.work, &moved).unwrap();
+            let missing = json_ok(server.get("/api/workspaces"));
+            assert_eq!(missing[0]["id"], initial[0]["id"]);
+            assert_eq!(missing[0]["status"], "invalid");
+            assert!(
+                !server
+                    .get("/api/tasks?workspace=ws_http_fixture")
+                    .status()
+                    .is_success()
+            );
+            assert_eq!(std::fs::read(&registry_path).unwrap(), before);
+            std::fs::rename(&moved, &fixture.work).unwrap();
+            let restored = json_ok(server.get("/api/workspaces"));
+            assert_eq!(restored[0]["status"], "active");
+            assert_eq!(std::fs::read(&registry_path).unwrap(), before);
+        },
+    );
+}
+
 fn proposal(server: &Server) -> Value {
     let workspaces = json_ok(server.get("/api/workspaces"));
     json!({

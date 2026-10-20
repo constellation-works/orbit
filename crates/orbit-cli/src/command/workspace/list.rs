@@ -18,20 +18,10 @@ impl Execute for WorkspaceListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let snapshot = workspace_registry::load_registry_from_read_only(&registry_path)?;
-        let mut registry = snapshot.registry;
-        let changed = workspace_registry::validate_workspaces(&mut registry);
-        if snapshot.migration_required || changed {
-            // Re-read under the lock: another writer may have changed the
-            // registry since the read-only inspection.
-            registry = workspace_registry::with_registry_lock(&registry_path, || {
-                let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-                if workspace_registry::validate_workspaces(&mut registry) {
-                    workspace_registry::save_registry_to(&registry, &registry_path)?;
-                }
-                Ok(registry)
-            })?;
-        }
+        let registry = workspace_registry::load_validated_registry_from(
+            &registry_path,
+            workspace_registry::WorkspaceValidationMode::Persist,
+        )?;
         let records = workspace_list_records(&registry, self.all);
         let table = workspace_list_table(&registry, self.all);
         Ok(Payload::list(records, table).into())

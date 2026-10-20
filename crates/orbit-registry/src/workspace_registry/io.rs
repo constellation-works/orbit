@@ -21,6 +21,76 @@ pub struct ReadOnlyRegistryLoad {
     pub migration_required: bool,
 }
 
+/// Maintenance policy for a filesystem-validated workspace registry load.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceValidationMode {
+    /// Validate only in memory; create no lock and persist no migrations.
+    ReadOnly,
+    /// Keep checkout status in memory, but persist schema migrations as the
+    /// ordinary registry loader does.
+    InMemory,
+    /// Persist migrations and changed checkout statuses under the registry lock.
+    Persist,
+    /// Persist migrations, but ignore a failed checkout-status save. Load,
+    /// migration, and lock failures still propagate to the caller.
+    BestEffort,
+}
+
+/// Load a registry and validate local checkout status against the filesystem.
+///
+/// Missing checkout roots mark active workspaces invalid; restored roots
+/// reactivate invalid workspaces. Checkoutless records keep their catalog
+/// status. Persistent modes avoid locking an unchanged snapshot, and re-read
+/// under the lock before saving so concurrent registrations are preserved.
+pub fn load_validated_registry_from(
+    path: &Path,
+    mode: WorkspaceValidationMode,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    load_validated_registry_with_context(path, mode, registry_machine_context)
+}
+
+/// [`load_validated_registry_from`] with an already-classified machine identity,
+/// avoiding another global-config read during selector resolution.
+pub fn load_validated_registry_from_with_machine(
+    path: &Path,
+    mode: WorkspaceValidationMode,
+    identity: &MachineIdentityState,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    load_validated_registry_with_context(path, mode, |_| Ok(identity.into()))
+}
+
+fn load_validated_registry_with_context(
+    path: &Path,
+    mode: WorkspaceValidationMode,
+    context_for: impl Fn(&Path) -> Result<WorkspaceRegistryMachineContext, OrbitError>,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    if mode == WorkspaceValidationMode::InMemory {
+        let mut registry =
+            load_registry_from_with_context_and_writer(path, context_for, write_registry)?;
+        super::validate_workspaces(&mut registry);
+        return Ok(registry);
+    }
+
+    let loaded = read_registry_snapshot(path, &context_for)?.load;
+    let mut registry = loaded.registry;
+    let changed = super::validate_workspaces(&mut registry);
+    if mode == WorkspaceValidationMode::ReadOnly || (!loaded.migration_required && !changed) {
+        return Ok(registry);
+    }
+
+    with_registry_lock(path, || {
+        let mut registry =
+            load_registry_from_with_context_and_writer(path, context_for, write_registry)?;
+        if super::validate_workspaces(&mut registry) {
+            let saved = save_registry_to(&registry, path);
+            if mode != WorkspaceValidationMode::BestEffort {
+                saved?;
+            }
+        }
+        Ok(registry)
+    })
+}
+
 /// Return the path to the machine-global workspace registry.
 pub fn registry_path() -> Result<PathBuf, OrbitError> {
     Ok(registry_path_for(&global_orbit_dir()?))

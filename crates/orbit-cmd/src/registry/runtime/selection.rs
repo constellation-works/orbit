@@ -25,22 +25,11 @@ pub(super) fn load_registry_for_selector_resolution(
     registry_path: &Path,
     identity: &MachineIdentityState,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let loaded =
-        workspace_registry::load_registry_from_read_only_with_machine(registry_path, identity)?;
-    let mut registry = loaded.registry;
-    let validation_required = workspace_registry::validate_workspaces(&mut registry);
-    if !loaded.migration_required && !validation_required {
-        return Ok(registry);
-    }
-
-    workspace_registry::with_registry_lock(registry_path, || {
-        let mut registry =
-            workspace_registry::load_registry_from_with_machine(registry_path, identity)?;
-        if workspace_registry::validate_workspaces(&mut registry) {
-            let _ = workspace_registry::save_registry_to(&registry, registry_path);
-        }
-        Ok(registry)
-    })
+    workspace_registry::load_validated_registry_from_with_machine(
+        registry_path,
+        workspace_registry::WorkspaceValidationMode::BestEffort,
+        identity,
+    )
 }
 
 /// The host data directory a registry lookup reads: the `--root` override when

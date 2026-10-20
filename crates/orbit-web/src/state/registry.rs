@@ -132,8 +132,10 @@ impl RegistrySource {
     /// the generation at publication.
     pub(super) fn load(&self) -> Result<LoadedRegistry, OrbitError> {
         let fingerprint = self.fingerprint();
-        let mut registry = workspace_registry::load_registry_from(&self.registry_path)?;
-        workspace_registry::validate_workspaces(&mut registry);
+        let registry = workspace_registry::load_validated_registry_from(
+            &self.registry_path,
+            workspace_registry::WorkspaceValidationMode::InMemory,
+        )?;
         let mut unavailable = HashSet::new();
         let entries: Vec<WsEntry> = workspace_registry::local_workspaces(&registry)
             .map(|(workspace, checkout)| {

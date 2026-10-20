@@ -105,20 +105,14 @@ fn discover_registered_workspaces_until(
     read_only: bool,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
-    let registry = if read_only {
-        let mut registry =
-            workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
-        workspace_registry::validate_workspaces(&mut registry);
-        registry
-    } else {
-        workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            if workspace_registry::validate_workspaces(&mut registry) {
-                workspace_registry::save_registry_to(&registry, &registry_path)?;
-            }
-            Ok(registry)
-        })?
-    };
+    let registry = workspace_registry::load_validated_registry_from(
+        &registry_path,
+        if read_only {
+            workspace_registry::WorkspaceValidationMode::ReadOnly
+        } else {
+            workspace_registry::WorkspaceValidationMode::Persist
+        },
+    )?;
 
     let open = if read_only {
         RegisteredRuntimeFactory::open_registered_checkout_observational

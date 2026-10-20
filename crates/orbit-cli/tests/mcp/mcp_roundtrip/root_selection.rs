@@ -63,6 +63,63 @@ fn workspace_discovery_redacts_legacy_registry_credentials() {
     );
 }
 
+#[test]
+fn workspace_discovery_excludes_removed_checkout_without_persisting() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::root_selection::workspace_discovery_excludes_removed_checkout_without_persisting",
+    ) {
+        return;
+    }
+    removed_checkout_discovery(false);
+}
+
+#[test]
+fn federated_workspace_discovery_reports_removed_checkout_without_persisting() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::root_selection::federated_workspace_discovery_reports_removed_checkout_without_persisting",
+    ) {
+        return;
+    }
+    removed_checkout_discovery(true);
+}
+
+fn removed_checkout_discovery(federated: bool) {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(if federated {
+        &["--mode", "federated"]
+    } else {
+        &[]
+    });
+    let initial = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let id = initial["workspaces"][0]["id"].clone();
+    assert!(id.is_string(), "{initial}");
+    assert_eq!(initial["workspaces"][0]["status"], "active");
+    let registry_path = workspace.home.join(".orbit/workspaces.json");
+    let before = std::fs::read(&registry_path).unwrap();
+    let moved = workspace.work.with_extension("removed");
+    std::fs::rename(&workspace.work, &moved).unwrap();
+    let listing = client.call_tool_ok("orbit_workspace_list", json!({}));
+    if federated {
+        let rows = listing["workspaces"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{listing}");
+        assert_eq!(rows[0]["id"], id);
+        assert_eq!(rows[0]["status"], "invalid");
+        assert_eq!(rows[0]["checkout_health"], "invalid");
+        assert_eq!(rows[0]["reachability"], "reachable");
+    } else {
+        assert_eq!(listing["workspaces"], json!([]));
+    }
+    assert_eq!(
+        std::fs::read(&registry_path).unwrap(),
+        before,
+        "MCP discovery must validate checkout health without persisting it"
+    );
+    std::fs::rename(&moved, &workspace.work).unwrap();
+    let restored = client.call_tool_ok("orbit_workspace_list", json!({}));
+    assert_eq!(restored["workspaces"][0]["id"], id);
+    assert_eq!(restored["workspaces"][0]["status"], "active");
+}
+
 fn discovered<C>(client: &mut McpClient<C>) -> Value {
     let initialized = client.initialize(McpClient::initialize_params("root-selection", None));
     assert!(initialized["result"].is_object(), "{initialized}");
