@@ -80,6 +80,7 @@ use super::flaky::rerun_failed_tests;
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
 use super::light_delivery::{light_delivery_decision, record_light_delivery};
+use super::validation_log::{FailureLog, rerun_log};
 use super::validation_scope::validation_scope;
 
 /// Run the workspace's required commands on the owner's committed candidate
@@ -292,64 +293,36 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         if let Some(rerun) = &rerun {
             logs.push((
                 rerun_path.clone(),
-                serde_json::to_vec(&json!({
-                    "schema_version": 1, "role": "candidate_rerun", "run_id": run_id,
-                    "tested_head": candidate, "command": rerun.run.command,
-                    "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
-                    "output": rerun.run.output, "summary": rerun.run.summary,
-                    "timing": rerun.run.timing,
-                    "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
-                }))
-                .map_err(|error| {
+                serde_json::to_vec(&rerun_log(rerun, &run_id, &candidate)).map_err(|error| {
                     OrbitError::Execution(format!("encode candidate rerun: {error}"))
                 })?,
             ));
         }
-        let content = serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "run_id": run_id,
-            "task_ids": task_ids,
-            "branch": branch,
-            "tested_head": candidate,
-            "base_sha": base_sha,
-            "command": run.command,
-            "exit_code": run.exit_code,
-            "timed_out": run.timed_out,
-            "output": run.output,
-            "failures": run.failures,
-            "baseline_reproduces": red,
-            "validation_env": validation_env,
-            "failure_kind": if recovered.is_some() {
-                json!("flaky")
-            } else if known.is_some() {
-                json!("known_red")
-            } else if red {
-                json!("baseline_red")
-            } else if baseline.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
-                json!("environment")
-            } else {
-                run.failure_kind()
-            },
-            "known_red": known.as_ref().map(|known| &known.failures),
-            "flaky": recovered,
-            "candidate_rerun": rerun.as_ref().map(|_| &rerun_path),
-            "deferred_notice": run.deferred_notice,
-            "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
-                "reason": refusal.reason.as_str(),
-                "detail": refusal.detail,
+        let content = serde_json::to_vec(
+            &FailureLog {
+                run: &run,
+                run_id: &run_id,
+                tested_head: &candidate,
+                base_sha: base_sha.as_deref(),
+                baseline: baseline.as_ref(),
+                baseline_path: baseline_path.as_deref(),
+                flaky: recovered,
+                known_red: known.is_some(),
+                network_transient: false,
+            }
+            .record(json!({
+                "task_ids": task_ids,
+                "branch": branch,
+                "known_red": known.as_ref().map(|known| &known.failures),
+                "candidate_rerun": rerun.as_ref().map(|_| &rerun_path),
+                "deferred_notice": run.deferred_notice,
+                "deferred_sandbox_replay": replays.contains(&run.command),
+                "missing_tool": run.missing_tool_name(),
+                "baseline_comparison_ms": baseline_comparison_ms,
+                "candidate_rerun_ms": candidate_rerun_ms,
+                "validation_scope": scope.record,
             })),
-            "deferred_sandbox_replay": replays.contains(&run.command),
-            "missing_tool": run.missing_tool_name(),
-            "network_retries": run.network_retries,
-            "timing": run.timing,
-            "baseline_comparison_ms": baseline_comparison_ms,
-            "candidate_rerun_ms": candidate_rerun_ms,
-            "summary": run.summary,
-            "baseline": baseline
-                .as_ref()
-                .map(|check| check.record(baseline_path.as_deref())),
-            "validation_scope": scope.record,
-        }))
+        )
         .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         logs.push((log_path.clone(), content));
         if let (Some(check), Some(path)) = (&baseline, &baseline_path) {
