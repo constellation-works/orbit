@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::DEFAULT_TIMEOUT_MS;
-use super::input::{required_string, valid_expected_remote_sha};
+use super::input::{number, required_string, same, text, valid_expected_remote_sha};
 use super::process::execute_with_transient_retry;
 
 /// The provider's annotation page size.
@@ -30,35 +30,14 @@ fn refused(reason: &str) -> OrbitError {
     ))
 }
 
-fn number(value: &Value, key: &str) -> Result<u64, OrbitError> {
-    value[key]
-        .as_u64()
-        .filter(|number| *number > 0)
-        .ok_or_else(|| refused(key))
-}
-
-fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, OrbitError> {
-    value[key]
-        .as_str()
-        .filter(|text| !text.is_empty())
-        .ok_or_else(|| refused(key))
-}
-
-fn same(actual: &Value, expected: &Value, label: &str) -> Result<(), OrbitError> {
-    if actual != expected {
-        return Err(refused(&format!("foreign or changed {label}")));
-    }
-    Ok(())
-}
-
 /// Read one required check run's annotations on a pull request's head.
 pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     let head = required_string(input, "head_sha")?;
     let name = required_string(input, "name")?;
-    let check_id = number(input, "check_run_id")?;
-    let app_id = number(input, "app_id")?;
+    let check_id = number(input, "check_run_id", refused)?;
+    let app_id = number(input, "app_id", refused)?;
     if !pr.bytes().all(|byte| byte.is_ascii_digit()) || !valid_expected_remote_sha(Some(head)) {
         return Err(OrbitError::InvalidInput(
             "private automation VCS check annotations require a PR number and a full head id"
@@ -86,21 +65,22 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
     };
 
     let repo = read("repos/{owner}/{repo}".into())?;
-    let repository = text(&repo, "full_name")?.to_string();
-    let repository_id = number(&repo, "id")?;
-    let api_url = text(&repo, "url")?.to_string();
+    let repository = text(&repo, "full_name", refused)?.to_string();
+    let repository_id = number(&repo, "id", refused)?;
+    let api_url = text(&repo, "url", refused)?.to_string();
     let pull_bound = |pull: &Value| -> Result<String, OrbitError> {
-        same(&pull["number"], &json!(pr_number), "PR")?;
-        same(&pull["state"], &json!("open"), "PR state")?;
-        same(&pull["head"]["sha"], &json!(head), "PR head")?;
+        same(&pull["number"], &json!(pr_number), "PR", refused)?;
+        same(&pull["state"], &json!("open"), "PR state", refused)?;
+        same(&pull["head"]["sha"], &json!(head), "PR head", refused)?;
         for side in ["head", "base"] {
             same(
                 &pull[side]["repo"]["id"],
                 &json!(repository_id),
                 "PR repository",
+                refused,
             )?;
         }
-        Ok(text(&pull["base"], "ref")?.to_string())
+        Ok(text(&pull["base"], "ref", refused)?.to_string())
     };
     let pull = read(format!("repos/{{owner}}/{{repo}}/pulls/{pr}"))?;
     let base_ref = pull_bound(&pull)?;
@@ -121,17 +101,23 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
             runs.len()
         )));
     };
-    same(&run["name"], &json!(name), "check name")?;
-    same(&run["id"], &json!(check_id), "check run")?;
-    same(&run["app"]["id"], &json!(app_id), "check app")?;
-    same(&run["head_sha"], &json!(head), "check head")?;
+    same(&run["name"], &json!(name), "check name", refused)?;
+    same(&run["id"], &json!(check_id), "check run", refused)?;
+    same(&run["app"]["id"], &json!(app_id), "check app", refused)?;
+    same(&run["head_sha"], &json!(head), "check head", refused)?;
     same(
         &run["url"],
         &json!(format!("{api_url}/check-runs/{check_id}")),
         "check repository",
+        refused,
     )?;
-    same(&run["status"], &json!("completed"), "check status")?;
-    same(&run["conclusion"], &json!("failure"), "check conclusion")?;
+    same(&run["status"], &json!("completed"), "check status", refused)?;
+    same(
+        &run["conclusion"],
+        &json!("failure"),
+        "check conclusion",
+        refused,
+    )?;
     let linked = run["pull_requests"]
         .as_array()
         .ok_or_else(|| refused("check PR linkage"))?
@@ -141,12 +127,23 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
     let [linked] = linked.as_slice() else {
         return Err(refused("check PR linkage"));
     };
-    same(&linked["head"]["sha"], &json!(head), "check PR head")?;
-    same(&linked["base"]["ref"], &json!(base_ref), "check PR base")?;
+    same(
+        &linked["head"]["sha"],
+        &json!(head),
+        "check PR head",
+        refused,
+    )?;
+    same(
+        &linked["base"]["ref"],
+        &json!(base_ref),
+        "check PR base",
+        refused,
+    )?;
     same(
         &linked["base"]["repo"]["id"],
         &json!(repository_id),
         "check PR repository",
+        refused,
     )?;
 
     let count = run["output"]["annotations_count"]
@@ -187,6 +184,7 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
             &again.pointer(pointer).cloned().unwrap_or(Value::Null),
             &run.pointer(pointer).cloned().unwrap_or(Value::Null),
             &format!("check run {pointer}"),
+            refused,
         )?;
     }
     let pull_again = read(format!("repos/{{owner}}/{{repo}}/pulls/{pr}"))?;

@@ -8,11 +8,12 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::super::completion_deadline::Deadline;
-use super::prerequisite::{
-    api, complete_list, gate_passed, gate_present, number, same, snapshot, text, unreadable,
-};
+use super::prerequisite::{api, complete_list, gate_passed, gate_present, snapshot, unreadable};
 use super::workflow_dependency::job_names;
-use super::{MAX_WORKFLOW_SOURCE_BYTES, input::required_string};
+use super::{
+    MAX_WORKFLOW_SOURCE_BYTES,
+    input::{number, required_string, same, text},
+};
 
 fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, OrbitError> {
     Ok(deadline
@@ -162,12 +163,23 @@ fn sources(
             workspace,
             &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={commit}"),
         )?;
-        same(&contents["type"], json!("file"), "workflow file")?;
-        same(&contents["path"], json!(path), "workflow source path")?;
+        same(
+            &contents["type"],
+            &json!("file"),
+            "workflow file",
+            unreadable,
+        )?;
+        same(
+            &contents["path"],
+            &json!(path),
+            "workflow source path",
+            unreadable,
+        )?;
         same(
             &contents["sha"],
-            json!(fields[2]),
+            &json!(fields[2]),
             "workflow source revision",
+            unreadable,
         )?;
         let source = deadline
             .execute(
@@ -232,11 +244,12 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         return Ok(json!({"evidence":null}));
     }
     for run in runs {
-        same(&run["head_sha"], json!(head), "workflow head")?;
+        same(&run["head_sha"], &json!(head), "workflow head", unreadable)?;
         same(
             &run["repository"]["id"],
-            json!(current.repository_id),
+            &json!(current.repository_id),
             "workflow repository",
+            unreadable,
         )?;
         if run["status"] != "completed" || run["conclusion"] != "success" {
             return Ok(json!({"evidence":null}));
@@ -267,8 +280,9 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     )?;
     same(
         &current.pr["base"]["sha"],
-        json!(base_sha),
+        &json!(base_sha),
         "fresh emission base",
+        unreadable,
     )?;
     let old_base = required_string(input, "accepted_base")?;
     if !super::super::git::git_command_success(
@@ -309,8 +323,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let registered = complete_list(&workflows, "workflows")?;
     let mut paths = BTreeSet::new();
     for workflow in registered {
-        number(workflow, "id")?;
-        let path = text(workflow, "path")?;
+        number(workflow, "id", unreadable)?;
+        let path = text(workflow, "path", unreadable)?;
         if !paths.insert(path) || !new.contains_key(path) || workflow["state"] != "active" {
             return Err(unreadable(
                 "inactive, foreign or incomplete workflow identity",
@@ -323,10 +337,11 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let app = api(deadline, workspace, "apps/github-actions")?;
     same(
         &app["slug"],
-        json!("github-actions"),
+        &json!("github-actions"),
         "workflow integration",
+        unreadable,
     )?;
-    let app_id = number(&app, "id")?;
+    let app_id = number(&app, "id", unreadable)?;
     let mut bound_runs = Vec::new();
     for listed in runs {
         let run = super::prerequisite::checked_run(deadline, workspace, &current, listed)?;
@@ -336,15 +351,17 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
 
         same(
             &run["pull_requests"][0]["base"]["sha"],
-            json!(old_base),
+            &json!(old_base),
             "prior PR event base",
+            unreadable,
         )?;
         let (path, blob, source) = super::prerequisite::workflow(deadline, workspace, &run)?;
         same(
             &old.get(&path)
                 .ok_or_else(|| unreadable("foreign prior workflow"))?["blob"],
-            json!(blob),
+            &json!(blob),
             "prior source blob",
+            unreadable,
         )?;
         emitted(&source, base)?;
         let suite = api(
@@ -352,25 +369,38 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             workspace,
             &format!(
                 "repos/{{owner}}/{{repo}}/check-suites/{}",
-                number(&run, "check_suite_id")?
+                number(&run, "check_suite_id", unreadable)?
             ),
         )?;
-        same(&suite["id"], run["check_suite_id"].clone(), "prior suite")?;
-        same(&suite["head_sha"], json!(head), "prior suite head")?;
+        same(
+            &suite["id"],
+            &run["check_suite_id"],
+            "prior suite",
+            unreadable,
+        )?;
+        same(
+            &suite["head_sha"],
+            &json!(head),
+            "prior suite head",
+            unreadable,
+        )?;
         same(
             &suite["repository"]["id"],
-            json!(current.repository_id),
+            &json!(current.repository_id),
             "prior suite repository",
+            unreadable,
         )?;
         same(
             &suite["app"]["id"],
-            json!(app_id),
+            &json!(app_id),
             "prior workflow integration",
+            unreadable,
         )?;
         same(
             &suite["app"]["slug"],
-            json!("github-actions"),
+            &json!("github-actions"),
             "prior workflow app",
+            unreadable,
         )?;
         if !checks
             .iter()
@@ -447,20 +477,22 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     let current = snapshot(
         deadline,
         workspace,
-        text(proof, "pr_number")?,
+        text(proof, "pr_number", unreadable)?,
         required_string(input, "head_sha")?,
-        text(proof, "head_branch")?,
-        text(proof, "base_branch")?,
+        text(proof, "head_branch", unreadable)?,
+        text(proof, "base_branch", unreadable)?,
     )?;
     same(
         &json!(current.repository),
-        proof["repository"].clone(),
+        &proof["repository"],
         "reserved repository",
+        unreadable,
     )?;
     same(
         &json!(current.repository_id),
-        proof["repository_id"].clone(),
+        &proof["repository_id"],
         "reserved repository identity",
+        unreadable,
     )?;
     let workflows = api(
         deadline,
@@ -470,19 +502,22 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     complete_list(&workflows, "workflows")?;
     same(
         &workflows,
-        proof["workflows"].clone(),
+        &proof["workflows"],
         "current workflow identities",
+        unreadable,
     )?;
     same(
         &api(deadline, workspace, "apps/github-actions")?,
-        proof["app"].clone(),
+        &proof["app"],
         "current workflow integration",
+        unreadable,
     )?;
     let revisions = policy_revisions(deadline, workspace, &current.policy)?;
     same(
         &revisions,
-        proof["policy_revisions"].clone(),
+        &proof["policy_revisions"],
         "effective rule revisions",
+        unreadable,
     )?;
     let mut policy = current.policy;
     // The head alone legitimately changes; every policy source/revision and
@@ -491,18 +526,21 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         proof["head_sha"].clone();
     same(
         &policy,
-        proof["policy"].clone(),
+        &proof["policy"],
         "reserved effective policy",
+        unreadable,
     )?;
     same(
         &current.pr["base"]["sha"],
-        proof["base_sha"].clone(),
+        &proof["base_sha"],
         "reserved base",
+        unreadable,
     )?;
     same(
         &json!(current.required),
-        proof["required"].clone(),
+        &proof["required"],
         "required integration identities",
+        unreadable,
     )?;
     let checks = complete_list(&current.checks, "check_runs")?;
     let statuses = complete_list(&current.statuses, "statuses")?;
@@ -537,7 +575,7 @@ fn policy_revisions(
     let rule =
         &policy["classic"]["data"]["repository"]["pullRequest"]["baseRef"]["branchProtectionRule"];
     if !rule.is_null() {
-        text(rule, "id")?;
+        text(rule, "id", unreadable)?;
     }
     let mut revisions = BTreeMap::new();
     for rule in policy["effective_rules"]
@@ -553,12 +591,13 @@ fn policy_revisions(
                 workspace,
                 &format!("repos/{{owner}}/{{repo}}/rulesets/{id}"),
             )?;
-            same(&revision["id"], json!(id), "ruleset identity")?;
-            text(&revision, "updated_at")?;
+            same(&revision["id"], &json!(id), "ruleset identity", unreadable)?;
+            text(&revision, "updated_at", unreadable)?;
             same(
                 &revision["enforcement"],
-                json!("active"),
+                &json!("active"),
                 "ruleset enforcement",
+                unreadable,
             )?;
             revisions.insert(id, revision);
         }
