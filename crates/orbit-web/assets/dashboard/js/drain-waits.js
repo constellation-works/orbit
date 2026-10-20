@@ -157,18 +157,36 @@ const POOL_LABELS = Object.fromEntries(DRAIN_POOLS.map(({ key, label }) => [key,
 
 // How one readiness entry reads, for the row dot and the Readiness card alike:
 // its pool, the pool's words (`poolLabel`), the badge text after them
-// (`label`), the full wait (`title`), and the badge parts for a waiting entry
-// (null when eligible).
+// (`label`), the full wait (`title`), the badge parts for a waiting entry
+// (null when eligible), and `published` for a task resuming its published
+// delivery (null otherwise), whose words follow the pool's when eligible.
 export function drainReadinessView(entry) {
   const pool = drainPoolKey(entry);
   const poolLabel = POOL_LABELS[pool];
   const badge = entry.eligible === true ? null : drainWaitBadge(entry);
+  const published = drainPublishedDelivery(entry);
+  const eligibleTitle = published ? published.title : "Nothing holds it: Ship it now, or the next drain window picks it up";
   return {
     pool,
     poolLabel,
-    label: badge ? `${poolLabel}: ${badge.text}` : poolLabel,
-    title: badge ? badge.title : "Nothing holds it: Ship it now, or the next drain window picks it up",
+    label: badge ? `${poolLabel}: ${badge.text}` : published ? `${poolLabel}: ${published.text}` : poolLabel,
+    title: badge ? (published ? `${badge.title}\n${published.title}` : badge.title) : eligibleTitle,
     badge,
+    published,
+  };
+}
+
+// A task whose next run resumes the delivery a requeue kept: it adopts the
+// existing branch and pull request before it edits, so no other task's
+// context lock holds it back. Null for any other entry.
+function drainPublishedDelivery(entry) {
+  const delivery = entry?.published_delivery;
+  if (!delivery || typeof delivery !== "object") return null;
+  const number = typeof delivery.pull_request === "string" && delivery.pull_request ? delivery.pull_request : "";
+  const pr = number ? ` (PR #${number})` : "";
+  return {
+    text: `resuming published delivery${pr}`,
+    title: `Resuming its published delivery${pr}: the next run adopts the existing pull request before it edits, so other tasks' context locks do not hold it back. It takes them before any edit.`,
   };
 }
 
@@ -195,7 +213,7 @@ export function setDrainReadiness(payload) {
     if (typeof entry?.task_id !== "string" || !entry.task_id) continue;
     next.set(entry.task_id, { entry, view: drainReadinessView(entry) });
   }
-  const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.badge ? `${view.badge.text}|${view.badge.title}` : ""}`).join("\n");
+  const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
   const changed = nextSignature !== signature;
   waits = next;
   signature = nextSignature;
@@ -212,7 +230,7 @@ export function drainWaitSignature(taskId) {
   const item = waits.get(taskId);
   if (!item) return "";
   const { view } = item;
-  return view.badge ? `${view.pool}|${view.badge.text}|${view.badge.title}` : view.pool;
+  return `${view.pool}|${view.label}|${view.title}`;
 }
 
 // The readiness dot for a backlog task: its `drainReadinessView`. Null when

@@ -49,6 +49,7 @@ mod source_repair;
 mod submit;
 
 pub(crate) use plan::ResumePlan;
+pub(crate) use source_repair::PublishedResume;
 // `resume::PinnedRunDefinition` was the path while this type lived in
 // `resume.rs`. Nothing else in the crate names it; the re-export keeps that
 // path for callers outside this module.

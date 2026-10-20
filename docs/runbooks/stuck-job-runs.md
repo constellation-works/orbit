@@ -752,6 +752,29 @@ recovery budgets retain their existing charges. The original execution records
 and retained checkout remain available; branch adoption renames the old local
 branch aside without changing its commit or files.
 
+If Orbit's own auto-fix moved the published branch before the requeue, the
+next run adopts the head that auto-fix recorded. That is a
+`pr_auto_fix_pushed` record written by Orbit for the same run and pull
+request, starting from the published head. When the repair changed files the
+task does not declare, the next run's commit adds them to the task's context
+files as usual, and that addition does not void the adoption. A branch move
+with no such record is still refused.
+
+A requeue that kept its publication does not wait behind other tasks' context
+locks. In a PR-mode workspace, `orbit run readiness` and the dashboard show
+the task as eligible and `resuming published delivery (PR #N)`
+(`published_delivery` in JSON), even while another task holds one of its
+files. Its gate takes a reservation that holds no files
+(`footprint_deferred: true`, naming the holders it did not wait on). The run
+then re-applies the unchanged published patch, which is not an edit. Before
+the first agent that may edit, the run takes the task's footprint locks and
+waits while another task holds them. Those agents are an implementer
+repairing a conflicting re-application, a reviewer fix, and step, conflict or
+check repair. Read-only reviewers and the final-recovery decision do not wait.
+If the locks stay held for the gate's wait (`max_wait_seconds`, default one
+hour), the agent is refused with `footprint_unavailable`, naming the holders.
+The run's reservation is released when the run ends.
+
 A missing task-meaning binding, changed task/head, incomplete publication,
 foreign source or ambiguous association stops admission. It never authorizes
 fresh replacement implementation for that known publication. Reconcile a

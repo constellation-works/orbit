@@ -24,6 +24,7 @@ use super::{
     sort_tasks_for_automatic_dispatch,
 };
 use crate::OrbitRuntime;
+use crate::application::job::PublishedResume;
 use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
@@ -378,10 +379,30 @@ pub(super) fn backlog_snapshot_in_mode(
             }
         });
     }
+    // A task resuming a preserved publication adopts its existing branch and
+    // pull request before it edits anything, so it is not held behind other
+    // tasks' locks on files its own published diff already changed. Only the
+    // PR pipeline adopts one, so a drain shipping in another mode leaves it
+    // to the ordinary lock check, as does a record that cannot be read.
+    let published_resumes: BTreeMap<String, PublishedResume> = backlog
+        .iter()
+        .filter(|_| mode == ShipMode::Pr)
+        .filter_map(|task| match runtime.published_resume(task) {
+            Ok(resume) => resume.map(|resume| (task.id.clone(), resume)),
+            Err(error) => {
+                tracing::warn!(
+                    "could not read {}'s preserved publication; it waits on its locks: {error}",
+                    task.id
+                );
+                None
+            }
+        })
+        .collect();
     if !lock_holders.is_empty() {
         let holder_index = lock_holder_index(&lock_holders);
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
             .iter()
+            .filter(|task| !published_resumes.contains_key(&task.id))
             .filter_map(|task| {
                 let conflicts = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
@@ -403,7 +424,9 @@ pub(super) fn backlog_snapshot_in_mode(
             let mut reserving = Vec::new();
             for task in backlog {
                 let root_id = task_root_id(task, &task_lookup);
-                if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
+                if published_resumes.contains_key(&task.id) {
+                    kept.push(task);
+                } else if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
                     let direct = direct_conflicts.contains_key(&task.id);
                     let reserves = direct
                         && reserving.len() < MAX_SURFACE_RESERVATIONS
@@ -434,6 +457,7 @@ pub(super) fn backlog_snapshot_in_mode(
             backlog = withhold_reserved_surfaces(
                 kept,
                 &reserving,
+                &published_resumes,
                 &expiring_batches,
                 workspace_root,
                 unlocked,
@@ -453,6 +477,7 @@ pub(super) fn backlog_snapshot_in_mode(
         lock_holders,
         expiring_batches,
         footprint_waits,
+        published_resumes,
     })
 }
 

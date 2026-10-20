@@ -5,6 +5,7 @@ use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus};
 use serde::Serialize;
 
 use super::super::unknown_footprint::FootprintWait;
+use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::TaskLockOverlap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -186,4 +187,11 @@ pub(crate) struct BacklogSnapshot {
     /// for in a multi-slot run [ORB-15191]. The snapshot does not know the
     /// run's slots, so the wave applies them, not this filter.
     pub(crate) footprint_waits: BTreeMap<String, FootprintWait>,
+    /// The admissible leaves whose next run resumes a publication a
+    /// final-recovery requeue preserved (`OrbitRuntime::published_resume`).
+    /// They adopt their existing branch and pull request without editing the
+    /// working tree, so no context lock holds them back and none of their
+    /// own selectors are reserved at admission; an agent edit they make
+    /// later takes the footprint locks first.
+    pub(crate) published_resumes: BTreeMap<String, PublishedResume>,
 }

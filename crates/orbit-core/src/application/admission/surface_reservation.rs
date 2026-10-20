@@ -29,6 +29,7 @@ use orbit_types::task::{Task, TaskPriority, automatic_dispatch_cmp_with_expiry};
 use super::backlog_exclusion::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
 };
+use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::{
     UnlockedContextPaths, lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
 };
@@ -57,10 +58,12 @@ pub(super) fn reserving_detail() -> String {
 /// `reserving` is the lock-blocked tasks that reserve this pass, already
 /// bounded by the caller. A task is withheld only by a reserving task that
 /// sorts ahead of it in dispatch order, using the same frozen-batch expiry
-/// snapshot as the backlog sort.
+/// snapshot as the backlog sort. A task in `published_resumes` is never
+/// withheld.
 pub(super) fn withhold_reserved_surfaces<'a>(
     backlog: Vec<&'a Task>,
     reserving: &[&Task],
+    published_resumes: &BTreeMap<String, PublishedResume>,
     expiring_batches: &BTreeMap<String, DateTime<Utc>>,
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
@@ -83,6 +86,12 @@ pub(super) fn withhold_reserved_surfaces<'a>(
 
     let mut kept = Vec::with_capacity(backlog.len());
     for task in backlog {
+        // Resuming a published delivery takes no lock at admission, so it
+        // cannot take a reserved surface either.
+        if published_resumes.contains_key(&task.id) {
+            kept.push(task);
+            continue;
+        }
         let conflicts: Vec<BacklogTaskConflict> =
             task_lock_overlaps(task, &reserved_index, workspace_root, unlocked)
                 .into_iter()

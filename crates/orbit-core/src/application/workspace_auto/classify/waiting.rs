@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use orbit_store::contracts::OwnerWaveCandidate;
-use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
+use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 use orbit_types::workflow::DrainWaitingTask;
 
 use crate::OrbitRuntime;
 use crate::application::admission::auto_admission::AdmissionSelection;
-use crate::application::admission::backlog_exclusion::BacklogTaskExclusion;
+use crate::application::admission::backlog_exclusion::{BacklogSnapshot, BacklogTaskExclusion};
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::pass_error::PassError;
 use crate::runtime::task::locks::lock_context_files_for_task;
@@ -72,8 +72,9 @@ pub(super) fn admit_through_section(
     runtime: &OrbitRuntime,
     action: &str,
     selection: &mut AdmissionSelection,
-    task_lookup: &BTreeMap<String, Task>,
+    snapshot: &BacklogSnapshot,
 ) -> Result<(), PassError> {
+    let task_lookup = &snapshot.task_lookup;
     let workspace_root = runtime.paths().repo_root.as_path();
     let candidates = selection
         .selected
@@ -83,7 +84,11 @@ pub(super) fn admit_through_section(
             task_id: task.id.clone(),
             // [ORB-14247] No-diff work holds no lock, so it excludes no
             // overlapping pull either; the row still keeps the task itself.
-            footprint: if task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
+            // Nor does a resumed published delivery, which takes its locks
+            // only when it first edits.
+            footprint: if task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+                || snapshot.published_resumes.contains_key(&task.id)
+            {
                 Vec::new()
             } else {
                 lock_context_files_for_task(task, workspace_root, runtime.unlocked_context_paths())

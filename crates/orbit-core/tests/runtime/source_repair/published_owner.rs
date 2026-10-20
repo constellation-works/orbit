@@ -4,6 +4,7 @@ use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
 use orbit_types::workflow::{JobRun, PipelineState};
+use std::path::Path;
 
 pub(super) fn save_run(f: &Fixture, run: &JobRun) {
     f.runtime
@@ -262,15 +263,13 @@ fn requeue(f: &mut Fixture) {
 }
 
 pub(super) fn next(f: &Fixture) -> (JobRun, Value) {
+    next_with(f, json!({"task_ids":[f.task]}))
+}
+
+fn next_with(f: &Fixture, input: Value) -> (JobRun, Value) {
     let mut run = f
         .runtime
-        .insert_job_run(
-            "task_pr_pipeline",
-            1,
-            Utc::now(),
-            Some(json!({"task_ids":[f.task]})),
-            None,
-        )
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
         .unwrap();
     run.state = JobRunState::Running;
     run.pid = Some(std::process::id());
@@ -1114,5 +1113,222 @@ pub(super) fn legacy_publication_behind_a_stopped_successor_cannot_start_fresh()
     assert!(
         error.to_string().contains("explicit source repair"),
         "known legacy publication requires explicit source selection: {error}"
+    );
+}
+
+/// Commit `content` on the published branch in its retained checkout and push
+/// it, as Orbit's auto-fix does, and point the PR at the new head.
+fn move_published_branch(f: &Fixture, checkout: &Path, content: &str) -> String {
+    std::fs::write(checkout.join("auto-fix.txt"), content).unwrap();
+    git(checkout, &["add", "auto-fix.txt"]);
+    git(checkout, &["commit", "-qm", "repair the failed check"]);
+    git(checkout, &["push", "-q", "origin", &f.branch]);
+    let moved = git(checkout, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(moved);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    moved
+}
+
+/// Record a repaired head published on the PR, as the completion watcher does.
+fn record_auto_fix_push(f: &Fixture, by: &str, from: &str, to: &str, run_id: &str) {
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: by.into(),
+                    event: orbit_types::workflow::PR_AUTO_FIX_PUSHED_EVENT.into(),
+                    note: Some(
+                        json!({"pr_number":"17","from_head_sha":from,"to_head_sha":to,
+                            "blocker":"failed_checks","run_id":run_id})
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A requeue that preserved its publication is admitted past another task's
+/// lock on its own file, its gate defers the footprint, and its next run
+/// adopts and reuses the existing PR. The lock is taken before any agent that
+/// may edit, and only once the other task releases it.
+pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() {
+    let mut f = Fixture::drained();
+    publication(&mut f);
+    requeue(&mut f);
+    let holder = f
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Overlapping work in review".into(),
+            description: "Changes the same file".into(),
+            acceptance_criteria: vec!["Observable".into()],
+            plan: "Fixture".into(),
+            context_files: vec!["file:source.txt".into()],
+            complexity: orbit_core::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let set_status = |id: &str, status| {
+        f.runtime
+            .apply_task_automation_update(
+                id,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    set_status(&holder, TaskStatus::Review);
+
+    let readiness = f
+        .runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == f.task)
+        .unwrap();
+    assert_eq!(
+        (&entry["eligible"], &entry["reason"]),
+        (&json!(true), &json!("ready")),
+        "the held lock does not hold back the published delivery: {entry}"
+    );
+    assert_eq!(
+        entry["published_delivery"]["source_run_id"],
+        f.source.run_id
+    );
+    assert_eq!(entry["published_delivery"]["pull_request"], "17");
+
+    let reserve = |input: Value| {
+        f.runtime
+            .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
+            .unwrap()
+    };
+    let local = reserve(
+        json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_local_pipeline"}),
+    );
+    assert_eq!(
+        (&local["reserved"], &local["footprint_deferred"]),
+        (&json!(false), &json!(false)),
+        "another delivery job waits on the lock as before: {local}"
+    );
+    let gate =
+        reserve(json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline"}));
+    assert_eq!(gate["reserved"], true, "{gate}");
+    assert_eq!(gate["footprint_deferred"], true);
+    assert_eq!(gate["reserved_files"], json!([]), "the grant holds no file");
+    assert_eq!(gate["deferred_conflicts"][0]["held_by_id"], holder);
+
+    let (run, setup) = next_with(
+        &f,
+        json!({"task_ids":[f.task],"footprint_deferred":true,"footprint_wait_seconds":0}),
+    );
+    let resumed = f.action("candidate_resume", json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["implement"], false);
+    assert_eq!(resumed["prior_pull_request"], "17");
+    checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+
+    let refused = f
+        .runtime
+        .acquire_deferred_footprint(&run.run_id, "agent_implement")
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("footprint_unavailable")
+            && refused.to_string().contains(&holder),
+        "an agent that may edit waits for the holder, and names it: {refused}"
+    );
+    f.runtime
+        .acquire_deferred_footprint(&run.run_id, "final_recovery")
+        .expect("a decision-only recovery edits nothing and takes no lock");
+    set_status(&holder, TaskStatus::Done);
+    f.runtime
+        .acquire_deferred_footprint(&run.run_id, "agent_implement")
+        .expect("the footprint is taken once the holder releases it");
+    set_status(&holder, TaskStatus::Backlog);
+    let blocked = reserve(json!({"task_ids":[holder],"ttl_seconds":120}));
+    assert_eq!(blocked["reserved"], false);
+    assert!(
+        blocked["conflicts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|conflict| conflict["held_by"] == "reservation"),
+        "the run's reservation holds the file against another writer: {blocked}"
+    );
+    f.runtime
+        .acquire_deferred_footprint(&run.run_id, "agent_review_repair")
+        .expect("a run already holding its footprint reserves nothing again");
+
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
+    assert_eq!(commit["committed"], true);
+    let pushed = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
+    assert_eq!(pushed["remote_sha_before"], f.head);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(git(&checkout, &["rev-parse", "HEAD"]));
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]}));
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(opened["pr_number"], "17");
+}
+
+/// Orbit's own auto-fix moved the published branch before the requeue. The
+/// head it recorded publishing is adopted; the next run carries it.
+pub(super) fn auto_fix_advanced_publication_is_adopted_at_its_recorded_head() {
+    let mut f = Fixture::new();
+    let original_checkout = publication(&mut f);
+    let published = f.head.clone();
+    let repaired = move_published_branch(&f, &original_checkout, "repaired check\n");
+    record_auto_fix_push(&f, "system", &published, &repaired, &f.source.run_id);
+    requeue(&mut f);
+    let (run, setup) = next(&f);
+    let resumed = f.action("candidate_resume", json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["reused_head_sha"], repaired);
+    checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("auto-fix.txt")).unwrap(),
+        "repaired check\n",
+        "the carried candidate includes the recorded repair"
+    );
+    let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
+    assert_eq!(commit["committed"], true);
+    let pushed = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
+    assert_eq!(
+        pushed["remote_sha_before"], repaired,
+        "the next push replaces exactly the head auto-fix published"
+    );
+}
+
+/// A branch move nothing recorded — or that another run or actor recorded —
+/// is still refused.
+pub(super) fn unrecorded_publication_move_is_refused() {
+    let mut f = Fixture::new();
+    let original_checkout = publication(&mut f);
+    let published = f.head.clone();
+    let moved = move_published_branch(&f, &original_checkout, "unrecorded edit\n");
+    record_auto_fix_push(&f, "system", &published, &moved, "jrun-elsewhere");
+    record_auto_fix_push(&f, "human:someone", &published, &moved, &f.source.run_id);
+    requeue(&mut f);
+    let (run, setup) = next(&f);
+    let refused = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),false,&HashMap::new(),None).unwrap_err();
+    assert!(
+        refused.to_string().contains("moved"),
+        "the unauthenticated move is refused: {refused}"
     );
 }

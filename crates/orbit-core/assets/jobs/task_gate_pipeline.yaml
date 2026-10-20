@@ -27,6 +27,16 @@
 #   referenced from `break_when` and from the post-loop starvation guard
 #   without hitting the template engine's "no data recorded for step"
 #   error on skipped-step output references.
+# - A resumed published delivery does not wait here. When a final-recovery
+#   `requeue` preserved the task's publication, the next run only adopts its
+#   existing branch and pull request before it edits anything, so a
+#   `task_pr_pipeline` delivery of that one task that the reservation refuses
+#   is granted a reservation holding no files instead (`footprint_deferred`,
+#   naming the holders it did not wait on in `deferred_conflicts`). The flag
+#   is forwarded to the leaf, which takes the footprint like any reservation
+#   before its first agent that may edit, waiting up to `max_wait_seconds`
+#   while other tasks hold it; a re-application of the unchanged published
+#   patch is not an edit. Admission skips the lock check for that task too.
 # - On conflict, `sleep_if_conflict` backs off by `poll_interval_seconds`
 #   before the next iteration; when `reserve.output.reserved` flips to
 #   true the loop breaks.
@@ -135,6 +145,7 @@ spec:
             default_input:
               task_ids: "{{ input.task_ids }}"
               ttl_seconds: "{{ input.ttl_seconds }}"
+              delivery_job: "{{ steps.delivery.output.job_name }}"
           - id: sleep_if_conflict
             when: "{{ steps.reserve.output.reserved }} == false"
             target: activity:sleep
@@ -163,6 +174,9 @@ spec:
           auto_fix: "{{ input.auto_fix }}"
           allowed_crews: "{{ input.allowed_crews }}"
           auto_push: "{{ input.auto_push }}"
+          footprint_deferred: "{{ steps.reserve.output.footprint_deferred }}"
+          footprint_wait_seconds: "{{ input.max_wait_seconds }}"
+          footprint_poll_seconds: "{{ input.poll_interval_seconds }}"
         admission_task_ids: "{{ input.task_ids }}"
         admission_workflow: worktree_setup
         deferral: "{{ steps.starvation_check.output }}"

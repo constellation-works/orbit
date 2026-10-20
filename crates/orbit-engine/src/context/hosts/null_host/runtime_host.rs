@@ -556,6 +556,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
+    fn acquire_deferred_footprint(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::acquire_deferred_footprint(self, run_id, activity_name)
+    }
     fn explore_delegation_available(&self) -> bool {
         NullRuntimeHost::explore_delegation_available(self)
     }

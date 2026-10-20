@@ -1232,7 +1232,7 @@ function buildRowReason(task) {
   const dot = buildReadinessDot(task);
   const readiness = drainReadinessFor(task.id);
   if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
-  const words = readiness.badge ? readiness.badge.text : readiness.poolLabel;
+  const words = readiness.badge ? readiness.badge.text : readiness.label;
   const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
   return el("span", { class: "row-reason" }, [
     dot,

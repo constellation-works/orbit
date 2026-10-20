@@ -236,6 +236,15 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                 .as_str()
                 .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
+            // A task resuming a preserved publication waits on no context
+            // lock: its next run adopts the existing pull request first.
+            let published = match &task["published_delivery"] {
+                Value::Object(delivery) => match delivery["pull_request"].as_str() {
+                    Some(number) => format!(" resuming published delivery (PR #{number})"),
+                    None => " resuming published delivery".to_string(),
+                },
+                _ => String::new(),
+            };
             let observation = &task["admission_forecast"];
             let profile = observation["profile_source"]
                 .as_str()
@@ -255,7 +264,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                 String::new()
             };
             lines.push(format!(
-                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
+                "{task_id}: {} ({reason}){published}{light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }

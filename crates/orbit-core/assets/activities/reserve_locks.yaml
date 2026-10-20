@@ -23,6 +23,14 @@ spec:
     immediately with a `task.dependencies.unsatisfiable` error rather
     than making the caller poll out its wait budget. A dependency
     archived after it reached `done` is satisfied, like `done`.
+
+    A single task whose `delivery_job` is `task_pr_pipeline` and whose next
+    run resumes a publication a final-recovery requeue preserved adopts
+    before it edits, so a conflict does not hold it: it is granted a
+    reservation holding no files, `footprint_deferred: true`, with the
+    holders it did not wait on in `deferred_conflicts` and the run and pull
+    request it resumes in `published_delivery`. Its leaf takes the footprint
+    before its first editing agent. `footprint_deferred` is otherwise false.
   input_schema_json:
     type: object
     required: [task_ids]
@@ -35,6 +43,8 @@ spec:
         type: number
         minimum: 1
         maximum: 14400
+      delivery_job:
+        type: string
   output_schema_json:
     type: object
     required: [reserved]
@@ -66,5 +76,11 @@ spec:
               enum: [task, reservation]
             held_by_id:
               type: string
+      footprint_deferred:
+        type: boolean
+      deferred_conflicts:
+        type: array
+      published_delivery:
+        type: object
   action: reserve_locks
   config: {}
