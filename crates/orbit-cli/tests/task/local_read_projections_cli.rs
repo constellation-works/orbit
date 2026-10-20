@@ -470,8 +470,7 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
     }
 }
 
-/// A run-blocked task with a recorded final-recovery decision. `next_step`
-/// stays the workflow-failure block: the decision does not move the task.
+/// A run-blocked task with an escalation recorded without another status change.
 fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
     runtime
         .apply_task_automation_update(
@@ -683,4 +682,114 @@ fn local_read_projection_contracts() {
         check();
         orbit_common::test_env::record_scenario_pass(name);
     }
+}
+
+/// The public show record explains the current block, including an escalation
+/// recorded while the task was already blocked, without leaking stale reasons.
+#[test]
+fn task_show_explains_latest_block() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_explains_latest_block",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("block-readout-fixture"));
+    runtime
+        .apply_task_automation_update(
+            &id,
+            blocked_workflow_failure_update(
+                "ship",
+                "jrun-first-block",
+                Some("STEP_FAILED"),
+                Some("Required check failed"),
+            ),
+        )
+        .unwrap();
+    let failed = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(failed["block"]["reason"], "Required check failed");
+    assert_eq!(failed["block"]["cause"], "run");
+    assert_eq!(failed["block"]["run_id"], "jrun-first-block");
+    assert!(failed["block"]["at"].as_str().is_some());
+
+    block_with_final_recovery(&runtime, &fixture.repo, &id, "jrun-latest-escalation");
+    let escalated = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        escalated["block"]["reason"],
+        "the failure needs an operator"
+    );
+    assert_eq!(
+        escalated["block"]["next_action"],
+        "move the task back to backlog after fixing the cause"
+    );
+    assert_eq!(escalated["block"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["next_step"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["block"]["at"], escalated["final_recovery"]["at"]);
+    let index = escalated["block"]["comment_index"].as_u64().unwrap() as usize;
+    assert!(
+        escalated["comments"][index]["message"]
+            .as_str()
+            .unwrap()
+            .contains("human_action:")
+    );
+    assert_eq!(
+        escalated,
+        fixture.json(&["task", "show", &id, "--json"]),
+        "show is read-only"
+    );
+    let input = json!({"id": id}).to_string();
+    assert_eq!(
+        escalated["block"],
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--full",
+            "--input",
+            &input
+        ])["block"]
+    );
+
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let queued = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(queued.get("block").is_none());
+    assert!(queued.get("next_step").is_none());
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                status_event: Some("status_changed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let unknown = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(
+        unknown["block"]["reason"].is_null(),
+        "a newer unexplained block must not reuse the escalation"
+    );
+    assert!(unknown["block"]["run_id"].is_null());
+    assert!(unknown["block"]["comment_index"].is_null());
 }

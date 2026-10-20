@@ -297,7 +297,20 @@ the exact `orbit job resume <run-id>` when that run is resumable (`failed`, `tim
 `--json`, `orbit.task.show` and `GET /api/tasks/:id` carry the same object in `next_step`; it is
 absent for a task that is not blocked by a run. The same show prints `Final Recovery:` when a
 final-recovery decision is recorded, and those JSON surfaces carry `final_recovery` with
-`run_id`, `decision`, `outcome` and `at`. A task list does not include either field.
+`run_id`, `decision`, `outcome` and `at`. A task list does not include these show-only fields.
+
+For a blocked task, those same JSON surfaces also carry `block`: the latest
+block or escalation's `reason`, `at`, classified `cause`, `run_id`,
+`comment_index` (zero-based into `comments`) and recorded `next_action`.
+Missing evidence is `null`; other statuses omit `block`. A final-recovery
+escalation can update the explanation while the task remains blocked. It
+supersedes the earlier run failure, but a later new block never reuses that
+old escalation. Escalations offer requeue guidance rather than automatic resume.
+
+The dashboard shows this explanation near the status in both the dock and full
+page, including the recorded time, next step and a link to the escalation
+comment or run. When no reason or time was recorded, it says so explicitly.
+Long reasons are summarized in the callout; open the evidence for the full text.
 
 ## Cancel a conclusively stuck run
 

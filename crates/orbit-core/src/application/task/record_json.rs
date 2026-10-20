@@ -34,7 +34,7 @@ impl OrbitRuntime {
 /// enrichment ([`OrbitRuntime::task_crew_read`]).
 ///
 /// A single-task show serves [`task_show_json`], which is this record plus
-/// `next_step` and `final_recovery`. Writes and list rows stay on this record.
+/// `block`, `next_step` and `final_recovery`. Writes and list rows stay on this record.
 pub fn task_record_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -67,6 +67,7 @@ pub fn task_record_json(
 /// The show record: [`task_record_json`] plus the operator guidance only a
 /// single-task readout carries.
 ///
+/// `block` explains the latest block or escalation (reason, time and source).
 /// `next_step` says what to do about a task a failed run left `blocked`.
 /// `final_recovery` is the last automated final-recovery decision, with
 /// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
@@ -79,6 +80,9 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let mut object = task_record_json(runtime, row, status_by_id)?;
+    if let Some(block) = super::blocked_recovery::block_json(row) {
+        object.insert("block".to_string(), block);
+    }
     if let Some(next) = runtime.blocked_next_step(&row.task, &row.history) {
         object.insert(
             "next_step".to_string(),

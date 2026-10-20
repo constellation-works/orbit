@@ -43,6 +43,8 @@ mod backstop;
 mod episode;
 mod input;
 mod next_step;
+mod readout;
+pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
 
 pub use episode::{
