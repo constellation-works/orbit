@@ -29,6 +29,7 @@ mod required;
 mod resume;
 pub mod review_gate;
 mod scratch_target;
+mod validation_log;
 mod validation_scope;
 mod worktree;
 
