@@ -360,6 +360,11 @@ export async function assertWorkspaceHostTransitions(browser, origin, evidence) 
         }
         if (pathname === '/api/crews') payload = { crews: [] };
         if (pathname === '/api/routines') payload = { routines: [], clock: {} };
+        if (host === 'beta' && pathname === '/api/workspaces') {
+          return new Promise(resolve => {
+            globalThis.releaseHostWorkspaces = () => resolve(new Response(JSON.stringify(payload), { status: 200 }));
+          });
+        }
         return new Response(JSON.stringify(payload), { status: 200 });
       };
       await import('/app.js');
@@ -371,6 +376,31 @@ export async function assertWorkspaceHostTransitions(browser, origin, evidence) 
     // detaches it (an already queued activation must also preserve sole scope).
     await chip.evaluate(node => { globalThis.retiredWorkspaceChip = node; });
     await page.locator('#host-select').selectOption('beta');
+    await page.waitForFunction(() => typeof globalThis.releaseHostWorkspaces === 'function');
+    const pendingScope = () => page.evaluate(async () => {
+      const common = await import('/js/common.js');
+      // Exercise the shipped request path while destination discovery is held.
+      await common.fetchJson('/api/audit');
+      return { workspace: common.getWorkspace(), url: location.href, request: globalThis.hostScopeRequests.at(-1) };
+    });
+    const beforeClick = await pendingScope();
+    const pendingInteractive = await chip.evaluate(node => node.matches('button, [role="button"]') || node.tabIndex >= 0 || !!node.querySelector('.scope-chip-x'));
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `events-host-loading-dark-${width}.png`), animations: 'disabled' });
+    }
+    await chip.click();
+    const afterClick = await pendingScope();
+    await page.evaluate(() => globalThis.retiredWorkspaceChip.click());
+    const afterRetiredClick = await pendingScope();
+    // Always release the response, including on a pre-fix assertion failure.
+    await page.evaluate(() => globalThis.releaseHostWorkspaces());
+    if (beforeClick.workspace !== 'one' || beforeClick.request.host !== 'beta' || beforeClick.request.workspace !== 'one'
+      || JSON.stringify(afterClick) !== JSON.stringify(beforeClick)
+      || JSON.stringify(afterRetiredClick) !== JSON.stringify(beforeClick)) {
+      throw new Error(`Chip interaction while destination workspaces are loading must preserve state, request scope and URL: ${JSON.stringify({ beforeClick, afterClick, afterRetiredClick })}`);
+    }
+    if (pendingInteractive) throw new Error('The Events workspace chip must have no remove control while destination workspaces are loading');
     await page.waitForFunction(() => !document.querySelector('#workspace-select'));
     await assertWorkspaceChipName(page, 'beta workspace one');
     for (const width of [1440, 375]) {
@@ -412,7 +442,7 @@ export async function assertWorkspaceHostTransitions(browser, origin, evidence) 
     await page.locator('#workspace-select').selectOption('two');
     await assertWorkspaceChipName(page, 'alpha workspace two');
     if (errors.length) throw new Error(`Host workspace transitions raised browser errors: ${errors.join('; ')}`);
-    fs.writeFileSync(path.join(evidence, 'events-host-scope-result.json'), JSON.stringify({ scope, requests, errors,
+    fs.writeFileSync(path.join(evidence, 'events-host-scope-result.json'), JSON.stringify({ beforeClick, afterClick, afterRetiredClick, scope, requests, errors,
       transitions: ['multi alpha/one → single beta/one', 'single beta/one → multi alpha/one', 'remove → aggregate → alpha/two'] }, null, 2));
   } finally {
     await page.close();
