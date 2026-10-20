@@ -19,6 +19,8 @@ use orbit_common::security::release::{
 
 /// Input ceilings apply before authentication and before any complete artifact is buffered.
 pub(super) const MAX_METADATA_BYTES: u64 = 64 * 1024;
+/// GitHub release JSON includes the release notes, unlike the small mirror marker.
+pub(super) const MAX_RELEASE_METADATA_BYTES: u64 = 256 * 1024;
 pub(super) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub(super) const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 pub(super) const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
@@ -62,6 +64,12 @@ pub const RELEASE_DIR_ENV: &str = "ORBIT_UPDATE_RELEASE_DIR";
 /// Environment variable naming the GitHub repository to read releases from.
 /// Shares its name with the variable `install.sh` reads.
 pub const RELEASE_REPO_ENV: &str = "ORBIT_INSTALL_REPO";
+
+/// Test-only override for the release API. Compiled only for debug builds
+/// when the CLI process-test feature is enabled; release builds have no such
+/// environment setting and always use the pinned GitHub API below.
+#[cfg(all(feature = "test-release-api-base", debug_assertions))]
+const TEST_RELEASE_API_BASE_ENV: &str = "ORBIT_TEST_RELEASE_API_BASE";
 
 /// File in a mirror directory naming the newest published version.
 pub const MIRROR_LATEST_FILE: &str = "latest-version.txt";
@@ -197,6 +205,52 @@ impl HttpReleaseSource {
         }
         read_bounded(response, what, limit)
     }
+
+    fn latest_release_url(&self) -> Result<reqwest::Url, OrbitError> {
+        let path = format!("repos/{}/releases/latest", self.repo);
+
+        // This seam exists only in the CLI test build, where it serves a local
+        // loopback fixture. Keeping it behind both a dev-only feature and
+        // debug_assertions means neither release builds nor user configuration
+        // can redirect release metadata requests.
+        #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+        if let Some(base) =
+            std::env::var_os(TEST_RELEASE_API_BASE_ENV).filter(|value| !value.is_empty())
+        {
+            return test_release_api_url(&base.to_string_lossy(), &path);
+        }
+
+        validated_release_url(&format!("https://api.github.com/{path}"))
+    }
+}
+
+/// Validate the loopback-only endpoint used by the CLI process-test feature.
+#[cfg(all(feature = "test-release-api-base", debug_assertions))]
+fn test_release_api_url(base: &str, path: &str) -> Result<reqwest::Url, OrbitError> {
+    let parsed = reqwest::Url::parse(base).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "test release API base '{base}' is not a URL: {error}"
+        ))
+    })?;
+    let loopback_ip = parsed
+        .host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback());
+    if parsed.scheme() != "http"
+        || !loopback_ip
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(OrbitError::InvalidInput(
+            "test release API base must be an HTTP loopback origin".to_string(),
+        ));
+    }
+    parsed.join(path).map_err(|error| {
+        OrbitError::InvalidInput(format!("test release API path is invalid: {error}"))
+    })
 }
 
 impl ReleaseSource for HttpReleaseSource {
@@ -205,14 +259,11 @@ impl ReleaseSource for HttpReleaseSource {
     }
 
     fn latest_version(&self) -> Result<String, OrbitError> {
-        let url = validated_release_url(&format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            self.repo
-        ))?;
+        let url = self.latest_release_url()?;
         let body = self.get(
             url.as_str(),
             "the latest release metadata",
-            MAX_METADATA_BYTES,
+            MAX_RELEASE_METADATA_BYTES,
         )?;
         let document: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
             OrbitError::Execution(format!("latest release metadata is not JSON: {error}"))

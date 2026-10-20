@@ -555,9 +555,9 @@ even if `not_after` is still in the future. `orbit update` does not honor
 is an error. Without the acknowledged file, only the compiled keys verify.
 
 Both HTTP releases and local mirrors limit each input before buffering it: latest-release
-metadata and `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB, its detached
-signature to 16 KiB, and the compressed archive to 256 MiB. An input over its limit fails
-before the installed executable is replaced, including when an HTTP server omits
+metadata to 256 KiB, mirror `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB,
+its detached signature to 16 KiB, and the compressed archive to 256 MiB. An input over its
+limit fails before the installed executable is replaced, including when an HTTP server omits
 `Content-Length`. The extracted executable has a separate 256 MiB limit.
 
 ### Deploy a locally built candidate pinned to a source commit
