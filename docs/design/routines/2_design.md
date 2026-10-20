@@ -644,8 +644,11 @@ Host identity is the one genuinely host-local datum: the `[machine]` table of th
 `name`, and the immutable `task_prefix`. `orbit init` owns identity creation; a legacy
 `host.toml` from before [ORB-12725] is migrated into that table once.
 `orbit routine init --install-clock` only installs the OS clock unit (§5). A malformed
-`[machine]` table is an error, not a fallback. Host identity names run ownership and
-display; it takes no part in deciding what is evaluated.
+`[machine]` table is an error, not a fallback. The stable `id` participates in
+owner-only routine admission: a state trigger compares `owner_machine` with the local
+machine ID, and replicas classify delivery/state routines owned elsewhere as
+owner-only and skip them (§1.1–1.2). The operator-chosen `name` remains the display
+label, while `task_prefix` selects this machine's task-ID namespace.
 
 The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines.rs` reads
 the `[machine]` identity from `config.toml` and `workspaces.json` through `orbit-registry`,
