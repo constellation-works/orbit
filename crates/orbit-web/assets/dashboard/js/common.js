@@ -406,13 +406,22 @@ export function wireWindowSelector(selectorId, opts = {}) {
 // renders a placeholder instead. This lives in the shared leaf module so all
 // three modules query the same live predicate without a circular import.
 let multiWorkspace = false;
+let workspaceListHostRevision = null;
 
+// Publish cardinality only after loading the current host's workspace list.
 export function setMultiWorkspace(value) {
   multiWorkspace = !!value;
+  workspaceListHostRevision = hostRevision;
 }
 
 export function isMultiWorkspace() {
   return multiWorkspace;
+}
+
+// A host switch invalidates cardinality before workspace listeners run,
+// including while the destination's connection check is still pending.
+export function isWorkspaceListReady() {
+  return workspaceListHostRevision === hostRevision;
 }
 
 export function isAggregateView() {

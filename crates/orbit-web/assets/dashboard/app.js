@@ -1339,6 +1339,8 @@ async function initWorkspaceSelector() {
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
+  // This also marks cardinality as known for this host visit, after the stale
+  // response check above, so scope chips can safely offer aggregate selection.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
