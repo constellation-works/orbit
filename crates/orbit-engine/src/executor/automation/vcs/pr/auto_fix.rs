@@ -538,23 +538,37 @@ fn record_check_annotations<H: RuntimeHost + ?Sized>(
     )
 }
 
+/// Attach `evidence`, redacted, to the owning run of the primary task at
+/// `path`. A task with no owning run stops with `missing_owner_reason`.
+pub(super) fn attach_evidence<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    pr_number: &str,
+    missing_owner_reason: &str,
+    path: &str,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
+    let primary = auto_fix.primary_task()?;
+    let owner_run = host
+        .get_task(primary)?
+        .job_run_id
+        .ok_or_else(|| stopped(pr_number, missing_owner_reason))?;
+    let evidence = orbit_common::security::redaction::redact_all_json(evidence.clone());
+    host.attach_task_validation_log(
+        primary,
+        &owner_run,
+        path,
+        serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
+    )
+}
+
 fn retain<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     path: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    let owner_run = host
-        .get_task(auto_fix.primary_task()?)?
-        .job_run_id
-        .ok_or_else(|| stopped("", "missing owning run"))?;
-    let evidence = orbit_common::security::redaction::redact_all_json(evidence.clone());
-    host.attach_task_validation_log(
-        auto_fix.primary_task()?,
-        &owner_run,
-        path,
-        serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
-    )
+    attach_evidence(host, auto_fix, "", "missing owning run", path, evidence)
 }
 
 /// The required failures on a head, with the head-bound read naming them.
