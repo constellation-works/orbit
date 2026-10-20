@@ -464,7 +464,10 @@
 
 /* On phones the top bar keeps the brand, Drain and Refresh on its first row
    and the host readings on a second; the rail below holds the host and
-   workspace pickers side by side over scrolling destinations and views. */
+   workspace pickers side by side over scrolling destinations and views.
+   Keep the three rail rows compact enough that the first panel or view tabs
+   start by 200px at 375px wide, including the refresh line and clock below
+   navigation. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -479,16 +482,16 @@
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
-    padding: 6px 8px;
+    padding: 3px 8px;
     align-items: center;
-    gap: 4px 6px;
+    gap: 2px 6px;
   }
   .rail-brand svg { width: 64px; height: auto; }
   .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
-  .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
+  .rail-workspace .workspace-select { height: 30px; width: 100%; max-width: 100%; }
   .rail-foot {
     grid-column: 1 / -1;
     grid-row: 3;
@@ -497,11 +500,11 @@
     gap: 8px;
     position: static;
     margin: 0;
-    padding: 4px 2px 0;
+    padding: 0 2px;
   }
   .rail-conn { flex: 1 1 auto; padding: 0; }
   .rail-foot .clock-zone { width: auto; flex: 0 0 auto; }
-  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 4px 10px; }
+  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 3px 10px; }
   .rail .tabs {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -548,7 +551,7 @@
     white-space: nowrap;
     flex: 0 0 auto;
   }
-  .topbar { flex-wrap: wrap; height: auto; padding: 6px 8px; row-gap: 4px; column-gap: 6px; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 4px 8px; row-gap: 2px; column-gap: 6px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
   .topbar .global-drain-state { order: 2; }
