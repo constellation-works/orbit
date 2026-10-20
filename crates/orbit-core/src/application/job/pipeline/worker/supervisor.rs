@@ -21,6 +21,9 @@ use chrono::DateTime;
 use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
 
 use super::command::WorkerCommandConfig;
+use super::exit::{
+    WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit, note_exit_after_reconciliation,
+};
 use super::record::{self, PipelineAuditRow};
 use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
 use super::*;
@@ -318,7 +321,7 @@ impl PipelineWorkerSupervisor {
                     "audit worker claim",
                     run_id,
                     self.record_audit(
-                        "pipeline.worker.claimed",
+                        WORKER_CLAIM_AUDIT,
                         Some(run_id),
                         actor,
                         AuditEventStatus::Success,
@@ -329,6 +332,10 @@ impl PipelineWorkerSupervisor {
                             "workspace": workspace,
                             "worker_log": worker_log,
                             "state": run.state.to_string(),
+                            // [ORB-17179] Where reconciliation finds the
+                            // worker's scope if nobody observes its exit.
+                            "scope_unit": scope.as_ref().map(WorkerScopeCgroup::unit),
+                            "scope_cgroup": scope.as_ref().map(WorkerScopeCgroup::directory),
                         }),
                         None,
                     ),
@@ -359,6 +366,29 @@ impl PipelineWorkerSupervisor {
 
             if let Some(status) = status {
                 exit_status = Some(status);
+                #[cfg(feature = "test-support")]
+                worker_reap_hook::run(
+                    worker_reap_hook::WorkerReapPhase::BeforeExitRecorded,
+                    run_id,
+                );
+                // [ORB-17179] Persist the reaped status before settling the
+                // run: reconciliation can condemn the run as soon as the
+                // worker is reaped, and nobody else can ever recover it.
+                let worker_exit = WorkerExit::observe(child_pid, &status, scope.as_ref());
+                log_best_effort(
+                    "audit worker exit",
+                    run_id,
+                    self.record_audit(
+                        WORKER_EXIT_AUDIT,
+                        Some(run_id),
+                        actor,
+                        AuditEventStatus::Success,
+                        serde_json::to_value(&worker_exit).unwrap_or(Value::Null),
+                        None,
+                    ),
+                );
+                #[cfg(feature = "test-support")]
+                worker_reap_hook::run(worker_reap_hook::WorkerReapPhase::AfterExitRecorded, run_id);
                 // The worker may have changed the run after the last startup
                 // observation. Exit handling must use fresh state so duplicate
                 // ownership, cancellation, and terminal outcomes stay
@@ -421,6 +451,7 @@ impl PipelineWorkerSupervisor {
                     return Ok(());
                 }
                 if run.state.is_terminal() {
+                    self.note_exit_after_reconciliation(run_id, &worker_exit);
                     return Ok(());
                 }
                 let ownership = if run.pid == Some(child_pid) {
@@ -466,11 +497,22 @@ impl PipelineWorkerSupervisor {
                     // while waiting; never kill additional processes here.
                     thread::sleep(Duration::from_secs(1));
                 }
+                self.note_exit_after_reconciliation(run_id, &worker_exit);
                 return Ok(());
             }
 
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// Reconciliation may have interrupted the run between the reap and this
+    /// observer's settlement; name the observed exit in its diagnostic.
+    fn note_exit_after_reconciliation(&self, run_id: &str, exit: &WorkerExit) {
+        log_best_effort(
+            "note worker exit after reconciliation",
+            run_id,
+            note_exit_after_reconciliation(self.runs.as_ref(), run_id, exit),
+        );
     }
 
     /// An unreadable or missing run cannot release child ownership. Retry
@@ -727,6 +769,49 @@ impl PipelineWorkerSupervisor {
                 error_message,
             },
         )
+    }
+}
+
+/// A rendezvous on the startup observer's thread just after it reaps its
+/// worker, around the durable exit record, so a test can let stale-run
+/// reconciliation settle the run first, deterministically.
+#[cfg(feature = "test-support")]
+pub(crate) mod worker_reap_hook {
+    use std::sync::{Mutex, PoisonError};
+
+    /// Where the observer stops after reaping its worker.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum WorkerReapPhase {
+        /// Before the exit is recorded: reconciliation finds no exit record.
+        BeforeExitRecorded,
+        /// After the exit is recorded, before the run is settled.
+        AfterExitRecorded,
+    }
+
+    type Hook = Box<dyn FnOnce(&str) + Send>;
+
+    static HOOK: Mutex<Option<(WorkerReapPhase, Hook)>> = Mutex::new(None);
+
+    /// Run `hook` with the run ID the next time any observer in this process
+    /// reaches `phase`. One hook at a time; the last install wins.
+    pub fn install_worker_reap_hook<F>(phase: WorkerReapPhase, hook: F)
+    where
+        F: FnOnce(&str) + Send + 'static,
+    {
+        *HOOK.lock().unwrap_or_else(PoisonError::into_inner) = Some((phase, Box::new(hook)));
+    }
+
+    pub(crate) fn run(phase: WorkerReapPhase, run_id: &str) {
+        let hook = {
+            let mut slot = HOOK.lock().unwrap_or_else(PoisonError::into_inner);
+            match slot.as_ref() {
+                Some((installed, _)) if *installed == phase => slot.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, hook)) = hook {
+            hook(run_id);
+        }
     }
 }
 

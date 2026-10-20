@@ -4,8 +4,8 @@ summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
-related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-19
+related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179]
+last_validated: 2026-10-20
 ---
 
 # Recover Stuck Job Runs
@@ -151,7 +151,38 @@ worker exit. While a recorded provider is alive or unverifiable, the run stays
 nonterminal and keeps its reservations. The observer retries once per second and
 retains the original exit status and worker-log diagnostic until it can finalize.
 It does not kill surviving providers. If the observer itself stops, lazy orphan
-reconciliation remains available with its ordinary stale-owner diagnostic.
+reconciliation remains available with its stale-owner diagnostic.
+
+### How the worker ended
+
+Only the observer, the worker's parent, can reap its exit status. It records a
+`pipeline.worker.exited` audit row (`orbit audit list`) as soon as it reaps the worker,
+before it settles the run: `exit_code` or `signal` and `signal_name`, `core_dumped`, and
+on Linux the worker scope's `memory.events` `oom_kill` and `pids.events` `max` counters
+while its cgroup still exists. On Linux an unreaped worker keeps its start identity, so
+reconciliation cannot condemn a run while its observer is alive and has not reaped the
+worker; once it has, the two race to settle the run. A run interrupted with
+`reason=process_not_found` or `token_mismatch` then ends its diagnostic with a
+`worker exit:` clause:
+
+- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL)` (or
+  `exited with code <n>`): the observer recorded the exit before reconciliation won.
+- `no supervisor observed or recorded its exit status; …`: nobody had recorded an exit.
+  The launching process had exited, so the init process or the user manager reaped the
+  worker, or reconciliation won the race. What follows is what the worker's scope, recorded
+  when the worker claimed the run, still reports: its systemd unit `state=…, result=…` and
+  counters, or `worker scope '<unit>' was already gone` with the `journalctl --user -u <unit>`
+  command that still has its end. A worker that ran in no scope (macOS, containment off, no
+  user manager) reads `no worker scope evidence is available`; nothing is inferred.
+- `…; afterwards its supervisor reaped pid <pid> at <time>: …`: reconciliation won, and
+  the observer added the exit it reaped afterwards. A reap time well after the run's
+  `finished_at` means the worker was still running when the run was interrupted.
+
+```text
+job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
+```
+
+The clause adds evidence only; it changes neither which runs are interrupted nor when.
 
 A process running a different executable than the one recorded for a live Orbit root (for
 example, right after the binary was replaced while workers from the previous build are still

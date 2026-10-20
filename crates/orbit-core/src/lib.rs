@@ -80,6 +80,8 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+    /// Stop a worker's startup observer just after it reaps the worker.
+    pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
