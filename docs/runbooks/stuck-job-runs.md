@@ -1107,6 +1107,67 @@ pull requests that no live run is delivering are closed
 never adopted this way: its claim's release keeps the candidate and pull request,
 and the task's next claim continues them ([distributed drain](distributed-drain.md)).
 
+## A conflicting or red pull request no run is watching
+
+A delivery leaf's completion step repairs its pull request only while it runs.
+When the leaf ends without completing (its completion deadline ran out, final
+recovery escalated or requeued the task, its worker died after a resume), the
+pull request can go red or conflict with its base while nothing watches it.
+
+A drain started with `orbit run auto --auto-fix` repairs it. After adoption, each
+pass looks at every task's newest `task_pr_pipeline` run and hands the task back
+to that run's completion step when all of these hold:
+
+- the run carries only that task, ended `failed`, `timeout` or `interrupted`,
+  and is not a claimed execution. A leaf that finished (a review-only handoff)
+  or was cancelled is not resumed;
+- the task is in `review`, or in `blocked` or `backlog` because that run's
+  lineage put it there (a delivery failure handoff, an interruption, or a final
+  recovery escalation or requeue);
+- no run of the task is live and no claim of it is unsettled;
+- the drain holds `--complete` when the run was started with it;
+- the run opened the pull request the task records, on the task's `orbit/<task>-`
+  branch, and the forge reports it open on that branch, naming the task and
+  authored by a delivery identity (`pr.delivery_authors`, else the authenticated
+  `gh` login);
+- it conflicts with its base or a required check failed on its current head;
+- the pull request's auto-fix ledger would admit a repair of that head and
+  blocker, and no earlier hand-back covered them.
+
+The hand-back is a checkpoint resume of the run, rewound to `pr_complete`, with
+`auto_fix` and deferred footprint locks granted and the repair recorded under
+`out_of_run_auto_fix` in its input. The task returns to `review`. The watcher
+admits the repair against the pull request's attempt ledger, and the
+`workflow.purpose_crews.auto_fix` crew takes the task's footprint locks before it
+edits, then pushes to the same branch. Completion then merges only when the run
+holds `--complete`; a review-only run leaves the repaired pull request in
+`review`. Each hand-back is recorded in task history as `pr_auto_fix_out_of_run`.
+A pull request is handed back at most once per head and blocker, and at most
+three times in all, so a resume that dies before it repairs cannot loop.
+
+Repairs take free drain slots after adoption. A pass held by host resource
+pressure starts none, and a pull request found unblocked is not read again for
+five minutes. `orbit run readiness` lists each live repair under
+`out_of_run_auto_fix`, and `orbit run show <run>` shows the repair in the resumed
+run's input. To see why a pull request was left alone, read `auto_fix.skipped` in
+the drain's latest `adopt_orphans` step output. The reasons are:
+
+- `operator_hold`: an operator blocked or requeued the task. Release it first;
+- `opted_out`: the task is tagged `no-auto-approve`;
+- `authority`: the run was started with `--complete` and the drain was not;
+- `not_orbit_pull_request`: a branch, body or author that is not Orbit's;
+- `pull_request_not_recorded`, `pull_request_not_open` or `no_pull_request`;
+- `no_blocker` and `checked_recently`: nothing to repair;
+- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused;
+- `live_run` or `claimed_execution`: another run or machine owns the delivery;
+- `not_resumable`: checkpoint resume refused the run, for example one that
+  stopped before its completion step;
+- `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
+  and `task_moved`: a later pass tries again.
+
+A drain without `--auto-fix` never repairs out of run. Repair such a pull request
+yourself, or requeue the task.
+
 ## A delivery pull request merged outside Orbit
 
 When you merge a task's delivery pull request on GitHub yourself, no run observes

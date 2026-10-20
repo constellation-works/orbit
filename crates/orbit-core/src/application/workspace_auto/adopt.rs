@@ -1,6 +1,9 @@
 //! The drain step that adopts interrupted delivery leaves' open pull
-//! requests before it admits new work. What qualifies is
-//! `application::job::orphan_adoption`'s decision; this step only supplies
+//! requests before it admits new work, and, in an `--auto-fix` drain, hands
+//! a conflicting or red Orbit pull request whose task has no live run back to
+//! its delivery for a repair. What qualifies is
+//! `application::job::orphan_adoption`'s and
+//! `application::job::pr_repair_adoption`'s decision; this step only supplies
 //! the drain's authority and its free leaf slots. Only a malformed step input
 //! fails it; a store or forge error never ends the drain.
 
@@ -68,7 +71,20 @@ pub(crate) fn adopt_orphaned_deliveries(
             .unwrap_or(usize::MAX)
             .saturating_sub(occupied),
     };
-    Ok(runtime.adopt_orphaned_deliveries(&authority, Utc::now()))
+    let mut output = runtime.adopt_orphaned_deliveries(&authority, Utc::now());
+    if authority.auto_fix {
+        // Adoption came first: its leaves hold slots the repairs may not.
+        let adopted = output
+            .get("adopted")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let repairs = runtime
+            .repair_out_of_run_pull_requests(&authority, authority.budget.saturating_sub(adopted));
+        if let Some(object) = output.as_object_mut() {
+            object.insert("auto_fix".into(), repairs);
+        }
+    }
+    Ok(output)
 }
 
 /// A templated flag: the template engine may hand a boolean over as text.

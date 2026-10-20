@@ -676,6 +676,14 @@ It cannot be combined with `--pull` or `--stop`.
   are spent, the leaf stops with `auto_fix_budget_exhausted` and lists the
   attempts.
 - Closed or merged PRs and superseded heads get no repair.
+- A blocked Orbit PR whose task no run is delivering any more is repaired out
+  of run. Each `--auto-fix` drain pass hands it back to the task's newest
+  failed, timed-out or interrupted leaf, rewound to completion, when the task
+  is in `review` or was blocked or requeued by that leaf's own delivery. The
+  same ledger bounds it, each hand-back is recorded as `pr_auto_fix_out_of_run`,
+  and `orbit run readiness` lists the live ones under `out_of_run_auto_fix`.
+  Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
+  started with `--complete` under a drain without it are left alone.
 
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and

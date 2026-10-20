@@ -240,7 +240,7 @@ impl OrbitRuntime {
     /// The logins Orbit opens delivery PRs under, lowercased:
     /// `pr.delivery_authors`, else the login this machine's forge credentials
     /// act as.
-    pub(super) fn delivery_authors(
+    pub(crate) fn delivery_authors(
         &self,
         forge: &dyn TaskPrForge,
         repo_root: &Path,
@@ -263,7 +263,7 @@ impl OrbitRuntime {
     /// the source input onto a new `task_pr_pipeline` run and restamp
     /// `job_run_id` only onto the checkpoint batch id, which already matches
     /// the terminal source, so the retry stays invisible to that binding.
-    pub(super) fn live_task_delivery(&self, task: &Task) -> Option<String> {
+    pub(crate) fn live_task_delivery(&self, task: &Task) -> Option<String> {
         self.live_task_run(task)
             .or_else(|| match self.unsettled_task_claim(task) {
                 Ok(claim) => claim.as_ref().map(unsettled_claim_reason),

@@ -150,9 +150,12 @@ pub struct AutoCommand {
     /// Repair the pull requests this drain opens when a required check fails
     /// on their head or their branch conflicts with its base: the run's
     /// repair pipeline fixes, validates and pushes the repair, then watches
-    /// the new head. Repair crews come from `workflow.purpose_crews.auto_fix`,
-    /// else `workflow.low_complexity_crews`. This never merges; `--complete`
-    /// still decides that. Off by default.
+    /// the new head. Each pass also hands such an Orbit pull request whose
+    /// task no run is delivering any more back to its delivery's completion
+    /// step for a repair; operator holds and `no-auto-approve` tasks are left
+    /// alone. Repair crews come from `workflow.purpose_crews.auto_fix`, else
+    /// `workflow.low_complexity_crews`. This never merges; `--complete` still
+    /// decides that. Off by default.
     #[arg(long)]
     pub auto_fix: bool,
     /// Add this review layer before landing to the window when workspace

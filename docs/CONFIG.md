@@ -1245,6 +1245,25 @@ head under the run's retry lineage and attempt ledger. The resumed run's crew
 comes from the leaf's own input, not the adopting drain's `--allow-crew`. See
 [adopting a dead leaf's pull request](runbooks/stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
 
+An `--auto-fix` drain also repairs Orbit pull requests that no run is watching
+any more. When a task's newest delivery leaf ended `failed`, `timeout` or
+`interrupted` and the task waits in `review`, or was blocked or requeued by that
+leaf's own delivery or final recovery, each pass reads the task's recorded pull
+request. If it conflicts with its base or a required check failed on its head,
+the pass resumes the leaf at its completion step with `auto_fix` granted. The
+watcher there admits the repair against the same attempt ledger and budget (three
+per pull request, one per head and blocker), and the auto-fix crew takes the
+task's footprint locks before it edits, pushes to the same branch and leaves
+completion to merge. The resume keeps the leaf's own `completion`, so a repair
+never merges a pull request whose leaf lacked `--complete`. Operator holds,
+`no-auto-approve` tasks, a leaf started with `--complete` under a drain without
+it, and pull requests not opened by a delivery identity on the task's
+`orbit/<task>-` branch are never repaired. Each hand-back is recorded in task
+history as `pr_auto_fix_out_of_run`; a head and blocker is handed back once, and
+a pull request at most as many times as its budget. `orbit run readiness`
+lists the live ones under `out_of_run_auto_fix`. See
+[a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
+
 The crew comes from the existing pool resolution, in this order:
 
 1. `--allow-crew` restricts which crews the draw may pick, as for every
