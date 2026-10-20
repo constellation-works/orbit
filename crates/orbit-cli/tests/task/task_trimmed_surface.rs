@@ -73,6 +73,25 @@ fn update_status_restores_an_archived_task_with_force(workspace: &TestWorkspace)
     assert_eq!(restored["status"], json!("backlog"));
 }
 
+/// A fallback lifecycle refusal helps the caller choose a status that is
+/// actually reachable from the task's current status.
+fn update_status_fallback_lists_reachable_statuses(workspace: &TestWorkspace) {
+    let id = workspace.add_task("Fallback lifecycle guidance");
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--status", "review"]);
+    assert_eq!(refused.status.code(), Some(1));
+    let refusal = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(
+        refusal.contains("invalid input"),
+        "wrong error category: {refusal}"
+    );
+    assert!(
+        refusal.contains("in-progress"),
+        "the refusal should name a status reachable from backlog: {refusal}"
+    );
+}
+
 /// Completion evidence is required wherever the status is set: the CLI is no
 /// more able to mint a `done` task out of a proposal than an agent is.
 fn update_status_refuses_completion_without_review_and_evidence(workspace: &TestWorkspace) {
@@ -892,6 +911,10 @@ fn governed_status_transitions() {
         (
             "update_status_restores_an_archived_task_with_force",
             update_status_restores_an_archived_task_with_force as fn(&TestWorkspace),
+        ),
+        (
+            "update_status_fallback_lists_reachable_statuses",
+            update_status_fallback_lists_reachable_statuses as fn(&TestWorkspace),
         ),
         (
             "update_status_refuses_completion_without_review_and_evidence",

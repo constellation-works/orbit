@@ -162,12 +162,8 @@ pub(crate) fn ensure_status_change_allowed(
         return Ok(());
     }
     if !task_status_transition_allowed(from, target) {
-        return Err(refused(
-            &task.id,
-            from,
-            target,
-            unreachable_reason(from, target),
-        ));
+        let reason = unreachable_reason(from, target);
+        return Err(refused(&task.id, from, target, &reason));
     }
 
     if target == TaskStatus::Done {
@@ -294,17 +290,26 @@ pub(crate) fn ensure_completion_run_stopped(
 
 /// The precondition a refused edge is missing, in the terms of the pair that
 /// was asked for rather than of the table that refused it.
-fn unreachable_reason(from: TaskStatus, to: TaskStatus) -> &'static str {
+fn unreachable_reason(from: TaskStatus, to: TaskStatus) -> String {
     match (from, to) {
-        (_, TaskStatus::Done) => "'done' is reachable only from 'review'",
+        (_, TaskStatus::Done) => "'done' is reachable only from 'review'".to_string(),
         (TaskStatus::Done | TaskStatus::Archived, _) => {
             "delivered and archived work does not reopen; file a new task with a \
              'regression_from' relation instead"
+                .to_string()
         }
         (TaskStatus::Rejected, _) => {
-            "a rejection is only reconsidered back to 'backlog' or 'in-progress'"
+            "a rejection is only reconsidered back to 'backlog' or 'in-progress'".to_string()
         }
-        _ => "the lifecycle has no edge between these statuses",
+        _ => {
+            let reachable_statuses = TaskStatus::ALL
+                .into_iter()
+                .filter(|status| *status != from && task_status_transition_allowed(from, *status))
+                .map(|status| format!("'{status}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("you can move it to: {reachable_statuses}")
+        }
     }
 }
 
