@@ -104,6 +104,14 @@
   color: var(--fg-soft);
   overflow-wrap: anywhere;
 }
+.task-block-time { margin: 6px 0 0; color: var(--fg-mute); font-size: 12px; }
+.task-block-reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.task-block-next { white-space: pre-line; }
 .task-attention-body .mono { font-family: var(--font-mono); font-size: 12px; color: var(--fg-strong); }
 .task-attention-test { word-break: break-all; }
 .task-attention-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }

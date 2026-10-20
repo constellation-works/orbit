@@ -10,6 +10,8 @@ use serde::Serialize;
 
 use crate::OrbitRuntime;
 
+use super::readout::{blocking_run_id, current_block, is_escalation};
+
 /// The status events a run failure records when it blocks a task.
 const RUN_BLOCK_EVENTS: [&str; 2] = ["workflow_run_failed", "workflow_run_interrupted"];
 
@@ -24,32 +26,6 @@ pub struct BlockedNextStep {
     pub requeue_command: String,
 }
 
-/// The run id a blocking history note names (`run_id=<id>,`).
-fn run_id_in_note(note: &str) -> Option<&str> {
-    let rest = note.split_once("run_id=")?.1;
-    let id = rest.split([',', ' ', ';']).next()?;
-    (!id.is_empty()).then_some(id)
-}
-
-/// The run behind the task's current block: the newest history entry that
-/// moved it to `blocked`, when a run failure wrote it, else the run the task
-/// is still stamped with.
-fn blocking_run_id(task: &Task, history: &[TaskHistoryEntry]) -> Option<String> {
-    let entry = history
-        .iter()
-        .rev()
-        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))?;
-    if !RUN_BLOCK_EVENTS.contains(&entry.event.as_str()) {
-        return None;
-    }
-    entry
-        .note
-        .as_deref()
-        .and_then(run_id_in_note)
-        .map(str::to_string)
-        .or_else(|| task.job_run_id.clone())
-}
-
 fn is_resumable(state: JobRunState) -> bool {
     matches!(
         state,
@@ -59,7 +35,7 @@ fn is_resumable(state: JobRunState) -> bool {
 
 impl OrbitRuntime {
     /// Guidance for a `blocked` task, or `None` for any other status or a
-    /// block no run failure caused. Reads the run without reconciling it: a
+    /// block no run failure or final-recovery escalation caused. Reads the run without reconciling it: a
     /// task read must not change state.
     pub fn blocked_next_step(
         &self,
@@ -69,8 +45,15 @@ impl OrbitRuntime {
         if task.status != TaskStatus::Blocked {
             return None;
         }
-        let run_id = blocking_run_id(task, history)?;
-        let resumable = self.task_run_is_local(task)
+        let entry = current_block(history)?;
+        if !RUN_BLOCK_EVENTS.contains(&entry.event.as_str()) && !is_escalation(entry) {
+            return None;
+        }
+        let run_id = blocking_run_id(entry)
+            .map(str::to_string)
+            .or_else(|| task.job_run_id.clone())?;
+        let resumable = !is_escalation(entry)
+            && self.task_run_is_local(task)
             && self
                 .show_job_run_observed(&run_id)
                 .is_ok_and(|run| is_resumable(run.state));

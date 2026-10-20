@@ -2609,6 +2609,59 @@ function goToLandingRetry(detail, claim) {
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });
 }
 
+// Core selects the latest block or escalation and supplies readable evidence.
+// Render it as text: diagnoses and operator actions are untrusted task content.
+function buildTaskBlockCallout(task, context, detail) {
+  if (task.status !== "blocked") return null;
+  const block = task.block || {};
+  const headingId = `block-heading-${task.id}`;
+  const content = el("div", { class: "task-attention-content" }, [
+    el("h3", { class: "task-attention-title", id: headingId, text: "Blocked · needs your attention" }),
+    el("p", {
+      class: "task-attention-body task-block-reason",
+      text: block.reason || "No block reason was recorded.",
+    }),
+  ]);
+  const time = el("p", { class: "task-block-time" });
+  if (block.at) {
+    time.append("Blocked at ", absTimeNode(context, block.at));
+  } else {
+    time.textContent = "Block time not recorded.";
+  }
+  content.appendChild(time);
+  const next = block.next_action || (task.next_step && task.next_step.resume_command
+    ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
+    : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
+  content.appendChild(el("p", { class: "task-attention-body task-block-next", text: `Next: ${next}` }));
+  const actions = el("div", { class: "task-attention-actions" });
+  if (Number.isInteger(block.comment_index) && Array.isArray(task.comments) && task.comments[block.comment_index]) {
+    const read = el("button", { class: "attention-action primary", type: "button", text: "Read escalation" });
+    read.addEventListener("click", () => {
+      detail.activateTab("comments");
+      const id = commentAnchorId(task.id, block.comment_index);
+      expandedComments.add(commentKey(task.id, block.comment_index));
+      const panel = detail.querySelector(".comments-panel");
+      if (panel) renderCommentsPanel(panel, task, context);
+      scrollToComment(`#${id}`);
+    });
+    actions.appendChild(read);
+  }
+  if (block.run_id) {
+    const run = el("a", { class: "attention-action", text: "View run" });
+    run.href = runHref(block.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    actions.appendChild(run);
+  }
+  if (!actions.children.length) {
+    const history = el("button", { class: "attention-action", type: "button", text: "View history" });
+    history.addEventListener("click", () => detail.activateTab("history"));
+    actions.appendChild(history);
+  }
+  content.appendChild(actions);
+  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
+  ]);
+}
+
 function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -2818,6 +2871,8 @@ function buildTaskDetail(task, context, drain = null) {
     },
   ], context);
   detail.appendChild(metaBlock);
+  const blockCallout = buildTaskBlockCallout(task, context, detail);
+  if (blockCallout) detail.appendChild(blockCallout);
   detail.appendChild(attentionSlot);
   detail.appendChild(progressSlot);
   for (const section of sections) detail.appendChild(section);
