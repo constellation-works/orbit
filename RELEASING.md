@@ -150,6 +150,7 @@ make release-check
 - `make release-check` ([what it checks](docs/runbooks/release.md#what-make-release-check-enforces)) fails on any local version drift. Before npm and the GitHub Release exist, drift against the previous remote version is expected.
 - If this cycle changed a CLI the npm smoke drives (`orbit init`, `workspace init`, `mcp serve`), update `scripts/smoke-npm-install.sh` in the release commit. The tag-triggered smoke runs the tag's copy of the script, so a later fix can't turn it green.
 - If `install.sh` changed, test it locally. The release smoke fetches it from the tag.
+- If this cycle changed `desktop/` or the desktop jobs, prove the Linux desktop legs before tagging: Actions → `Desktop App` → **Run workflow** on the branch you will tag. Its `Release bundle` jobs run `build-desktop`'s Linux legs (`ubuntu-22.04` x86_64 and `ubuntu-22.04-arm` arm64, the same `cargo tauri build --ci --target … -- --locked` command) and check for exactly one `.deb` and one `.AppImage` each. They upload unsigned workflow artifacts and publish nothing.
 
 ### 6. Create the Orbit task
 

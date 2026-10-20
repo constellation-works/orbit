@@ -3,8 +3,10 @@ name: Desktop App
 # Builds the Tauri desktop shell in desktop/. It is its own Cargo workspace,
 # outside the main build, so shell, workflow and shared audit changes run here;
 # the main Check / Clippy / Test budget never pays for the webview
-# stacks. Manual runs also bundle unsigned macOS and Linux packages for
-# testing; signed release bundles come from release.yml.
+# stacks. Manual runs also bundle unsigned packages for testing: a macOS
+# app and disk image, and the Linux .deb and .AppImage from the same runners,
+# targets and flags as release.yml's build-desktop legs, so those legs are
+# proven before a tag. Release bundles come from release.yml.
 
 on:
   push:
@@ -38,7 +40,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Keep in step with desktop/Cargo.toml's tauri dependency line and with
-  # the build-desktop job in release.yml.
+  # the build-desktop job in release.yml (release-bundles below mirrors it).
   TAURI_CLI_VERSION: 2.12.3
   # Keep aligned with ci.yml; verify downloaded bytes before execution.
   CARGO_DENY_VERSION: 0.19.9
@@ -164,23 +166,104 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # The Linux bundles come from release-bundles, on the release runners.
       - name: Install Tauri CLI
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
         run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
 
       - name: Bundle
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then bundles=app,dmg; else bundles=deb,appimage; fi
-          cargo tauri build --bundles "$bundles"
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        run: cargo tauri build --bundles app,dmg
 
       - name: Upload bundles
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: orbit-desktop-${{ runner.os }}
-          path: |
-            desktop/target/release/bundle/dmg/*.dmg
-            desktop/target/release/bundle/deb/*.deb
-            desktop/target/release/bundle/appimage/*.AppImage
+          path: desktop/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  release-bundles:
+    # Manual runs only: builds the Linux legs of release.yml's build-desktop
+    # job with the same runners, targets and bundle command, unsigned and
+    # unpublished, so a tag never runs them for the first time. Keep the legs,
+    # dependencies, command and packaging check in step with release.yml.
+    needs: pr-state
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    name: Release bundle (${{ matrix.slug }})
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            runs_on: ubuntu-22.04
+          - slug: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runs_on: ubuntu-22.04-arm
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          targets: ${{ matrix.target }}
+
+      - name: Install webview build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev patchelf file
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          key: release-${{ matrix.slug }}
+          cache-bin: "false"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Build Linux bundles
+        working-directory: desktop
+        run: cargo tauri build --ci --target "$TARGET" --bundles deb,appimage -- --locked
+
+      - name: Package desktop assets
+        run: |
+          set -euo pipefail
+          bundle="desktop/target/$TARGET/release/bundle"
+          # Exactly one bundle per format, as release.yml requires.
+          take() {
+            local pattern="$1" asset="$2" matches
+            shopt -s nullglob
+            # shellcheck disable=SC2206
+            matches=($pattern)
+            shopt -u nullglob
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "expected exactly one $pattern, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            echo "bundled ${matches[0]}"
+            cp "${matches[0]}" "dist/$asset"
+          }
+          mkdir -p dist
+          take "$bundle/deb/*.deb" "orbit-desktop-$TARGET.deb"
+          take "$bundle/appimage/*.AppImage" "orbit-desktop-$TARGET.AppImage"
+          dpkg-deb --info "dist/orbit-desktop-$TARGET.deb"
+          file "dist/orbit-desktop-$TARGET.AppImage"
+          ls -lh dist
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orbit-desktop-${{ matrix.slug }}
+          path: dist/*
           if-no-files-found: error

@@ -119,7 +119,11 @@ changes. From the repository root, reproduce the advisory check with
 [supply-chain policy](../docs/DEVELOPMENT.md#supply-chain-cargo-deny) records the exact-ID
 desktop maintenance exceptions, upstream constraints and re-review ownership.
 A manual run of that workflow also uploads unsigned bundles for
-testing. Releases are built separately, as described in [Releases](#releases).
+testing: a macOS `.dmg`, and the Linux `.deb` and `.AppImage` for x86_64 and arm64 from the
+release's own Linux legs (the `ubuntu-22.04` and `ubuntu-22.04-arm` runners, `--target` and
+`--locked` flags, and the one-bundle-per-format check), so those legs can be proven before a tag.
+Nothing is signed or published. Releases are built separately, as described in
+[Releases](#releases).
 
 The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
 window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That test binary acts as
