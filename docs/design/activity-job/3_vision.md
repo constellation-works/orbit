@@ -118,7 +118,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - Temporal — https://temporal.io/
 - Argo Workflows — https://argo-workflows.readthedocs.io/
 - GitHub Actions — https://docs.github.com/actions
-- LangGraph — https://langchain-ai.github.io/langgraph/
+- LangGraph — https://docs.langchain.com/oss/python/langgraph/overview
 
 ---
 
