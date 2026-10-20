@@ -1042,15 +1042,15 @@ export function postJson(path, body) {
   return requestJson(path, "POST", body);
 }
 
-// A run's captured review layer before landing and what decided it, as the
-// `Review:` line of `orbit run show` reads: `run-option` is the run's own
-// `--review`, `claim` a claimed leaf's owner, anything else a policy layer.
+// A run's captured review layer before landing and what decided it: `run-option`
+// is the run's own `--review`, `claim` a claimed leaf's owner, and any other
+// source names the policy layer that applied (`workspace policy`, `global policy`).
 export function reviewLayerText(layer) {
   if (!layer?.timing) return "";
   const source = layer.source || "unknown";
   const origin = source === "run-option" ? "run option --review"
     : source === "claim" ? "the owner's claim"
-    : `workspace policy, ${source}`;
+    : `${source} policy`;
   return `${layer.timing} (${origin})`;
 }
 

@@ -310,10 +310,11 @@ export function renderRunDetailMeta() {
   if (run.review_layer) addCell("review", reviewLayerText(run.review_layer));
   // ORB-12516: with more than one execution host, a run id alone no longer says
   // where it ran. The store field is the truth; a row without one is *unknown*,
-  // never assumed to be this machine.
+  // never assumed to be this machine. The value already reads "on <host>", so
+  // the label stops at "executed" (ORB-17188).
   {
     const cell = el("div");
-    cell.appendChild(el("div", { class: "label", text: "executed on" }));
+    cell.appendChild(el("div", { class: "label", text: "executed" }));
     const value = el("div", { class: "value" });
     value.appendChild(buildExecutionProvenance(runExecutionLocation(run)));
     cell.appendChild(value);
