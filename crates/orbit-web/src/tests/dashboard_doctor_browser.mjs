@@ -296,6 +296,65 @@ try {
   assert(rail.text === '1 err · 2 warn' && rail.alert, `the Health rail item counts failures and warnings: ${JSON.stringify(rail)}`);
   assert(rail.lines === 1 && !rail.clipped, `the rail count fits on one line inside the item: ${JSON.stringify(rail)}`);
 
+  // A wide failure pill beside a denial pill must not squeeze the Health label.
+  await page.locator('#rail-count-denials').evaluate((node) => {
+    node.textContent = '9 denied';
+    node.hidden = false;
+    node.classList.add('alert');
+  });
+  const healthTab = page.locator('.rail [data-tab="diagnostics"]');
+  const desktopRailLayout = await healthTab.evaluate((tab) => {
+    const label = tab.querySelector('.rail-label');
+    const counts = [...tab.querySelectorAll('.rail-count')].filter((node) => !node.hidden);
+    const bounds = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, width: rect.width };
+    };
+    return {
+      label: label.textContent,
+      labelFits: label.scrollWidth <= label.clientWidth,
+      labelBounds: bounds(label),
+      counts: counts.map((node) => ({ text: node.textContent, bounds: bounds(node) })),
+    };
+  });
+  evidenceLog.desktopRailLayout = desktopRailLayout;
+  assert(desktopRailLayout.label === 'Health' && desktopRailLayout.labelFits,
+    `the desktop Health label remains fully readable beside its counts: ${JSON.stringify(desktopRailLayout)}`);
+  assert(desktopRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 denied',
+    `both desktop Health counts remain visible: ${JSON.stringify(desktopRailLayout)}`);
+  assert(desktopRailLayout.counts[0].bounds.top >= desktopRailLayout.labelBounds.bottom
+    && desktopRailLayout.counts[1].bounds.top >= desktopRailLayout.counts[0].bounds.bottom,
+  `attention counts move below the label without overlapping: ${JSON.stringify(desktopRailLayout)}`);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await healthTab.scrollIntoViewIfNeeded();
+  const phoneRailLayout = await healthTab.evaluate((tab) => {
+    const label = tab.querySelector('.rail-label');
+    const counts = [...tab.querySelectorAll('.rail-count')].filter((node) => !node.hidden);
+    const rect = (node) => node.getBoundingClientRect();
+    const bounds = (node) => {
+      const box = rect(node);
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width };
+    };
+    const tabs = tab.closest('.tabs').getBoundingClientRect();
+    const tabBounds = bounds(tab);
+    return {
+      label: label.textContent,
+      labelFits: label.scrollWidth <= label.clientWidth,
+      labelBounds: bounds(label),
+      counts: counts.map((node) => ({ text: node.textContent, bounds: bounds(node) })),
+      tabVisible: tabBounds.left >= tabs.left - 1 && tabBounds.right <= tabs.right + 1,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
+  });
+  evidenceLog.phoneRailLayout = phoneRailLayout;
+  assert(phoneRailLayout.label === 'Health' && phoneRailLayout.labelFits && phoneRailLayout.tabVisible && !phoneRailLayout.pageOverflow,
+    `the horizontal phone rail shows the full Health label without page overflow: ${JSON.stringify(phoneRailLayout)}`);
+  assert(phoneRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 denied'
+    && phoneRailLayout.counts.every((item) => Math.abs(item.bounds.top - phoneRailLayout.labelBounds.top) <= 1),
+  `both Health counts stay alongside the label on the phone rail: ${JSON.stringify(phoneRailLayout)}`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // Problems first, each with its full message and remediation.
   const problems = await page.locator('#doctor-body > .doctor-list .doctor-row').evaluateAll((rows) => rows.map((row) => ({
     status: row.querySelector('.doctor-status').textContent,
@@ -448,6 +507,7 @@ try {
       'browser-doctor-refresh-shows-busy-state-until-settled',
       'browser-doctor-poll-never-runs-doctor',
       'browser-doctor-health-rail-count',
+      'browser-doctor-health-rail-label-and-counts-fit-desktop-and-phone',
       'browser-doctor-late-cached-read-never-replaces-refresh',
       'browser-doctor-newer-cached-report-updates-panel',
       'browser-doctor-retired-host-response-discarded',
@@ -455,7 +515,7 @@ try {
       'browser-doctor-unavailable-on-older-host',
       'browser-doctor-requests-are-read-only',
     ],
-    viewports: ['1440', '768'],
+    viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
   console.log('Dashboard doctor browser checks passed at 1440px and 768px: rows, remediation copy, cached age, Refresh, peek-only polling, host forward and unavailable host.');
