@@ -10,10 +10,9 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskOsReadout, TaskRow, declared_context_files, task_record_json,
-    task_show_json, task_status_transition_allowed, task_status_transition_required_field,
+    PullRequestLinks, TaskOsReadout, TaskRow, task_record_json, task_show_json,
+    task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -335,57 +334,4 @@ fn explicit_task_crew(task: &Task) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-/// Add dashboard-only contention highlights to the authoritative lock listing.
-pub(crate) fn decorate_task_locks(
-    runtime: &OrbitRuntime,
-    mut locks: Value,
-) -> Result<Value, OrbitError> {
-    let candidates = runtime.task_candidates(
-        &orbit_core::application::task::TaskListFilter {
-            statuses: Some(vec![
-                TaskStatus::Backlog,
-                TaskStatus::InProgress,
-                TaskStatus::Review,
-            ]),
-            ..Default::default()
-        },
-        usize::MAX,
-    )?;
-    // Reuse admission's declaration expansion and indexed overlap rules. The
-    // informational population is deliberately narrower than lock holders:
-    // review tasks still appear in by_task, but never cause these highlights.
-    let mut contenders = OverlapIndex::new();
-    for holder in locks["by_task"].as_array().into_iter().flatten() {
-        if holder["status"] != "in-progress" {
-            continue;
-        }
-        if let Some(id) = holder["id"].as_str() {
-            for selector in holder["context_files"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-            {
-                contenders.insert(selector, (id.to_string(), selector.to_string()));
-            }
-        }
-    }
-    let contention: BTreeMap<String, Value> = candidates.items.iter()
-        .filter(|task| matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress))
-        .map(|task| {
-            let entries: Vec<Value> = task.context_files.iter().map(|selector| {
-                let expanded = declared_context_files(std::slice::from_ref(selector), &runtime.paths().repo_root);
-                let matches: Vec<Value> = expanded.retained.iter()
-                    .flat_map(|requested| contenders.overlapping(requested))
-                    .filter(|(_, (id, _))| *id != task.id)
-                    .map(|(_, (id, held))| json!({"id": id, "status": "in-progress", "selector": held}))
-                    .collect();
-                json!({"selector": selector, "known": expanded.invalid.is_empty(), "contenders": matches})
-            }).collect();
-            (task.id.clone(), json!({"status": task.status.to_string(), "entries": entries}))
-        }).collect();
-    locks["context_contention"] = json!(contention);
-    Ok(locks)
 }

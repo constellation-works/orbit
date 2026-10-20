@@ -30,6 +30,27 @@ impl TaskV2Store {
         Ok(select_candidates(envelopes, &filter, limit))
     }
 
+    /// Informational read: never enter coordination, settle pending writes,
+    /// repair the index or persist freshness proofs. A stale index falls back
+    /// to the same strict bundle scan, without publishing a repair.
+    pub(crate) fn observe_task_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<TaskCandidates, OrbitError> {
+        let filter = filter.normalized();
+        if let Some(unsettled) = self.validate_index_with_proofs(false)? {
+            return self.indexed_candidates(&filter, limit, unsettled);
+        }
+        let envelopes = self
+            .bundle_store
+            .list_bundles()?
+            .into_iter()
+            .map(|bundle| bundle.envelope)
+            .collect();
+        Ok(select_candidates(envelopes, &filter, limit))
+    }
+
     /// Selection over a validated index. SQL answers every predicate it
     /// projects, the ordering, and — when nothing is left for `matches` —
     /// the limit and the total, so only the selected envelopes leave the

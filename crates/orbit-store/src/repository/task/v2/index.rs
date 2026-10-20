@@ -165,6 +165,13 @@ impl TaskV2Store {
     /// comparison — a reused envelope that disagrees with its index row still
     /// sends the caller to a rebuild.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        self.validate_index_with_proofs(true)
+    }
+
+    pub(super) fn validate_index_with_proofs(
+        &self,
+        persist_proofs: bool,
+    ) -> Result<Option<Vec<String>>, OrbitError> {
         let _span = orbit_common::tracing::trace_span!(
             target: "orbit.store.task_query",
             "task_index_freshness",
@@ -177,7 +184,7 @@ impl TaskV2Store {
             // against a new snapshot before paying for a workspace-wide
             // bundle scan.
             for _ in 0..2 {
-                if let Some(unsettled) = self.validate_index_once()? {
+                if let Some(unsettled) = self.validate_index_once(persist_proofs)? {
                     orbit_common::tracing::debug!(
                         target: "orbit.store.task_query",
                         workspace_id = %self.workspace_id,
@@ -191,7 +198,7 @@ impl TaskV2Store {
         })
     }
 
-    fn validate_index_once(&self) -> Result<Option<Vec<String>>, OrbitError> {
+    fn validate_index_once(&self, persist_proofs: bool) -> Result<Option<Vec<String>>, OrbitError> {
         let (registered, indexed) = hold_step(INDEX_SNAPSHOT_STEP, || {
             Ok::<_, OrbitError>((
                 self.registry.tasks_for_workspace(&self.workspace_id)?,
@@ -235,7 +242,7 @@ impl TaskV2Store {
         // not even attempt to persist them through a read-only connection,
         // and a busy registry writer skips them rather than holding this
         // read's boundary section while it waits.
-        if !self.registry.is_read_only()? {
+        if persist_proofs && !self.registry.is_read_only()? {
             let recorded = hold_step(ENVELOPE_STAMP_WRITE_STEP, || {
                 self.registry
                     .record_envelope_stamps(&self.workspace_id, &proofs)

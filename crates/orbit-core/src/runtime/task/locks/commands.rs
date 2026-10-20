@@ -13,7 +13,6 @@ use orbit_store::contracts::{
     TaskReservationReserveParams,
 };
 use orbit_tools::ReservationOwnerContext;
-use orbit_types::task::TaskEnvelopeV2;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
@@ -41,61 +40,10 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     let repo_root = runtime.paths().repo_root.as_path();
     let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
-    let locked_files: BTreeSet<String> = locked_surfaces
-        .iter()
-        .flat_map(|(_, files)| files.iter().cloned())
-        .chain(
-            reservation_result
-                .reservations
-                .iter()
-                .flat_map(|reservation| reservation.files.iter().cloned()),
-        )
-        .collect();
-    let by_reservation = reservation_result
-        .reservations
-        .iter()
-        .map(|reservation| {
-            json!({
-                "reservation_id": reservation.reservation_id.clone(),
-                "workspace_id": reservation.workspace_id.clone(),
-                "task_ids": reservation.task_ids.clone(),
-                "files": reservation.files.clone(),
-                "actor": reservation.actor.clone(),
-                "created_at": reservation.created_at.clone(),
-                "expires_at": reservation.expires_at.clone(),
-                "owner_run_id": reservation.owner_run_id.clone(),
-                "owner_metadata_json": reservation.owner_metadata_json.clone(),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    // Counts distinct task IDs across both projections: a task-bound
-    // reservation names task IDs that need not belong to any active task (the
-    // reserving task may still be `backlog`), so counting only
-    // `locked_surfaces` undercounts whenever a reservation is the sole holder
-    // for a task.
-    let distinct_tasks: BTreeSet<&str> = locked_surfaces
-        .iter()
-        .map(|(task, _)| task.id.as_str())
-        .chain(
-            reservation_result
-                .reservations
-                .iter()
-                .flat_map(|reservation| reservation.task_ids.iter().map(String::as_str)),
-        )
-        .collect();
-
-    Ok(json!({
-        "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
-        "by_task": locked_surfaces
-            .iter()
-            .map(|(task, files)| task_lock_to_json(task, files.clone()))
-            .collect::<Vec<_>>(),
-        "by_reservation": by_reservation,
-        "total_locked": locked_files.len(),
-        "total_tasks": distinct_tasks.len(),
-        "total_reservations": reservation_result.reservations.len(),
-    }))
+    Ok(super::projection::lock_listing_json(
+        &locked_surfaces,
+        &reservation_result.reservations,
+    ))
 }
 
 pub(crate) fn release(
@@ -591,17 +539,4 @@ fn inherited_only_epic_root_error(task_id: &str) -> OrbitError {
          reserving it would hold nothing while that work runs beside it. Declare its own surface \
          with `orbit task update --context`, or retire the root"
     ))
-}
-
-fn task_lock_to_json(task: &TaskEnvelopeV2, context_files: Vec<String>) -> Value {
-    json!({
-        "id": task.id,
-        "title": task.title,
-        "status": task.status.to_string(),
-        "job_run_id": task.job_run_id,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "context_files": context_files,
-    })
 }
