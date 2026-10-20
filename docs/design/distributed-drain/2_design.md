@@ -1070,8 +1070,8 @@ claim for it, and a replica says the owner holds that state.
   callout above the tabs for a stopped landing, an unresolved merge intent or invalidated landing
   authority, and a progress strip (Implemented, Handed off, Approved, Landing, Done). The callout
   names the failed required check and test when the opaque landing evidence records them, and its
-  **Retry landing…** opens the Delivery tab at the panel's own retry control rather than sending
-  anything itself.
+  **Retry landing…** opens the Delivery tab at the panel's recovery reason field, beside its own
+  **Retry landing** control, rather than sending anything itself.
   The raw evidence stays available behind a disclosure, pretty-printed when it is JSON.
 - `ClaimInvocation` and `HandoffObservation` are not constructible outside trusted runtime code,
   so the HTTP layer holds no lifecycle state. These are owner-local actions; the follower gate is

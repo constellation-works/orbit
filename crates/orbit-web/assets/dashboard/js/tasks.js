@@ -2601,7 +2601,7 @@ function goToLandingRetry(detail, claim) {
   if (typeof detail.activateTab === "function") detail.activateTab("delivery");
   const panel = Array.from(detail.querySelectorAll(".claim-panel"))
     .find((node) => node.getAttribute("data-claim-id") === String((claim && claim.claim_id) || ""));
-  const target = panel && (panel.querySelector('[data-reason-for="retry-handoff"]') || panel.querySelector(".claim-actions"));
+  const target = panel && (panel.querySelector('[data-reason-for~="retry-handoff"]') || panel.querySelector(".claim-actions"));
   if (!target) return;
   if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center", behavior: "smooth" });
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });

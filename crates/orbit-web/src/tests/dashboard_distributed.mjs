@@ -538,7 +538,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
   const input = reasonInput(block);
   assert.ok(input, "revocation asks for a reason");
-  assert.equal(input.getAttribute("aria-label"), "Revoke authority reason");
+  assert.equal(input.getAttribute("aria-label"), "Recovery reason");
   input.value = "candidate superseded";
 
   const revoked = claim();
@@ -782,8 +782,9 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(confirms.length, 1, "revoking asks first");
   assert.ok(confirms[0].includes("ORB-2"), `the confirmation names the task: ${confirms[0]}`);
   assert.ok(/withdraws? (completion )?authority/i.test(confirms[0]), `the confirmation names the effect: ${confirms[0]}`);
-  // Recovery has its own reason field (the second one in the row).
-  block.querySelectorAll("input.claim-reason")[1].value = "host was rebuilt";
+  // Recovery shares the card's one reason field.
+  assert.equal(block.querySelectorAll("input.claim-reason").length, 1, "one reason field serves every reason-gated action");
+  reasonInput(block).value = "host was rebuilt";
   press(recoveryButton(block, "backlog"));
   await settle();
   assert.equal(confirms.length, 2, "recovering asks first");
@@ -1016,7 +1017,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   let block = await mount();
   press(button(block, "Retry landing")); await settle();
   assert.equal(sent.length, 0, "retry requires an operator reason");
-  block.querySelector('[data-reason-for="retry-handoff"]').value = "provider now permits this candidate";
+  block.querySelector('[data-reason-for~="retry-handoff"]').value = "provider now permits this candidate";
   nextAction = { status: 503, body: { error: "reply lost" } };
   press(button(block, "Retry landing")); await settle();
   assert.equal(sent.length, 1);
@@ -1028,7 +1029,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(first.body.expected_latest_state, "stopped");
   assert.ok(first.body.request_key);
   block = await mount();
-  block.querySelector('[data-reason-for="retry-handoff"]').value = "provider now permits this candidate";
+  block.querySelector('[data-reason-for~="retry-handoff"]').value = "provider now permits this candidate";
   press(button(block, "Retry landing")); await settle();
   assert.equal(sent[1].body.request_key, first.body.request_key, "a rebuilt panel reuses durable replay identity");
   stopped.handoff.landing.state = "dispatched";
@@ -1136,8 +1137,9 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(sent.length, 0, "a blank reason sends nothing");
   assert.equal(confirms.length, 0, "a blank reason does not ask for confirmation");
   assert.equal(input.getAttribute("aria-invalid"), "true", "the empty field is marked invalid");
-  const problem = block.querySelector(".claim-feedback.error");
+  const problem = block.querySelector(".claim-reason-problem");
   assert.ok(problem && problem.getAttribute("role") === "alert" && problem.textContent.includes("needs a reason"), `the missing reason is announced: ${block.textContent}`);
+  assert.equal(input.getAttribute("aria-describedby"), problem.id, "the announcement is tied to the field it is about");
   assert.ok(document.activeElement === input, "focus returns to the field that needs input");
 
   // Whitespace is still blank.
@@ -1151,6 +1153,32 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   await settle();
   assert.equal(sent.length, 1, "with a reason the decision goes through");
   assert.equal(sent[0].body.reason, "host was rebuilt");
+}
+
+// --- a reviewed handoff names its verdict, never an object -----------------------
+
+{
+  // A before-landing review carries its evidence as the disposition's one
+  // variant; the line reads the verdict and the reviewer, not "[object Object]".
+  const reviewed = claim();
+  reviewed.handoff.review = {
+    policy: "before_landing",
+    disposition: {
+      before_landing: {
+        attempt_id: "rv-1", verdict: "accept_with_fixes", reviewed_head_sha: CANDIDATE, reviewed_base_sha: BASE,
+        reviewer_crew: "codex-high", reviewer_run_id: "jrun-review-1",
+        certificate: { path: "review/certificate.json", sha256: "f".repeat(64) },
+      },
+    },
+    is_code_review: true,
+    summary: "before-landing review accept_with_fixes by crew `codex-high` (attempt rv-1)",
+  };
+  consoleBody = console_([reviewed]);
+  const block = await mount();
+  const review = block.querySelector(".claim-line.review-disposition");
+  assert.ok(review, "the handoff has a review line");
+  assert.ok(!review.textContent.includes("[object Object]"), `the review line never prints an object: ${review.textContent}`);
+  assert.ok(/accepted with fixes · before landing · codex-high/.test(review.textContent), `the review line names the verdict, timing and reviewer: ${review.textContent}`);
 }
 
 // --- a candidate with missing fields does not print placeholders ---------------------
