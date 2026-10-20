@@ -507,7 +507,7 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* The install command under the hero CTAs, one click to copy. Sized to its
-   content so it reads as a command, not a third button. */
+   content on wider screens so it reads as a command, not a third button. */
 .orbit-hero-install {
   align-items: center;
   background: var(--sl-color-bg-inline-code);
@@ -533,10 +533,30 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* The raw-HTML code transform inserts explicit <wbr> break points after
-   slashes. Remove them here so the fit-content box sizes to the full command;
-   the code element handles narrow screens with its own horizontal scrolling. */
+   slashes. Remove them here so the wider box sizes to the full command. */
 .orbit-hero-install code wbr {
   display: none;
+}
+
+/* Keep the command readable on phone layouts: share the row with the copy
+   control, but let the code wrap inside the single install surface. */
+@media (max-width: 47.999rem) {
+  .orbit-hero-install {
+    width: 100%;
+  }
+
+  .orbit-hero-install code:not(pre code) {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    flex: 1 1 0%;
+    max-width: none;
+    min-width: 0;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    padding: 0;
+    white-space: normal;
+  }
 }
 
 /* Inline-code styling reserves 3ch for punctuation after the code. The hero
