@@ -103,6 +103,14 @@
   font-size: 12.5px;
   color: var(--fg-mute);
 }
+/* The full page has no list for the task to be outside of: the note and the
+   highlight go, and the box keeps only its crew select. */
+main.tasks-layout.task-page-mode .pinned-note { display: none; }
+main.tasks-layout.task-page-mode .pinned-external {
+  padding: 0;
+  border-color: transparent;
+  background: none;
+}
 #tasks-panel > .controls { border-bottom: 0; padding: 0 0 14px; }
 
 #tasks-panel > .body {

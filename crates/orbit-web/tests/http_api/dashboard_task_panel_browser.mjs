@@ -17,7 +17,7 @@ fs.mkdirSync(evidence, { recursive: true });
 // Runs in the page before the app: a fixed task list and the reads it makes.
 const fixture = `
 globalThis.EventSource = class { close() {} };
-const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog')];
+const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
 const tasks = statuses.map((status, index) => ({
   id: 'PANEL-' + (index + 1),
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
@@ -39,7 +39,7 @@ const full = task => ({
   ],
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
 });
-globalThis.panelFixture = { tasks, reads: [], writes: [] };
+globalThis.panelFixture = { tasks, reads: [], writes: [], patches: [] };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
   const api = url.pathname;
@@ -68,6 +68,11 @@ globalThis.fetch = async (input, options = {}) => {
   const detail = api.match(/^\\/api\\/tasks\\/([^/]+)$/);
   if (detail) {
     const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(detail[1]));
+    if (task && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      globalThis.panelFixture.patches.push({ id: task.id, body });
+      task.crew = body.crew;
+    }
     return task ? json(full(task)) : json({ error: 'not found' }, 404);
   }
   return json({ items: [], total: 0 });
@@ -309,6 +314,53 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     results.inlineActions = true;
+  }
+
+  // A task outside the filter (PANEL-31 is done) is pinned by its id. The full
+  // page drops the list-only note and shows the crew once, through the select
+  // that changes it; the dock keeps the note with the same single crew control.
+  {
+    const { page, errors, context } = await openPage();
+    await page.goto(origin + '/?workspace=one#tasks/PANEL-31');
+    await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
+    await capture(page, 'tasks-page-pinned-dark-1440.png');
+    assert.equal(await page.locator('#task-detail-body .pinned-note').isVisible(), false, 'The full page drops the outside-the-list note: there is no list for the task to be outside of');
+    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'The full page shows the crew through one select');
+    assert.equal(await page.locator('#task-detail-body .task-chip-crew').count(), 0, 'The lever row does not repeat the crew');
+    await page.locator('#task-detail-body .task-crew-select').selectOption('sol');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-31', body: { crew: 'sol' } }], 'Changing the crew on the full page saves it to the pinned task');
+    assert.equal(await page.locator('#task-detail-body .task-crew-select').inputValue(), 'sol', 'The select keeps the saved crew');
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+
+  {
+    const { page, errors, context } = await openPage({ url: '/?workspace=one#tasks?open=PANEL-31' });
+    await page.locator('#task-detail-body .pinned-note').waitFor({ state: 'visible' });
+    await capture(page, 'tasks-dock-pinned-dark-1440.png');
+    assert.equal(await page.locator('#task-detail-body .pinned-note').innerText(), 'Not in the current list · done', 'The dock keeps the outside-the-list note');
+    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'The dock shows the crew through one select');
+    assert.equal(await page.locator('#task-detail-body .task-chip-crew').count(), 0, 'The lever row does not repeat the crew beside the dock');
+    await page.locator('#task-detail-body .task-crew-select').selectOption('opus');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-31', body: { crew: 'opus' } }], 'Changing the crew beside the list saves it to the pinned task');
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+
+  // At 375px the pinned page keeps one crew control and no note.
+  {
+    const { page, errors, context } = await openPage({ width: 375, height: 812 });
+    await page.goto(origin + '/?workspace=one#tasks/PANEL-31');
+    await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
+    await capture(page, 'tasks-page-pinned-dark-375.png');
+    assert.equal(await page.locator('#task-detail-body .pinned-note').isVisible(), false, 'At 375px the full page drops the outside-the-list note');
+    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'At 375px the full page shows the crew through one select');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The pinned page does not overflow the phone width');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.pinned = true;
   }
 
   // At 375px the pane is a full-screen modal sheet with Back.
