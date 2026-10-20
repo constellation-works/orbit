@@ -81,12 +81,12 @@ spec:
                   claimed:
                     type: string
   # Agent-returned data is advisory until apply_task_pilot_results validates
-  # the complete fan-in, so keep fields optional at this boundary (no
-  # `required` list at any level) and let that validation step — not this
-  # schema — reject an incomplete partition. Field *types* below mirror the
-  # canonical apply parser exactly (e.g. adr_conflicts is an array of plain
-  # strings, never an array of objects) so a producer sees the concrete
-  # contract instead of an avoidable shape failure after full exploration.
+  # the complete fan-in, so keep partition and assessment fields optional at
+  # this boundary and let that validation step reject incomplete assessments.
+  # Structured findings declare their own required fields. Field types mirror the
+  # canonical apply parser exactly (e.g. adr_conflicts stays an array of plain
+  # strings, while surface/utility findings may carry explicit severity) so a
+  # producer sees the concrete contract instead of an avoidable shape failure after full exploration.
   output_schema_json:
     type: object
     properties:
@@ -169,13 +169,37 @@ spec:
               items:
                 type: string
             utility_warnings:
+              description: >
+                Findings with explicit admission severity. Advisory observations
+                set holds_promotion to false; legacy strings always hold.
               type: array
               items:
-                type: string
+                oneOf:
+                  - type: string
+                  - type: object
+                    required: [text, holds_promotion]
+                    properties:
+                      text:
+                        type: string
+                        minLength: 1
+                      holds_promotion:
+                        type: boolean
             surface_warnings:
+              description: >
+                Findings with explicit admission severity. Advisory observations
+                set holds_promotion to false; legacy strings always hold.
               type: array
               items:
-                type: string
+                oneOf:
+                  - type: string
+                  - type: object
+                    required: [text, holds_promotion]
+                    properties:
+                      text:
+                        type: string
+                        minLength: 1
+                      holds_promotion:
+                        type: boolean
             required_os:
               type: array
               items:
@@ -483,9 +507,21 @@ spec:
        `surface_warnings`.
        A task never lists itself as a dependency or blocker: every task ID in
        `blocked_by` must name another task.
-       Each of `blocked_by`, `adr_conflicts`, `utility_warnings`, and
-       `surface_warnings` is an array of plain strings,
-       one string per finding combining the finding and its citation — for
+       Every `blocked_by` or `adr_conflicts` entry holds automatic promotion,
+       as does each deterministic `validation_tool_warnings` entry. Keep those
+       fields as arrays of plain strings. For `utility_warnings` and
+       `surface_warnings`, emit objects with `text` (finding plus citation) and
+       the required boolean `holds_promotion`. Set it true only when the task
+       as written would ship the wrong behavior, conflict with the current
+       contract, or cannot be validated by the implementation lane. Set it false
+       for advisory observations: adjacent out-of-scope work, optional cleanup,
+       or useful context that does not prevent this task from shipping correctly.
+       For example, an old section name in an adjacent comment outside this
+       task's criterion is advisory. Advisory entries persist in the assessment
+       and reach the operator and implementing worker, but never hold promotion
+       or appear as held findings. Legacy plain strings in these two fields
+       still hold; always emit explicit severity for new findings.
+       Combine each finding and its citation in its text — for
        example a non-empty adr_conflicts entry reads
        ["the module this task would change still exports the type it removes
        (verified via rg -n 'pub use Bar' at source_revision)"]; never an array

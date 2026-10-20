@@ -225,7 +225,11 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
             assessment
                 .get(field)
                 .and_then(Value::as_array)
-                .is_some_and(Vec::is_empty)
+                .is_some_and(|findings| {
+                    findings
+                        .iter()
+                        .all(|finding| !super::promotion::finding_holds_promotion(field, finding))
+                })
         })
         && ["duplicate_of", "already_landed", "release_action_required"]
             .iter()
@@ -291,12 +295,7 @@ pub(super) fn validate_recommendations(
             format!("task {task_id} with high confidence must not have evidence_gaps"),
         ));
     }
-    for field in [
-        "blocked_by",
-        "adr_conflicts",
-        "utility_warnings",
-        "surface_warnings",
-    ] {
+    for field in ["blocked_by", "adr_conflicts"] {
         string_array_value(
             assessment.get(field).ok_or_else(|| {
                 DispatchError::action_failed(action, format!("task {task_id} is missing {field}"))
@@ -304,6 +303,33 @@ pub(super) fn validate_recommendations(
             field,
             action,
         )?;
+    }
+    for field in ["utility_warnings", "surface_warnings"] {
+        let findings = assessment
+            .get(field)
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                DispatchError::action_failed(
+                    action,
+                    format!("task {task_id} {field} must be an array"),
+                )
+            })?;
+        for finding in findings {
+            if finding.is_string() {
+                continue;
+            }
+            required_string(finding, "text", action)?;
+            if finding
+                .get("holds_promotion")
+                .and_then(Value::as_bool)
+                .is_none()
+            {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!("task {task_id} {field} finding must have a boolean holds_promotion"),
+                ));
+            }
+        }
     }
     for field in ["duplicate_of", "already_landed"] {
         if assessment.get(field).is_none() {
