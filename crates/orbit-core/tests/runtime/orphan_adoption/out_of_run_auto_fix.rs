@@ -339,6 +339,150 @@ fn a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fi
     assert_eq!(fx.retries(&leaf.run).len(), 1);
 }
 
+fn skipped_repairs_are_checkpointed_and_visible_in_readiness() {
+    let fx = fixture();
+    let spent = fx.stopped_leaf(89, "review", Shelf::Review);
+    fx.blocked(&spent, "spent-head", "orbit-bot", true, &[]);
+    // A published leaf that failed before completion cannot be resumed there.
+    let mut state = fx.jobs.read_run_state(&spent.run).unwrap().unwrap();
+    state.record_step(3, JobRunState::Failed, None, None);
+    fx.jobs.write_run_state(&spent.run, &state).unwrap();
+    let held = fx.stopped_leaf(90, "review", Shelf::OperatorHold);
+    fx.blocked(&held, "held-head", "orbit-bot", false, &["Test"]);
+    let drain = fx.drain();
+    fx.step(&drain, 0, "adopt_orphans", JobRunState::Success, None);
+
+    let pass = fx.pass(&drain, "review", true);
+    let stored = fx.runtime.read_run_state(&drain).unwrap().unwrap();
+    let run = fx.runtime.show_job_run_observed(&drain).unwrap();
+    let steps = orbit_core::application::job::run_display_steps(&run, Vec::new);
+    let output = steps.records[0]
+        .output(&stored)
+        .expect("run show exposes the completed pass immediately");
+    assert_eq!(output, &pass);
+    for (leaf, reason, blocker) in [
+        (&spent, "not_resumable", json!("conflict")),
+        (&held, "operator_hold", Value::Null),
+    ] {
+        let skip = output["auto_fix"]["skipped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == leaf.task)
+            .unwrap();
+        assert_eq!(skip["reason"], reason, "{output}");
+        assert_eq!(skip["pr_number"], leaf.number.to_string());
+        assert_eq!(skip["blocker"], blocker);
+    }
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let skipped = readiness["out_of_run_auto_fix"].as_array().unwrap();
+    assert_eq!(skipped.len(), 2, "{readiness}");
+    assert!(
+        skipped
+            .iter()
+            .all(|entry| entry["state"] == "skipped" && entry["drain_run_id"] == drain)
+    );
+    assert!(
+        skipped
+            .iter()
+            .any(|entry| entry["pr_number"] == "89" && entry["reason"] == "not_resumable")
+    );
+    assert!(
+        skipped
+            .iter()
+            .any(|entry| entry["pr_number"] == "90" && entry["reason"] == "operator_hold")
+    );
+
+    // The latest pass replaces the old snapshot, including when auto-fix is off.
+    let plain = fx.pass(&drain, "review", false);
+    let stored = fx.runtime.read_run_state(&drain).unwrap().unwrap();
+    assert_eq!(steps.records[0].output(&stored), Some(&plain));
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    assert!(
+        readiness.get("out_of_run_auto_fix").is_none(),
+        "{readiness}"
+    );
+
+    let final_pass = fx.pass(&drain, "review", true);
+    fx.jobs
+        .finalize_job_run(&drain, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    let stored = fx.runtime.read_run_state(&drain).unwrap().unwrap();
+    assert_eq!(
+        steps.records[0].output(&stored),
+        Some(&final_pass),
+        "terminal compaction retains the last pass"
+    );
+    let ended = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    assert!(
+        ended["out_of_run_auto_fix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["drain_live"] == false),
+        "{ended}"
+    );
+}
+
+fn full_capacity_still_reports_the_pull_requests_left_alone() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(80, "review", Shelf::Review);
+    fx.blocked(&leaf, "capacity-head", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+    let pass = fx.runtime.run_deterministic(
+        "adopt_orphaned_deliveries", &json!({}),
+        &json!({"run_id": drain, "max_active_leaf_runs": 0, "completion": "review", "auto_fix": true}),
+        ToolContext::default(),
+    ).unwrap();
+    assert_eq!(
+        repair_skip(&pass, &leaf.task).as_deref(),
+        Some("no_capacity"),
+        "{pass}"
+    );
+    assert_eq!(
+        fx.forge.0.lock().unwrap().blocker_reads,
+        0,
+        "a held pass does not spend forge reads"
+    );
+    assert!(fx.retries(&leaf.run).is_empty());
+
+    let newer = fx.stopped_leaf(79, "review", Shelf::Review);
+    fx.blocked(&newer, "newer-head", "orbit-bot", false, &["Test"]);
+    let pass = fx.runtime.run_deterministic(
+        "adopt_orphaned_deliveries", &json!({}),
+        &json!({"run_id": drain, "max_active_leaf_runs": 1, "completion": "review", "auto_fix": true}),
+        ToolContext::default(),
+    ).unwrap();
+    assert!(started(&pass, &newer.task).is_some(), "{pass}");
+    assert_eq!(
+        repair_skip(&pass, &leaf.task).as_deref(),
+        Some("no_capacity"),
+        "the scan continues after its last slot is taken: {pass}"
+    );
+    let reads = fx.forge.0.lock().unwrap().blocker_reads;
+    fx.probe.sustain_memory(&fx.runtime, 95.0);
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(
+        repair_skip(&pass, &leaf.task).as_deref(),
+        Some("resource_throttled"),
+        "{pass}"
+    );
+    assert_eq!(
+        fx.forge.0.lock().unwrap().blocker_reads,
+        reads,
+        "pressure holds repairs without more forge reads"
+    );
+}
+
 fn red_checks_and_review_or_requeued_tasks_are_repaired_too() {
     let fx = fixture();
     let red = fx.stopped_leaf(82, "review", Shelf::Escalated);
@@ -530,6 +674,8 @@ fn the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs() {
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
+    skipped_repairs_are_checkpointed_and_visible_in_readiness,
+    full_capacity_still_reports_the_pull_requests_left_alone,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,
     a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,

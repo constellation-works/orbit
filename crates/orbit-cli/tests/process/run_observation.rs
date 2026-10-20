@@ -43,6 +43,7 @@ mod host_resources;
 #[cfg(unix)]
 mod job_exit_status;
 mod provider_limits;
+mod repair_skips;
 mod run_history;
 mod run_show_display;
 mod wait;

@@ -5,10 +5,11 @@
 //! `application::job::orphan_adoption`'s and
 //! `application::job::pr_repair_adoption`'s decision; this step only supplies
 //! the drain's authority and its free leaf slots. Only a malformed step input
-//! fails it; a store or forge error never ends the drain.
+//! or a failed checkpoint write fails it; candidate store or forge errors
+//! are reported in the completed pass instead.
 
 use chrono::Utc;
-use orbit_engine::DispatchError;
+use orbit_engine::{DispatchError, RuntimeHost};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -20,6 +21,24 @@ use super::drains::{
 };
 
 pub(crate) fn adopt_orphaned_deliveries(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    let mut output = adoption_pass(runtime, action, input)?;
+    if let Some(run_id) = drain_run_id(input)
+        && !runtime.is_write_free()
+    {
+        output["observed_at"] = json!(Utc::now());
+        // This is a loop-body step: the enclosing loop may not checkpoint
+        // until the drain ends. Save this pass now for run show and readiness,
+        // using the transactional update that preserves operator controls.
+        runtime.checkpoint_step_diagnostic(run_id, "adopt_orphans", &output)?;
+    }
+    Ok(output)
+}
+
+fn adoption_pass(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

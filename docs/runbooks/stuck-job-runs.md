@@ -1084,7 +1084,9 @@ refusals are:
 - `not_resumable` (checkpoint resume refused it)
 
 To see why a leaf was left alone, read the drain's latest `adopt_orphans` step output
-with `orbit run show <drain-run> --json`. The following are not decisions; a later
+with `orbit run show <drain-run> --step adopt_orphans --json` (the `step_output`
+field). Each completed pass replaces this checkpoint immediately, including
+while the enclosing drain loop is still running. The following are not decisions; a later
 pass considers the leaf again:
 
 - `authority`: a missing grant;
@@ -1149,11 +1151,23 @@ three times in all, so a resume that dies before it repairs cannot loop.
 
 Repairs take free drain slots after adoption. A pass held by host resource
 pressure starts none, and a pull request found unblocked is not read again for
-five minutes. `orbit run readiness` lists each live repair under
-`out_of_run_auto_fix`, and `orbit run show <run>` shows the repair in the resumed
-run's input. To see why a pull request was left alone, read `auto_fix.skipped` in
-the drain's latest `adopt_orphans` step output. The reasons are:
+five minutes. `orbit run readiness` lists live repairs and the latest pass's
+skipped candidates under `out_of_run_auto_fix`. Skipped entries have
+`state: "skipped"`, `reason`, `detail`, `pr_number`, `task_ids`, `source_run_id`,
+`drain_run_id`, `drain_live` and `observed_at`. A `blocker` is present when the
+pass verified a conflict or failed required checks; it is null for a refusal
+before the forge read, such as an operator hold or no capacity. These entries
+are a bounded snapshot of the newest 200 delivery leaves, not a fresh forge
+query. When no drain is live, readiness labels the most recent drain's snapshot
+as ended. `orbit run show <run>` shows a live repair in the resumed run's input.
 
+For the full persisted pass, including every skip and any `pass_error`, run
+`orbit run show <drain-run> --step adopt_orphans --json` and read
+`step_output.auto_fix.skipped`. Each entry names `task_id`, `pr_number`,
+`source_run_id`, `blocker`, `reason` and `detail`. The reasons are:
+
+- `no_capacity`: no free leaf slot remains after adoption and earlier repairs;
+- `resource_throttled`: host resource pressure holds this pass;
 - `operator_hold`: an operator blocked or requeued the task. Release it first;
 - `opted_out`: the task is tagged `no-auto-approve`;
 - `authority`: the run was started with `--complete` and the drain was not;
@@ -1169,7 +1183,9 @@ the drain's latest `adopt_orphans` step output. The reasons are:
 - `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
   and `task_moved`: a later pass tries again.
 
-A drain without `--auto-fix` never repairs out of run. Repair such a pull request
+A write-free pass reports `hold_reason: "write_free"` and does not scan or
+persist candidates. A stopped drain or a host shutdown hold also starts no
+scan. A drain without `--auto-fix` never repairs out of run. Repair such a pull request
 yourself, or requeue the task.
 
 ## A delivery pull request merged outside Orbit

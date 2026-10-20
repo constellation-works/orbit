@@ -281,8 +281,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     lines
 }
 
-/// Delivery leaves an `--auto-fix` drain resumed to repair a pull request no
-/// run was watching, one line each.
+/// Live repairs and the latest drain pass's skipped repair candidates.
 fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
     repairs
         .as_array()
@@ -296,6 +295,22 @@ fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join(", ");
+            if repair["state"] == "skipped" {
+                let ended = if repair["drain_live"].as_bool() == Some(false) {
+                    "ended drain"
+                } else {
+                    "drain"
+                };
+                return format!(
+                    "Out-of-run auto-fix skipped: {tasks} PR #{} ({}): {} — {} (latest pass of {ended} {}, {}).",
+                    repair["pr_number"].as_str().unwrap_or("-"),
+                    repair["blocker"].as_str().unwrap_or("blocker unknown"),
+                    repair["reason"].as_str().unwrap_or("unknown"),
+                    repair["detail"].as_str().unwrap_or("-"),
+                    repair["drain_run_id"].as_str().unwrap_or("-"),
+                    repair["observed_at"].as_str().unwrap_or("time unknown"),
+                );
+            }
             format!(
                 "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
                 repair["pr_number"].as_str().unwrap_or("-"),

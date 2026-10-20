@@ -867,12 +867,35 @@ pub fn explain_workspace_auto_readiness(
     if let Some(forecast) = last_forecast_view {
         payload["capacity"]["last_admission_forecast"] = forecast;
     }
-    // Delivery leaves an `--auto-fix` drain resumed to repair a pull request
-    // no run was watching; absent when none is live.
-    match runtime.live_out_of_run_auto_fixes() {
-        Ok(repairs) if repairs.is_empty() => {}
-        Ok(repairs) => payload["out_of_run_auto_fix"] = json!(repairs),
-        Err(error) => tracing::warn!("readiness shows no out-of-run auto-fix: {error}"),
+    // Keep the existing live-repair entries and add the latest completed
+    // pass's refusals. This is recorded history, never a new forge scan.
+    let mut repairs = match runtime.live_out_of_run_auto_fixes() {
+        Ok(repairs) => repairs,
+        Err(error) => {
+            tracing::warn!("readiness shows no live out-of-run auto-fix: {error}");
+            Vec::new()
+        }
+    };
+    if let Some(state) = &status_state
+        && let Some(pass) = state.pipeline.get("adopt_orphans")
+    {
+        for skipped in pass["auto_fix"]["skipped"].as_array().into_iter().flatten() {
+            repairs.push(json!({
+                "state": "skipped",
+                "task_ids": [skipped["task_id"]],
+                "pr_number": skipped["pr_number"],
+                "blocker": skipped["blocker"],
+                "reason": skipped["reason"],
+                "detail": skipped["detail"],
+                "source_run_id": skipped["source_run_id"],
+                "drain_run_id": status_run_id,
+                "drain_live": active_drain.is_some(),
+                "observed_at": pass["observed_at"],
+            }));
+        }
+    }
+    if !repairs.is_empty() {
+        payload["out_of_run_auto_fix"] = json!(repairs);
     }
     Ok(payload)
 }

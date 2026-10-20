@@ -1261,7 +1261,11 @@ it, and pull requests not opened by a delivery identity on the task's
 `orbit/<task>-` branch are never repaired. Each hand-back is recorded in task
 history as `pr_auto_fix_out_of_run`; a head and blocker is handed back once, and
 a pull request at most as many times as its budget. `orbit run readiness`
-lists the live ones under `out_of_run_auto_fix`. See
+lists live repairs and the latest drain pass's skipped candidates under
+`out_of_run_auto_fix` (`state: "skipped"`, with the PR, reason, detail and
+observation time). Blockers are null when a refusal preceded the forge read.
+`orbit run show <drain-run> --step adopt_orphans --json` exposes the persisted
+pass in `step_output`, including `auto_fix.skipped`. See
 [a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
 
 The crew comes from the existing pool resolution, in this order:
