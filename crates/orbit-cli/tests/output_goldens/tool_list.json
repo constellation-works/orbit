@@ -1227,7 +1227,7 @@
       },
       {
         "name": "type",
-        "description": "Optional task type",
+        "description": "Optional task type (defaults to chore)",
         "param_type": "string",
         "required": false
       },

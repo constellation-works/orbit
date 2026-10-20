@@ -36,6 +36,8 @@ fn tool(fixture: &Fixture, name: &str, input: Value) -> Value {
     fixture.json(&["tool", "run", name, "--input", &input.to_string()])
 }
 
+/// A proposed twin tagged `no-diff-expected`: it owes no selectors, so its add
+/// is clean. An untagged chore would warn, as the missing-context check does.
 fn add_proposed(fixture: &Fixture, title: &str) -> String {
     let created = fixture.json(&[
         "task",
@@ -44,6 +46,8 @@ fn add_proposed(fixture: &Fixture, title: &str) -> String {
         title,
         "--complexity",
         "low",
+        "--tag",
+        "no-diff-expected",
         "--json",
     ]);
     assert!(created.get("warnings").is_none(), "{created}");
@@ -89,7 +93,8 @@ fn add_warnings_match_on_cli_and_tool() {
     assert_eq!(warnings(&via_tool), cli_warnings, "{via_tool}");
 
     // A parent and a dependency this host cannot read are stored and warned
-    // about. The tool takes neither field on add.
+    // about. The tool takes neither field on add. The defaulted chore declares
+    // no selectors, so it also warns about the missing context.
     let cli = fixture.json(&[
         "task",
         "add",
@@ -104,9 +109,10 @@ fn add_warnings_match_on_cli_and_tool() {
         "--json",
     ]);
     let cli_warnings = warnings(&cli);
-    assert_eq!(cli_warnings.len(), 2, "{cli}");
+    assert_eq!(cli_warnings.len(), 3, "{cli}");
     assert_names(&cli_warnings, "EXT-1", &cli);
     assert_names(&cli_warnings, "EXT-2", &cli);
+    assert_names(&cli_warnings, "context_files", &cli);
 }
 
 fn update_and_approval_warnings_match_on_cli_and_tool() {
@@ -157,6 +163,77 @@ fn update_and_approval_warnings_match_on_cli_and_tool() {
     assert_eq!(warnings(&via_tool), cli_warnings, "{via_tool}");
 }
 
+/// The add warns about a missing-context gap that readiness reports as
+/// blocking, whatever the task type. A defaulted chore used to slip through.
+fn missing_context_warning_follows_readiness_on_cli_and_tool() {
+    let fixture = Fixture::new();
+
+    // No `--type`: the default is chore.
+    let cli = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Chore filed without scope",
+        "--description",
+        "Exercises the missing-context warning.",
+        "--complexity",
+        "low",
+        "--json",
+    ]);
+    let via_tool = tool(
+        &fixture,
+        "orbit.task.add",
+        json!({
+            "title": "Chore filed without scope",
+            "description": "Exercises the missing-context warning.",
+            "complexity": "low",
+        }),
+    );
+    for document in [&cli, &via_tool] {
+        assert_names(&warnings(document), "context_files", document);
+        let id = document["id"].as_str().expect("task id");
+        let shown = fixture.json(&["task", "show", id, "--json"]);
+        let blocking = shown["readiness"]["gaps"]
+            .as_array()
+            .expect("readiness gaps")
+            .iter()
+            .any(|gap| {
+                gap["code"] == json!("missing_context_files")
+                    && gap["severity"] == json!("blocking")
+            });
+        assert!(blocking, "readiness blocks the task: {shown}");
+    }
+    assert_eq!(warnings(&via_tool), warnings(&cli), "{via_tool}");
+
+    // A non-chore type keeps the warning.
+    let feature = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Feature filed without scope",
+        "--complexity",
+        "low",
+        "--type",
+        "feature",
+        "--json",
+    ]);
+    assert_names(&warnings(&feature), "context_files", &feature);
+
+    // A `no-diff-expected` task owes no selectors, so it gets no warning.
+    let no_diff = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Chore with no diff",
+        "--complexity",
+        "low",
+        "--tag",
+        "no-diff-expected",
+        "--json",
+    ]);
+    assert!(warnings(&no_diff).is_empty(), "{no_diff}");
+}
+
 #[test]
 fn write_preflight_cli_tool_parity() {
     for (name, check) in [
@@ -167,6 +244,10 @@ fn write_preflight_cli_tool_parity() {
         (
             "update_and_approval_warnings_match_on_cli_and_tool",
             update_and_approval_warnings_match_on_cli_and_tool as fn(),
+        ),
+        (
+            "missing_context_warning_follows_readiness_on_cli_and_tool",
+            missing_context_warning_follows_readiness_on_cli_and_tool as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

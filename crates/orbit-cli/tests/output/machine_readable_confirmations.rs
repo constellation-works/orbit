@@ -732,7 +732,16 @@ fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
     let known = String::from_utf8(
         fixture
             .orbit()
-            .args(["task", "add", "--title", "dep", "--complexity", "low"])
+            .args([
+                "task",
+                "add",
+                "--title",
+                "dep",
+                "--complexity",
+                "low",
+                "--tag",
+                "no-diff-expected",
+            ])
             .assert()
             .success()
             .stderr(predicate::str::contains("warning").not())
@@ -753,6 +762,8 @@ fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
             "with known dependency",
             "--complexity",
             "low",
+            "--tag",
+            "no-diff-expected",
             "--dependencies",
             &known,
         ])

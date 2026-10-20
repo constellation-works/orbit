@@ -711,7 +711,7 @@
             "type": "string"
           },
           "type": {
-            "description": "Optional task type",
+            "description": "Optional task type (defaults to chore)",
             "enum": [
               "feature",
               "bug",
