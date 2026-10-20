@@ -13,6 +13,51 @@ use super::support::{Fixture, isolated, json_ok};
 
 const WORKSPACE: &str = "?workspace=ws_http_fixture";
 
+#[test]
+fn dashboard_pr_status_admission_preserves_spelling_and_rejects_typos_atomically() {
+    isolated(
+        "task_writes::dashboard_pr_status_admission_preserves_spelling_and_rejects_typos_atomically",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "PR status admission", TaskStatus::Proposed);
+            let server = fixture.server(true);
+            let path = format!("/api/tasks/{id}{WORKSPACE}");
+            for value in [
+                "approve",
+                "approved",
+                "request-changes",
+                "request_changes",
+                "changes-requested",
+                "changes_requested",
+                " APPROVED ",
+                " Changes-Requested ",
+            ] {
+                let updated = json_ok(server.send("PATCH", &path, json!({"pr_status": value})));
+                assert_eq!(updated["pr_status"], value);
+                assert_eq!(
+                    fixture.runtime.get_task(&id).unwrap().pr_status.as_deref(),
+                    Some(value)
+                );
+            }
+            let before = json_ok(server.get(&path));
+            let refused = server.send("PATCH", &path, json!({"pr_status": "aproved", "title": "must not persist", "comment": "must not persist"}));
+            assert_eq!(refused.status().as_u16(), 400);
+            let error: Value = refused.json().unwrap();
+            assert!(
+                error["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unknown PR status 'aproved'"),
+                "{error}"
+            );
+            assert_eq!(json_ok(server.get(&path)), before);
+            let cleared = json_ok(server.send("PATCH", &path, json!({"pr_status": null})));
+            assert!(cleared["pr_status"].is_null());
+            assert!(fixture.runtime.get_task(&id).unwrap().pr_status.is_none());
+        },
+    );
+}
+
 /// The `warnings` a write returned, empty when the key is absent.
 fn warnings(body: &Value) -> Vec<String> {
     body.get("warnings")

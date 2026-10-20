@@ -191,6 +191,8 @@ pub struct TaskUpdateParams {
     pub source_task_id: Option<Option<String>>,
     pub planned_by: Option<Option<String>>,
     pub implemented_by: Option<Option<String>>,
+    /// PR review decision, validated with the merge reader's aliases and stored
+    /// verbatim. The outer `None` leaves it unchanged; `Some(None)` clears it.
     pub pr_status: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
     pub crew: Option<Option<String>>,

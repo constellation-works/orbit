@@ -5,6 +5,13 @@ The connected tool schema is authoritative for supported fields.
 
 ## Behavior-affecting optional fields
 
+- `pr_status` on `orbit.task.update` accepts `approve`, `approved`,
+  `request-changes`, `request_changes`, `changes-requested` and
+  `changes_requested`, ignoring case and surrounding whitespace for validation.
+  Core refuses unknown values before storing any part of the update, across
+  CLI (including `--host`), MCP and dashboard PATCH writes. Accepted spellings
+  are stored unchanged and the merge gate reads the same aliases. Use an empty
+  string on CLI/tool writes, or JSON null on dashboard PATCH, to clear it.
 - `context_files: ["file:<path>", "dir:<path>", "symbol:<path>#<name>:<kind>"]`
   — optional selectors used for context-lock serialization. An empty list
   holds no context lock. A single-slot run, an explicit ship and owner pull

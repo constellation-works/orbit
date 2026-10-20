@@ -618,13 +618,24 @@ fn task_update_refuses_empty_updates_and_unknown_pr_statuses() {
         "a rejected value must not be persisted: {shown}"
     );
 
-    fixture
-        .orbit()
-        .args(["task", "update", &id, "--pr-status", "approve"])
-        .assert()
-        .success();
-    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
-    assert_eq!(shown["pr_status"], "approve");
+    for value in [
+        "approve",
+        "approved",
+        "request-changes",
+        "request_changes",
+        "changes-requested",
+        "changes_requested",
+        " APPROVED ",
+        " Changes-Requested ",
+    ] {
+        fixture
+            .orbit()
+            .args(["task", "update", &id, "--pr-status", value])
+            .assert()
+            .success();
+        let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
+        assert_eq!(shown["pr_status"], value);
+    }
     fixture
         .orbit()
         .args(["task", "update", &id, "--pr-status", ""])

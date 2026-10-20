@@ -5,6 +5,57 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};
+use serde_json::json;
+
+fn tool_pr_status_admission_preserves_spelling_and_rejects_typos_atomically() {
+    let runtime = OrbitRuntime::in_memory().unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "PR status admission".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    for (value, expected) in [
+        ("approve", "APPROVED"),
+        ("approved", "APPROVED"),
+        ("request-changes", "CHANGES_REQUESTED"),
+        ("request_changes", "CHANGES_REQUESTED"),
+        ("changes-requested", "CHANGES_REQUESTED"),
+        ("changes_requested", "CHANGES_REQUESTED"),
+        (" APPROVED ", "APPROVED"),
+        (" Changes-Requested ", "CHANGES_REQUESTED"),
+    ] {
+        assert_eq!(orbit_engine::normalize_review_decision(value), expected);
+        runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task.id, "model": "codex", "pr_status": value}),
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.get_task(&task.id).unwrap().pr_status.as_deref(),
+            Some(value)
+        );
+    }
+    let before = runtime.get_task(&task.id).unwrap();
+    let history = runtime.get_task_history(&task.id).unwrap();
+    let comments = runtime.get_task_comments(&task.id).unwrap();
+    let error = runtime.run_tool("orbit.task.update", json!({"id": task.id, "model": "codex", "pr_status": "aproved", "title": "must not persist", "comment": "must not persist"})).expect_err("unknown review status must refuse the entire write");
+    assert!(
+        error.to_string().contains("unknown PR status 'aproved'"),
+        "{error}"
+    );
+    assert_eq!(runtime.get_task(&task.id).unwrap(), before);
+    assert_eq!(runtime.get_task_history(&task.id).unwrap(), history);
+    assert_eq!(runtime.get_task_comments(&task.id).unwrap(), comments);
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "model": "codex", "pr_status": ""}),
+        )
+        .unwrap();
+    assert!(runtime.get_task(&task.id).unwrap().pr_status.is_none());
+}
 
 fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
@@ -299,6 +350,7 @@ fn automation_persists_returned_summary_crew_and_run_history_without_status_chan
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
+    tool_pr_status_admission_preserves_spelling_and_rejects_typos_atomically,
     activity_updates_refuse_replica_writes_and_preserve_owner_updates,
     guarded_start_and_activity_notes_redact_before_persistence,
     rejected_artifacts_leave_status_document_and_history_unchanged,

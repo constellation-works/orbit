@@ -765,6 +765,18 @@ impl OrbitRuntime {
         mut params: TaskUpdateParams,
         writer: TaskFieldWriter,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
+        if let Some(Some(value)) = &params.pr_status {
+            // Admit exactly the merge reader's known decisions, plus clearing.
+            // Validation must not change the spelling the caller stores.
+            if !matches!(
+                orbit_engine::normalize_review_decision(value).as_str(),
+                "" | "APPROVED" | "CHANGES_REQUESTED"
+            ) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
+                )));
+            }
+        }
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.

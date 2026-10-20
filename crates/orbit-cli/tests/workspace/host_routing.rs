@@ -738,6 +738,80 @@ fn hinted_commands(message: &str) -> Vec<String> {
         .collect()
 }
 
+fn routed_pr_status_is_admitted_by_the_destination() {
+    let routed = Routed::new();
+    let id = routed.remote_task.as_str();
+    for value in [
+        "approve",
+        "approved",
+        "request-changes",
+        "request_changes",
+        "changes-requested",
+        "changes_requested",
+        " APPROVED ",
+        " Changes-Requested ",
+    ] {
+        routed.json(&[
+            "task",
+            "update",
+            id,
+            "--host",
+            "bravo",
+            "--pr-status",
+            value,
+            "--json",
+        ]);
+        assert_eq!(
+            routed
+                .remote_runtime
+                .get_task(id)
+                .unwrap()
+                .pr_status
+                .as_deref(),
+            Some(value)
+        );
+    }
+    let before = routed.remote_runtime.get_task(id).unwrap();
+    let history = routed.remote_runtime.get_task_history(id).unwrap();
+    routed.take_remote_argv();
+    let (code, message) = routed.refused(&[
+        "task",
+        "update",
+        id,
+        "--host",
+        "bravo",
+        "--pr-status",
+        "aproved",
+        "--json",
+    ]);
+    assert_eq!(code, "invalid_input", "{message}");
+    assert!(message.contains("unknown PR status 'aproved'"), "{message}");
+    assert!(
+        !routed.take_remote_argv().is_empty(),
+        "the destination must refuse the value, after routing"
+    );
+    assert_eq!(routed.remote_runtime.get_task(id).unwrap(), before);
+    assert_eq!(routed.remote_runtime.get_task_history(id).unwrap(), history);
+    routed.json(&[
+        "task",
+        "update",
+        id,
+        "--host",
+        "bravo",
+        "--pr-status",
+        "",
+        "--json",
+    ]);
+    assert!(
+        routed
+            .remote_runtime
+            .get_task(id)
+            .unwrap()
+            .pr_status
+            .is_none()
+    );
+}
+
 fn routed_task_update_refusals_offer_a_command_that_works() {
     let routed = Routed::new();
     let id = routed.remote_task.as_str();
@@ -1232,6 +1306,10 @@ fn host_routing_contracts_1() {
         (
             "local_task_commands_refuse_remote_selection_without_delivering_or_mutating",
             local_task_commands_refuse_remote_selection_without_delivering_or_mutating as fn(),
+        ),
+        (
+            "routed_pr_status_is_admitted_by_the_destination",
+            routed_pr_status_is_admitted_by_the_destination as fn(),
         ),
         (
             "routed_task_update_refusals_offer_a_command_that_works",
