@@ -4,7 +4,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use clap::Args;
-use orbit_core::OrbitError;
 use orbit_mcp::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure};
 
 use crate::command::{CommandOut, CommandOutput};
@@ -36,13 +35,8 @@ impl ListenArgs {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> CommandOut {
-        if root_override.is_some() {
-            return Err(OrbitError::InvalidInput(
-                "orbit mcp listen does not accept a workspace root override; select a workspace per initialize or tool call"
-                    .to_string(),
-            ));
-        }
         super::server::serve_mcp_listener(
+            orbit_core::runtime::resolve_generation_root(root_override)?,
             self.addr,
             self.exposure(),
             workspace_selector.map(ToOwned::to_owned),

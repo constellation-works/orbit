@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::resolve_global_root;
 use orbit_mcp::federated;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
 use orbit_types::tool::ToolSessionContext;
@@ -36,6 +35,7 @@ pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
 /// second authorization for the destination to make [ORB-12564]. A leftover
 /// file from the retired destination-side model is named once and ignored.
 pub(in super::super) fn serve_mcp_stdio(
+    global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
@@ -43,7 +43,6 @@ pub(in super::super) fn serve_mcp_stdio(
     internal_drain: bool,
     worker_host: bool,
 ) -> Result<(), OrbitError> {
-    let global_root = resolve_global_root()?;
     orbit_mcp::warn_ignored_caller_authorization(&global_root);
     let (host, mut session_context) = compose_server(
         global_root,
@@ -71,10 +70,10 @@ pub(in super::super) fn serve_mcp_stdio(
 /// before any tool is advertised. A missing or empty file is a valid
 /// local-only configuration.
 pub(in super::super) fn serve_mcp_federated_stdio(
+    global_root: PathBuf,
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
 ) -> Result<(), OrbitError> {
-    let global_root = resolve_global_root()?;
     let remotes = federated::load_destinations(&global_root)?;
     // The mux is a client to each remote, and identifies itself with the same
     // audit label the v1 proxy forwards. `authority` is one statement serving
@@ -174,6 +173,7 @@ fn finish_stdio_session(exit: orbit_mcp::StdioExit) -> Result<(), OrbitError> {
 }
 
 pub(in super::super) fn serve_mcp_listener(
+    global_root: PathBuf,
     addr: SocketAddr,
     exposure: ListenerExposure,
     bound_workspace: Option<String>,
@@ -197,7 +197,6 @@ pub(in super::super) fn serve_mcp_listener(
     // This reasoning is unchanged by argv-propagated remote authority: SSH
     // authenticates the caller before Orbit runs, and a socket authenticates
     // nobody at all [ORB-12564].
-    let global_root = resolve_global_root()?;
     let (host, session_context) = compose_server(
         global_root,
         None,

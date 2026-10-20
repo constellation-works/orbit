@@ -53,6 +53,15 @@ routing, or capability filter.
 
 ## Runtime rule
 
+The local server's Orbit data root is selected by `--root` first, then a
+non-empty `ORBIT_ROOT`, then the default `~/.orbit`. This applies to stdio,
+TCP, and the local destination of `--mode federated`. Without an explicit
+override, managed children retain their dispatching `ORBIT_REGISTRY_ROOT`.
+The selected root supplies machine identity, workspace discovery, and tool
+state; workspace selection still happens per session or tool call. The direct
+SSH proxy (`--mode remote`) refuses local root overrides: configure the data
+root on the SSH destination instead.
+
 The machine accepting `orbit mcp serve` or `orbit mcp listen` is authoritative
 for the call. It:
 
