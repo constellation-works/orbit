@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run_input::carried_task_ids;
+use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 
 /// The run a system block attributes itself to, when resume may undo it.
 ///
@@ -35,6 +36,35 @@ pub(super) fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
         | orbit_types::workflow::FORGE_UNAVAILABLE_EXPIRED_EVENT => failure_handoff_run_id(note),
         _ => None,
     }
+}
+
+/// The run a system final-recovery requeue to `backlog` attributes itself to:
+/// its note leads with `final recovery (run_id=<id>):`. An operator's move to
+/// `backlog` returns `None`.
+pub(super) fn requeuing_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
+    if entry.by != SYSTEM_ACTOR_LABEL
+        || entry.to_status != Some(TaskStatus::Backlog)
+        || entry.event != FINAL_RECOVERY_REQUEUED_EVENT
+    {
+        return None;
+    }
+    entry
+        .note
+        .as_deref()?
+        .strip_prefix("final recovery (run_id=")?
+        .split_once("):")
+        .map(|(id, _)| id)
+}
+
+/// The run that shelved a task in `blocked` or `backlog`, when delivery or
+/// final recovery did and resume may undo it; `None` for an operator's
+/// decision. Only the task's latest status entry counts.
+pub(crate) fn shelving_run_id(history: &[TaskHistoryEntry]) -> Option<&str> {
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())?;
+    blocking_run_id(entry).or_else(|| requeuing_run_id(entry))
 }
 
 /// `run=<id>` in a failure-handoff note, bounded by the next comma or semicolon.

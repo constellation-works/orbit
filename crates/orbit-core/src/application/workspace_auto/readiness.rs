@@ -867,6 +867,13 @@ pub fn explain_workspace_auto_readiness(
     if let Some(forecast) = last_forecast_view {
         payload["capacity"]["last_admission_forecast"] = forecast;
     }
+    // Delivery leaves an `--auto-fix` drain resumed to repair a pull request
+    // no run was watching; absent when none is live.
+    match runtime.live_out_of_run_auto_fixes() {
+        Ok(repairs) if repairs.is_empty() => {}
+        Ok(repairs) => payload["out_of_run_auto_fix"] = json!(repairs),
+        Err(error) => tracing::warn!("readiness shows no out-of-run auto-fix: {error}"),
+    }
     Ok(payload)
 }
 

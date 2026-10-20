@@ -550,6 +550,7 @@ impl OrbitRuntime {
             review_checkpoints: BTreeMap::new(),
             checkpoint_batch_id: None,
             pinned_definition: None,
+            completion_repair: false,
         };
         // Review -> in-progress is a new operator source decision, not restored
         // completion authority. Its reservation is already durable above.

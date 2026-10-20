@@ -34,6 +34,7 @@ type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
 type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
 pub(crate) type ValidatedTrees =
     Arc<Mutex<std::collections::BTreeMap<String, orbit_engine::ValidatedTree>>>;
+pub(crate) type PrRepairChecks = Arc<Mutex<std::collections::BTreeMap<u64, std::time::Instant>>>;
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
@@ -112,6 +113,10 @@ pub struct OrbitRuntime {
     /// a run resumed by another process validates its next candidate in
     /// full. Shared by clones.
     pub(crate) validated_trees: ValidatedTrees,
+    /// When an `--auto-fix` drain last found each pull request it may repair
+    /// out of run without a blocker, so a pass does not ask the forge again
+    /// before the recheck interval. Held in this process; shared by clones.
+    pub(crate) pr_repair_checks: PrRepairChecks,
     /// Test-only seam for approve/start/reject: after the locked `get_task`,
     /// mutate the named task so compare-and-set can observe a lost race.
     /// Instance-scoped so concurrent `cargo test` threads cannot collide on

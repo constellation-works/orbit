@@ -157,6 +157,7 @@ impl OrbitRuntime {
             _temp_dir: None,
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             validated_trees: Arc::default(),
+            pr_repair_checks: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
@@ -230,6 +231,7 @@ impl OrbitRuntime {
             _temp_dir: Some(Arc::new(temp_dir)),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             validated_trees: Arc::default(),
+            pr_repair_checks: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })

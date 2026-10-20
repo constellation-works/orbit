@@ -9,9 +9,10 @@ use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
 use serde_json::Value;
 
 use super::binding::{
-    blocking_run_id, checkpoint_ownership_id, foreign_binding_message, resume_binding_task_ids,
-    review_checkpoints, task_ids_from_input,
+    blocking_run_id, checkpoint_ownership_id, foreign_binding_message, requeuing_run_id,
+    resume_binding_task_ids, review_checkpoints, task_ids_from_input,
 };
+use super::completion_repair::{grant_completion_repair, rewind_to_completion};
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
@@ -44,6 +45,10 @@ pub(crate) struct ResumePlan {
     /// Definition pinned beside the source run. `None` for a catalog-backed
     /// source, which keeps resolving `source.job_id` at admission.
     pub(crate) pinned_definition: Option<PinnedRunDefinition>,
+    /// An out-of-run auto-fix: the resume reruns the source's completion step
+    /// with repair authority, and readmits a task its lineage shelved in
+    /// `backlog` as well as one it blocked.
+    pub(super) completion_repair: bool,
 }
 
 /// Exact job definition a snapshot-backed run must keep across resumes.
@@ -61,6 +66,28 @@ impl OrbitRuntime {
     pub(crate) fn plan_job_run_resume(
         &self,
         source_run_id: &str,
+    ) -> Result<ResumePlan, OrbitError> {
+        self.plan_resume(source_run_id, None)
+    }
+
+    /// Plan an out-of-run auto-fix of the pull request `source_run_id`
+    /// opened: the ordinary resume, rewound to rerun the completion step and
+    /// everything after it, with `auto_fix` granted, the footprint deferred
+    /// to the first editing agent, and `repair` recorded on the run input.
+    /// The run's own `completion` grant is unchanged, so a run that never
+    /// held `--complete` still never merges.
+    pub(crate) fn plan_completion_repair_resume(
+        &self,
+        source_run_id: &str,
+        repair: &Value,
+    ) -> Result<ResumePlan, OrbitError> {
+        self.plan_resume(source_run_id, Some(repair))
+    }
+
+    fn plan_resume(
+        &self,
+        source_run_id: &str,
+        repair: Option<&Value>,
     ) -> Result<ResumePlan, OrbitError> {
         // Refuse before show_job_run can reconcile local liveness. Settled claims
         // retain immutable bindings, so even a revoked attempt cannot resume.
@@ -194,11 +221,11 @@ impl OrbitRuntime {
             )));
         }
 
-        let input = source
+        let mut input = source
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
-        let resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
+        let mut resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
             state
                 .step_states
                 .values()
@@ -222,12 +249,18 @@ impl OrbitRuntime {
                 .map_err(|error| OrbitError::JobValidation(error.to_string()))?,
         )
         .map_err(orbit_engine::dispatch_error_to_orbit)?;
+        if let Some(repair) = repair {
+            rewind_to_completion(&definition, resume_state.as_mut())?;
+            grant_completion_repair(&mut input, repair);
+        }
+        // A repair resume reruns completion with auto-fix, which leaves the
+        // task in review like a completion run does.
+        let reaches_completion =
+            repair.is_some() || input.get("completion").and_then(Value::as_str) == Some("done");
         let review_checkpoints = resume_state
             .as_ref()
             .filter(|state| {
-                state.run_id == source.run_id
-                    && state.job_id == source.job_id
-                    && input.get("completion").and_then(Value::as_str) == Some("done")
+                state.run_id == source.run_id && state.job_id == source.job_id && reaches_completion
             })
             .map(|state| review_checkpoints(&definition, state))
             .unwrap_or_default();
@@ -248,6 +281,7 @@ impl OrbitRuntime {
             review_checkpoints,
             checkpoint_batch_id,
             pinned_definition,
+            completion_repair: repair.is_some(),
         })
     }
 
@@ -256,7 +290,7 @@ impl OrbitRuntime {
     /// them. Descendants matter because a task is commonly re-stamped by a
     /// *later* short-lived attempt (F2026-07-121: the task ended up owned by
     /// `jrun-…-2343`, a grandchild of the run being resumed).
-    pub(super) fn resume_lineage_run_ids(
+    pub(crate) fn resume_lineage_run_ids(
         &self,
         source: &JobRun,
     ) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
@@ -453,30 +487,38 @@ impl OrbitRuntime {
         let mut changed = false;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
+            // Only a completion repair readmits a task its lineage's final
+            // recovery requeued to `backlog`.
+            let shelved = task.status == TaskStatus::Blocked
+                || (plan.completion_repair && task.status == TaskStatus::Backlog);
             if task.job_run_id.as_deref() != Some(expected_owner)
-                || !matches!(task.status, TaskStatus::Blocked | TaskStatus::InProgress | TaskStatus::Review)
+                || !(shelved || matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
             {
                 return Ok(());
             }
             let history = self.get_task_history(id)?;
             let block = history.iter().rev().find(|entry| entry.to_status.is_some());
-            let blocking_run = block.and_then(blocking_run_id);
-            // A manual block is a decision, not a failed-run admission to undo.
-            if task.status == TaskStatus::Blocked
-                && !blocking_run.is_some_and(|run| plan.lineage.contains(run))
-            {
+            let blocking_run = block.and_then(|entry| {
+                if task.status == TaskStatus::Backlog { requeuing_run_id(entry) } else { blocking_run_id(entry) }
+            });
+            // A manual block or requeue is a decision, not a failed-run
+            // admission to undo.
+            if shelved && !blocking_run.is_some_and(|run| plan.lineage.contains(run)) {
                 return Ok(());
             }
+            // A completion repair reruns completion on a prefix that promoted
+            // the task, whatever stage the shelving found it in.
             let checkpoint = plan.review_checkpoints.get(id).filter(|output| {
                 plan.ancestors.contains(expected_owner)
                     && plan.checkpoint_batch_id.as_ref().is_some_and(|batch| plan.ancestors.contains(batch))
                     && blocking_run.is_some_and(|run| plan.ancestors.contains(run))
-                    && block.is_some_and(|entry| entry.from_status == Some(TaskStatus::Review))
+                    && (plan.completion_repair
+                        || block.is_some_and(|entry| entry.from_status == Some(TaskStatus::Review)))
                     && (output.get("no_diff_expected").and_then(Value::as_bool) == Some(true)
                         || output.get("pr_number").and_then(Value::as_str)
                             .is_some_and(|number| task.github_pr_number() == Some(number)))
             });
-            let restored = (task.status == TaskStatus::Blocked).then_some(
+            let restored = shelved.then_some(
                 if checkpoint.is_some() { TaskStatus::Review } else { TaskStatus::InProgress }
             );
             let restamp = plan.checkpoint_batch_id.as_ref()
@@ -491,8 +533,9 @@ impl OrbitRuntime {
             }
             let stage = restored.unwrap_or(task.status);
             let note = format!(
-                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}; owner_run_id={owner}",
+                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}; owner_run_id={owner}{}",
                 plan.source.run_id, blocking_run.unwrap_or("-"), checkpoint.is_some(),
+                if plan.completion_repair { "; out_of_run_auto_fix=true" } else { "" },
             );
             self.with_mutation(|| {
                 let updated = self.stores().task_records().update(id, TaskRecordUpdateParams {

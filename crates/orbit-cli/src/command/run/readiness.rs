@@ -179,6 +179,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         lines.push(format!("Occupied slots: {phases}."));
     }
     lines.extend(approval_lines(&payload["approvals"]));
+    lines.extend(out_of_run_auto_fix_lines(&payload["out_of_run_auto_fix"]));
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -278,6 +279,33 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         ));
     }
     lines
+}
+
+/// Delivery leaves an `--auto-fix` drain resumed to repair a pull request no
+/// run was watching, one line each.
+fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
+    repairs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|repair| {
+            let tasks = repair["task_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
+                repair["pr_number"].as_str().unwrap_or("-"),
+                repair["blocker"].as_str().unwrap_or("-"),
+                repair["run_id"].as_str().unwrap_or("-"),
+                repair["state"].as_str().unwrap_or("-"),
+                repair["source_run_id"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect()
 }
 
 /// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the

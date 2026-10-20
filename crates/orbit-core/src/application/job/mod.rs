@@ -14,6 +14,7 @@ mod orphan_adoption;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
 mod pr_auto_fix;
+mod pr_repair_adoption;
 mod resume;
 mod run;
 mod upgrade_resume;

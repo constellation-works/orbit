@@ -41,8 +41,23 @@ pub struct MergedPullRequest {
     pub merge_commit: String,
 }
 
-/// Forge operations behind closing a task's PRs on a terminal decision and
-/// settling a task from its merged delivery PR.
+/// What holds an open pull request back from merging, as an out-of-run
+/// auto-fix repair reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestBlockers {
+    /// The fields an Orbit pull request is matched by.
+    pub pull: ForgePullRequest,
+    /// The head commit the answer describes.
+    pub head_sha: String,
+    /// The branch conflicts with its base.
+    pub conflicting: bool,
+    /// Required checks on the head that failed, by name.
+    pub failed_required_checks: Vec<String>,
+}
+
+/// Forge operations behind closing a task's PRs on a terminal decision,
+/// settling a task from its merged delivery PR, and finding the merge
+/// blockers an out-of-run auto-fix repairs.
 pub trait TaskPrForge: Send + Sync {
     /// Every open pull request of the repository checked out at `repo_root`.
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError>;
@@ -82,6 +97,17 @@ pub trait TaskPrForge: Send + Sync {
             .merged_pull_requests(repo_root)?
             .into_iter()
             .find(|merged| merged.pull.number == number))
+    }
+
+    /// What holds pull request `number` back from merging, or `None` when it
+    /// is not open or this forge cannot tell. The default cannot tell, so a
+    /// forge without it repairs nothing out of run.
+    fn pull_request_blockers(
+        &self,
+        _repo_root: &Path,
+        _number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        Ok(None)
     }
 
     /// The login this machine's forge credentials act as, which is the
@@ -207,6 +233,36 @@ impl TaskPrForge for GhTaskPrForge {
             })
     }
 
+    fn pull_request_blockers(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        let stdout = run_gh(
+            orbit_tools::github_cli::pull_request_blockers_request(number),
+            repo_root,
+            "gh api graphql",
+        )?;
+        let answer = orbit_tools::github_cli::parse_gh_json(&stdout, "gh api graphql")?;
+        let pull = answer
+            .pointer("/data/repository/pullRequest")
+            .filter(|pull| !pull.is_null())
+            .ok_or_else(|| {
+                OrbitError::Execution(format!("gh api graphql found no pull request #{number}"))
+            })?;
+        if !has_state(pull, "open") {
+            return Ok(None);
+        }
+        pull_request_blockers_from_json(number, pull)
+            .map(Some)
+            .ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "gh api graphql did not report the author, head, mergeability and complete \
+                 required checks of pull request #{number}"
+                ))
+            })
+    }
+
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
         let stdout = run_gh(
             orbit_tools::github_cli::authenticated_login_request(),
@@ -295,4 +351,82 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
         base_branch: non_empty(entry.get("baseRefName"))?,
         merge_commit: non_empty(entry.pointer("/mergeCommit/oid"))?,
     })
+}
+
+/// Read a GraphQL pull request answer. An unknown mergeability, a head the
+/// rollup does not describe, or a truncated rollup cannot be judged, so it
+/// reads as unknown rather than as no blocker.
+fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequestBlockers> {
+    let head_sha = pull.get("headRefOid")?.as_str()?.to_string();
+    let conflicting = match pull.get("mergeable")?.as_str()? {
+        "CONFLICTING" => true,
+        "MERGEABLE" => false,
+        _ => return None,
+    };
+    let commit = pull.pointer("/commits/nodes/0/commit")?;
+    if commit.get("oid")?.as_str()? != head_sha {
+        return None;
+    }
+    let mut failed_required_checks = Vec::new();
+    if let Some(contexts) = commit
+        .get("statusCheckRollup")
+        .filter(|rollup| !rollup.is_null())
+        .map(|rollup| rollup.get("contexts"))
+    {
+        let contexts = contexts?;
+        if contexts.pointer("/pageInfo/hasNextPage")?.as_bool()? {
+            return None;
+        }
+        for context in contexts.get("nodes")?.as_array()? {
+            if context.get("isRequired").and_then(Value::as_bool) != Some(true) {
+                continue;
+            }
+            if required_context_failed(context) {
+                failed_required_checks.push(
+                    context
+                        .get("name")
+                        .or_else(|| context.get("context"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unnamed check")
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Some(PullRequestBlockers {
+        pull: ForgePullRequest {
+            number,
+            head_branch: pull.get("headRefName")?.as_str()?.to_string(),
+            body: pull
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            author: pull.pointer("/author/login")?.as_str()?.to_string(),
+        },
+        head_sha,
+        conflicting,
+        failed_required_checks,
+    })
+}
+
+/// Whether a required status context failed, as completion's watcher
+/// classifies it: a status `FAILURE` or `ERROR`, or a completed check run
+/// that did not succeed, skip or end neutral.
+fn required_context_failed(context: &Value) -> bool {
+    if let Some(state) = context.get("state").and_then(Value::as_str) {
+        return matches!(state, "FAILURE" | "ERROR");
+    }
+    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
+        && matches!(
+            context.get("conclusion").and_then(Value::as_str),
+            Some(
+                "FAILURE"
+                    | "CANCELLED"
+                    | "TIMED_OUT"
+                    | "ACTION_REQUIRED"
+                    | "STARTUP_FAILURE"
+                    | "STALE"
+            )
+        )
 }

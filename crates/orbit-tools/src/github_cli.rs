@@ -57,6 +57,7 @@ pub use crate::builtin::github::task_prs::{
     close_pull_request as close_pull_request_request,
     merged_pull_requests as merged_pull_requests_request,
     open_pull_requests as open_pull_requests_request,
+    pull_request_blockers as pull_request_blockers_request,
     view_pull_request as view_pull_request_request,
 };
 pub use crate::builtin::github::{

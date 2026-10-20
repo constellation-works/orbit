@@ -44,6 +44,7 @@
 //! guard in `runtime_host` stays fail-closed for a non-owning run.
 
 mod binding;
+mod completion_repair;
 mod plan;
 mod source_repair;
 mod submit;
@@ -53,6 +54,8 @@ pub(crate) use source_repair::PublishedResume;
 // `resume::PinnedRunDefinition` was the path while this type lived in
 // `resume.rs`. Nothing else in the crate names it; the re-export keeps that
 // path for callers outside this module.
+pub(crate) use binding::shelving_run_id;
 pub(super) use binding::task_ids_from_input;
+pub(crate) use completion_repair::OUT_OF_RUN_AUTO_FIX_KEY;
 #[expect(unused_imports)]
 pub(crate) use plan::PinnedRunDefinition;
