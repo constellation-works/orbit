@@ -16,6 +16,91 @@ use crate::scripted_destination::{
     OWNER_MACHINE, REPLICA_MACHINE, ScriptedProbe, ScriptedToolResult, destination, workspace,
 };
 
+#[test]
+fn workspace_discovery_redacts_destination_envelopes() {
+    use orbit_mcp::{HostFacts, execute_discovery_tool, execute_federated_workspace_discovery};
+    use orbit_types::workspace::{WorkspaceCheckout, WorkspaceRegistry};
+
+    let mut legacy = workspace("ws_orbit", Some(OWNER_MACHINE));
+    legacy.git_remote = Some("https://operator:fixture-secret@github.com/example/orbit.git".into());
+    let absent = workspace("ws_no_remote", None);
+    let registry = WorkspaceRegistry {
+        workspaces: vec![legacy.clone(), absent.clone()],
+        checkouts: ["ws_orbit", "ws_no_remote"]
+            .into_iter()
+            .map(|id| WorkspaceCheckout::owner(id.into(), "/repo".into(), "/repo/.orbit".into()))
+            .collect(),
+        ..Default::default()
+    };
+    let facts = HostFacts {
+        machine_id: OWNER_MACHINE.into(),
+        ..Default::default()
+    };
+    let mut expected = json!([legacy, absent]);
+    expected[0]["git_remote"] = json!("https://***@github.com/example/orbit.git");
+    let local = execute_discovery_tool("orbit.workspace.list", &registry, &facts).unwrap();
+    let destination_envelope = execute_federated_workspace_discovery(&registry, &facts);
+    assert_eq!(local["workspaces"], expected);
+    assert_eq!(destination_envelope["workspaces"], expected);
+
+    assert!(
+        registry.workspaces[0]
+            .git_remote
+            .as_deref()
+            .unwrap()
+            .contains("fixture-secret"),
+        "projection must not mutate stored values"
+    );
+}
+
+#[test]
+fn workspace_discovery_redacts_older_peer_descriptors() {
+    let mut legacy = workspace("ws_orbit", Some(OWNER_MACHINE));
+    legacy.git_remote = Some("https://operator:fixture-secret@github.com/example/orbit.git".into());
+    let absent = workspace("ws_no_remote", None);
+    let mut expected = json!([legacy, absent]);
+    expected[0]["git_remote"] = json!("https://***@github.com/example/orbit.git");
+    // An older peer sends its unredacted Workspace. The accepting mux must
+    // sanitize it independently rather than trusting the destination version.
+    let probe = ScriptedProbe::new().answering(
+        OWNER_MACHINE,
+        DestinationSnapshot {
+            machine_id: OWNER_MACHINE.into(),
+            workspaces: vec![legacy, absent],
+            crews: Default::default(),
+            host: Default::default(),
+        },
+    );
+    let mux = FederatedMcpHost::new(
+        vec![destination("orbit-owner", OWNER_MACHINE)],
+        Arc::new(probe),
+    );
+    let listed = mux
+        .call_tool(
+            "orbit.workspace.list",
+            json!({}),
+            ToolSessionContext::default(),
+        )
+        .unwrap();
+    let rows = listed["workspaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for expected in expected.as_array().unwrap() {
+        let actual = rows.iter().find(|row| row["id"] == expected["id"]).unwrap();
+        let mut workspace_fields = actual.as_object().unwrap().clone();
+        for key in [
+            "selector",
+            "machine_name",
+            "machine_id",
+            "reachability",
+            "checkout_health",
+            "capabilities",
+        ] {
+            workspace_fields.remove(key);
+        }
+        assert_eq!(Value::Object(workspace_fields), *expected);
+    }
+}
+
 mod workspace_route {
     use super::*;
 

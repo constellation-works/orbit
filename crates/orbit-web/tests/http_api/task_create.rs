@@ -6,6 +6,26 @@ use serde_json::{Value, json};
 
 const ACTION: &str = "/api/tasks/create?workspace=ws_http_fixture";
 
+#[test]
+fn workspace_listing_omits_source_remote_even_for_legacy_credentials() {
+    isolated(
+        "task_create::workspace_listing_omits_source_remote_even_for_legacy_credentials",
+        || {
+            let fixture = Fixture::new();
+            edit_registry(&fixture, |registry| {
+                registry.workspaces[0].git_remote =
+                    Some("https://operator:fixture-secret@github.com/example/orbit.git".into());
+            });
+            let server = fixture.server(true);
+            let workspaces = json_ok(server.get("/api/workspaces"));
+            let rows = workspaces.as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].get("git_remote").is_none());
+            assert!(!workspaces.to_string().contains("fixture-secret"));
+        },
+    );
+}
+
 fn proposal(server: &Server) -> Value {
     let workspaces = json_ok(server.get("/api/workspaces"));
     json!({

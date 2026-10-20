@@ -10,6 +10,7 @@ use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceStatus,
+    validate_source_remote_credentials,
 };
 use serde::Serialize;
 
@@ -183,6 +184,11 @@ impl WorkspaceInitArgs {
                         id,
                         cwd.display()
                     )));
+                }
+
+                if !reconciling_existing && let Some(remote) = git_remote.as_deref() {
+                    validate_source_remote_credentials(remote)
+                        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
                 }
 
                 let mut identity_recovery = None;

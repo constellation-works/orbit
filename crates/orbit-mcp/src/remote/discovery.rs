@@ -8,7 +8,7 @@ use orbit_types::tool::{
     McpToolAnnotations, McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam,
     ToolSchema, validate_mcp_tool_definitions,
 };
-use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus};
+use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus, redact_git_remote};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -69,9 +69,22 @@ impl HostFacts {
     fn envelope(&self, workspaces: Vec<&Workspace>) -> Value {
         let mut envelope = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
         envelope["machine_id"] = json!(self.machine_id);
-        envelope["workspaces"] = json!(workspaces);
+        envelope["workspaces"] = json!(
+            workspaces
+                .into_iter()
+                .cloned()
+                .map(workspace_for_discovery)
+                .collect::<Vec<_>>()
+        );
         envelope
     }
+}
+
+/// Preserve the workspace wire shape while keeping stored remote credentials
+/// out of discovery, including records supplied by older destinations.
+pub(crate) fn workspace_for_discovery(mut workspace: Workspace) -> Workspace {
+    workspace.git_remote = workspace.git_remote.as_deref().map(redact_git_remote);
+    workspace
 }
 
 /// `include` value that attaches each workspace's effective crews to its row.

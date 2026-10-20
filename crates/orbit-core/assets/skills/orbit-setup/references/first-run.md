@@ -93,6 +93,11 @@ For agent-assisted PR delivery, from the repository root (omit `--mcp` if no cli
 orbit workspace init --base-branch <integration-branch> --ship-mode pr --mcp
 ```
 
+Fresh registration refuses an origin containing URL credentials before writing
+workspace state. Remove credentials from the origin and use Git's credential
+helper or SSH authentication instead. Credential-free local origins remain
+accepted; discovery redacts remote credentials in older registrations.
+
 This registers the checkout, creates `.orbit/`, and seeds the default skills,
 jobs, activities, policies, routines, and auto-task definitions. `--mcp`
 auto-detects installed agent clients and registers Orbit's MCP server with

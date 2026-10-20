@@ -208,9 +208,14 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
             .host_default_branch()
             .no_commit()
             .build();
-        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
         initialize_workspace(repo.path(), home.path(), "non-portable-origin-owner");
         let registry_path = home.path().join(".orbit/workspaces.json");
+        // Legacy registrations may already contain credentials. Recovery must
+        // preserve those records even though fresh init now refuses them.
+        let mut legacy = read_json(&registry_path);
+        legacy["workspaces"][0]["git_remote"] = origin.into();
+        fs::write(&registry_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
         let initial_registry = read_json(&registry_path);
         assert_eq!(initial_registry["workspaces"][0]["git_remote"], origin);
         let identity_path = repo.path().join(".orbit/config.yaml");
@@ -263,6 +268,61 @@ fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
 
         crate::git_repo::run(repo.path(), &["remote", "set-url", "origin", NEW_REMOTE]);
         assert_force_init_refused_without_writes(repo.path(), home.path(), "source-remote rebind");
+    }
+}
+
+#[test]
+fn fresh_init_refuses_credentials_before_writing_workspace_state() {
+    for origin in [
+        "https://operator:supersecret@github.com/example/orbit.git",
+        "https://supersecret@github.com/example/orbit.git",
+        "ssh://git:supersecret@github.com/example/orbit.git",
+        "git:supersecret@github.com:example/orbit.git",
+        "https://operator:supersecret@github.com",
+        "git:supersecret@github.com:",
+        "https://operator:supersecret/fragment@github.com/example/orbit.git",
+    ] {
+        let home = tempdir().expect("home");
+        let repo = tempdir().expect("repo");
+        crate::git_repo::run(repo.path(), &["init"]);
+        crate::git_repo::run(repo.path(), &["remote", "add", "origin", origin]);
+        fs::write(repo.path().join(".gitignore"), "operator-file\n").unwrap();
+        orbit(repo.path(), home.path())
+            .args(["workspace", "init", "--name", "orbit"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("must not contain credentials"))
+            .stderr(predicate::str::contains("supersecret").not());
+        assert!(!home.path().join(".orbit/workspaces.json").exists());
+        assert!(!repo.path().join(".orbit").exists());
+        assert_eq!(
+            fs::read_to_string(repo.path().join(".gitignore")).unwrap(),
+            "operator-file\n"
+        );
+    }
+    // Credential-free portable and local origins retain fresh-init support.
+    for safe_origin in [
+        OLD_REMOTE,
+        "https://github.com/example/orbit.git",
+        "ssh://git@github.com/example/orbit.git",
+        "/local/source.git",
+        "file:///local/source.git",
+        "ssh://git@github.com",
+        "https://github.com",
+        "not-a-remote",
+    ] {
+        let safe_home = tempdir().expect("safe home");
+        let safe_repo = tempdir().expect("safe repo");
+        crate::git_repo::run(safe_repo.path(), &["init"]);
+        crate::git_repo::run(safe_repo.path(), &["remote", "add", "origin", safe_origin]);
+        orbit(safe_repo.path(), safe_home.path())
+            .args(["workspace", "init", "--name", "orbit"])
+            .assert()
+            .success();
+        assert_eq!(
+            read_json(&safe_home.path().join(".orbit/workspaces.json"))["workspaces"][0]["git_remote"],
+            safe_origin
+        );
     }
 }
 
@@ -640,6 +700,9 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
 
 #[test]
 fn source_remote_contracts_0() {
+    if crate::isolated_test::run_in_child("workspace_source_remote::source_remote_contracts_0") {
+        return;
+    }
     for (name, check) in [
         (
             "force_init_binds_first_origin_and_preserves_task_partition_and_publication",
