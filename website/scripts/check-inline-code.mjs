@@ -36,6 +36,7 @@ function inspectLayout() {
   const tolerance = 1;
   const configTable = document.querySelector('table.orbit-config-keys');
   const isConfigPage = location.pathname === '/reference/config/';
+  const isCliPage = location.pathname === '/reference/cli/';
   for (const code of document.querySelectorAll('code')) {
     if (code.closest('pre') || !code.getClientRects().length) continue;
     codes++;
@@ -59,24 +60,28 @@ function inspectLayout() {
     let wrapped = false;
     const lineTops = [];
     const isConfigCode = Boolean(code.closest('table.orbit-config-keys'));
+    const isCliCode = isCliPage && Boolean(code.closest('table'));
+    const isTableCode = isConfigCode || isCliCode;
     let whitespaceSincePrevious = false;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       for (let offset = 0; offset < node.length; offset++) {
         const character = node.data[offset];
-        if (!isConfigCode && /\s/.test(character)) {
+        if (!isTableCode && /\s/.test(character)) {
           previous = undefined;
           continue;
         }
         const range = document.createRange();
         range.setStart(node, offset);
         range.setEnd(node, offset + 1);
-        if (isConfigCode && /\s/.test(character)) whitespaceSincePrevious = true;
+        if (isTableCode && /\s/.test(character)) whitespaceSincePrevious = true;
         const rects = [...range.getClientRects()].filter((rect) => rect.width && rect.height);
         for (const rect of rects) {
           if (isConfigCode && !lineTops.some((top) => Math.abs(top - rect.top) <= tolerance)) lineTops.push(rect.top);
           if (previous && Math.abs(previous.top - rect.top) > tolerance) {
             wrapped = true;
-            const allowedBreak = isConfigCode
+            const allowedBreak = isCliCode
+              ? whitespaceSincePrevious || /\s/.test(character) || /[._/=|:-]/.test(previous.character)
+              : isConfigCode
               ? whitespaceSincePrevious || /\s/.test(character) || /[._/=]/.test(previous.character)
               : /[/.=]/.test(previous.character);
             if (!allowedBreak) {
@@ -84,7 +89,7 @@ function inspectLayout() {
             }
           }
           previous = { character, top: rect.top };
-          if (isConfigCode && !/\s/.test(character)) whitespaceSincePrevious = false;
+          if (isTableCode && !/\s/.test(character)) whitespaceSincePrevious = false;
         }
       }
     }
@@ -127,9 +132,12 @@ function inspectLayout() {
         !getComputedStyle(code).textDecorationLine.includes('underline')) {
       failures.push({ kind: 'code-link-underline', text, decoration: getComputedStyle(code).textDecorationLine });
     }
-    if (isConfigCode && code.scrollWidth > code.clientWidth) {
-      failures.push({ kind: 'config-code-overflow', text,
+    if (isTableCode && code.scrollWidth > code.clientWidth) {
+      failures.push({ kind: isCliCode ? 'cli-code-overflow' : 'config-code-overflow', text,
         clientWidth: code.clientWidth, scrollWidth: code.scrollWidth });
+    }
+    if (isCliCode && code.innerText !== text) {
+      failures.push({ kind: 'cli-code-copy-text', text, innerText: code.innerText });
     }
     if (isConfigCode && innerWidth >= 1024 && code.closest('td')?.cellIndex === 0 && lineTops.length > 1) {
       failures.push({ kind: 'config-key-wrapped-at-desktop', text, lines: lineTops.length, width: innerWidth });
@@ -176,7 +184,39 @@ function inspectLayout() {
       }
     }
   }
-  return { codes, wrappedCodes, configMetrics, providerTable, failures };
+  let cliMetrics;
+  if (isCliPage) {
+    // Inspect the public page's tables independently of their styling class:
+    // dropping the class must not silently drop the regression coverage.
+    const tables = [...document.querySelectorAll('main table')];
+    const firstGlyph = (cell) => {
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const offset = node.data.search(/\S/);
+        if (offset < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const [rect] = [...range.getClientRects()].filter((rect) => rect.width && rect.height);
+        if (rect) return (rect.top + rect.bottom) / 2;
+      }
+    };
+    const rows = tables.flatMap((table) => [...table.querySelectorAll('tbody tr')].map((row) => {
+      const centers = [...row.cells].map(firstGlyph);
+      const delta = Math.abs(centers[0] - centers[1]);
+      const text = row.cells[0].textContent;
+      // Glyph heights differ between body and code fonts; their centers still
+      // share the first line. Two pixels allows rounding, not a second line.
+      if (centers.length !== 2 || centers.some((center) => center === undefined) || delta > 2) {
+        failures.push({ kind: 'cli-row-first-line-alignment', text, centers, delta });
+      }
+      return { text, centers, delta };
+    }));
+    cliMetrics = { tables: tables.length, codes: tables.reduce((sum, table) => sum + table.querySelectorAll('code').length, 0),
+      rows, clippedCodes: failures.filter(({ kind }) => kind === 'cli-code-overflow').length };
+    if (!tables.length || !rows.length || !cliMetrics.codes) failures.push({ kind: 'cli-tables-missing' });
+  }
+  return { codes, wrappedCodes, configMetrics, providerTable, cliMetrics, failures };
 }
 
 // The links whose only content is code, with the page that holds each.
