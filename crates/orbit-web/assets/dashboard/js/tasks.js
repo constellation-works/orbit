@@ -2922,13 +2922,7 @@ function buildTaskMeta(task, context, { editor, showsEditor }) {
     const label = el("label", { text: "Crew" });
     label.htmlFor = select.id;
     const chip = el("span", { class: "task-chip task-crew-control" }, [label, select]);
-    if (typeof control.prepend === "function") {
-      control.prepend(chip);
-    } else if (control.children && control.children.length > 0) {
-      control.insertBefore(chip, control.children[0]);
-    } else {
-      control.appendChild(chip);
-    }
+    control.prepend(chip);
     levers.appendChild(control);
   } else {
     const crew = explicitCrewValue(task);
