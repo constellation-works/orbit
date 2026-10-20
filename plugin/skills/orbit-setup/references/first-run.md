@@ -205,9 +205,11 @@ initial setup succeeded:
 5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
-   protocol, make sure the follower can run the owner's before-PR reviewer
-   crew when the owner's `review.timing` is `before_pr`, then probe. Installation is
-   not pull enablement.
+   protocol, make sure the follower can run the owner's captured reviewer from
+   `workflow.purpose_crews.pre_landing_review` when non-empty, otherwise
+   `workflow.purpose_crews.review`. Check this when the owner's
+   `review.timing` enables before-PR or before-landing review, then probe.
+   Installation is not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 
 ## Anti-patterns

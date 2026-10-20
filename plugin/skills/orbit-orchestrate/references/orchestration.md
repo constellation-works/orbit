@@ -619,8 +619,10 @@ and never changes configuration:
   unchanged. If policy applies the other layer, it is refused, naming the key
   and its source.
 - It is refused before anything is submitted when
-  `workflow.purpose_crews.review` is unset, on local-only delivery (`--mode local`, or a local ship mode for a
-  drain), and with `--pull`, where the owner decides review for its claims.
+  the effective reviewer pool resolves no crew (`workflow.purpose_crews.pre_landing_review`
+  when non-empty, falling back to `workflow.purpose_crews.review`), on local-only
+  delivery (`--mode local`, or a local ship mode for a drain), and with `--pull`,
+  where the owner decides review for its claims.
 - A drain with the option holds tasks routed to local-only delivery in the
   backlog instead of starting them. Child runs inherit the layer, and a resume
   keeps it.
