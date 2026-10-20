@@ -62,6 +62,7 @@ pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
     SubmissionKind, SubmissionNotices,
 };
+pub(crate) use resume::PublishedResume;
 pub(crate) use run::CodebaseDeliveryScan;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{

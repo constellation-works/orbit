@@ -429,6 +429,7 @@ pub(crate) fn run_deterministic(
                     "reserved": false,
                     "waiting_on_deps": admission.waiting_on,
                     "conflicts": [],
+                    "footprint_deferred": false,
                 }));
             }
 
@@ -446,10 +447,26 @@ pub(crate) fn run_deterministic(
                 EmptyTaskSurfacePolicy::Admit,
             )
             .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-            // Always publish `waiting_on_deps` (empty here) and `conflicts`
-            // (empty once reserved) so the gate pipeline's always-run
-            // starvation step can reference both unconditionally, whichever
-            // branch produced the output [ORB-15514].
+            // A resumed published delivery adopts before it edits, so its
+            // gate does not wait on the holders that refused it; the leaf
+            // takes its footprint before its first edit.
+            if let Some(deferred) = runtime
+                .deferred_footprint_reservation(
+                    input,
+                    &output,
+                    tool_context.agent_name.clone(),
+                    tool_context.model_name.clone(),
+                    tool_context.reservation_owner.clone(),
+                )
+                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?
+            {
+                output = deferred;
+            }
+            // Always publish `waiting_on_deps` (empty here), `conflicts`
+            // (empty once reserved) and `footprint_deferred` so the gate
+            // pipeline's always-run starvation step and child dispatch can
+            // reference them unconditionally, whichever branch produced the
+            // output [ORB-15514].
             if let Some(object) = output.as_object_mut() {
                 object
                     .entry("waiting_on_deps")
@@ -457,6 +474,9 @@ pub(crate) fn run_deterministic(
                 object
                     .entry("conflicts")
                     .or_insert_with(|| Value::Array(Vec::new()));
+                object
+                    .entry("footprint_deferred")
+                    .or_insert(Value::Bool(false));
             }
             let waiting_on_locks = waiting_locks_from_reserve_output(&output);
             update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;

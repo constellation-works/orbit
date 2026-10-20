@@ -22,6 +22,18 @@ struct PreservedPublication {
     failure_handoff: bool,
 }
 
+/// A `backlog` task whose next run resumes the publication a final-recovery
+/// requeue preserved: it adopts the existing branch and pull request and
+/// completes them. See [`OrbitRuntime::published_resume`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PublishedResume {
+    /// The stopped run whose publication the next run adopts.
+    pub(crate) source_run_id: String,
+    /// The pull request that run opened, when its `pr_open` checkpoint
+    /// recorded one.
+    pub(crate) pull_request: Option<String>,
+}
+
 fn preserved_entry(record: &PreservedPublication) -> Result<TaskHistoryEntry, OrbitError> {
     Ok(TaskHistoryEntry {
         at: Utc::now(),
@@ -71,6 +83,77 @@ impl OrbitRuntime {
             failure_handoff: false,
         };
         preserved_entry(&record).map(Some)
+    }
+
+    /// Whether `task`'s next run resumes the publication a final-recovery
+    /// requeue of its current run preserved, judged from durable records
+    /// alone: no Git or forge read, so admission can ask it of every backlog
+    /// task on every pass.
+    ///
+    /// Such a run does not edit the working tree before it adopts the
+    /// existing branch and pull request, so admission does not hold it behind
+    /// other tasks' context locks; any agent edit it makes later takes the
+    /// footprint locks first (`acquire_deferred_footprint`). The full
+    /// authentication — branch, remote and pull-request heads — still runs
+    /// when the next run adopts, and refuses what this cannot see.
+    pub(crate) fn published_resume(
+        &self,
+        task: &Task,
+    ) -> Result<Option<PublishedResume>, OrbitError> {
+        let Some(source_id) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        if task.status != TaskStatus::Backlog || !self.task_run_is_local(task) {
+            return Ok(None);
+        }
+        let Some(source) = self.get_job_run_backend(source_id)? else {
+            return Ok(None);
+        };
+        if source.job_id != "task_pr_pipeline"
+            || source.input.as_ref().is_none_or(|i| {
+                i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
+            })
+            || !matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
+            || source.finished_at.is_none()
+            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+        {
+            return Ok(None);
+        }
+        let entries = self.get_task_history(&task.id)?;
+        let mut records = entries
+            .iter()
+            .filter(|e| e.event == PRESERVED)
+            .filter_map(|e| {
+                (e.by == "system")
+                    .then(|| parse_preserved(e).ok())
+                    .flatten()
+                    .filter(|record| record.source_run_id == source_id)
+            });
+        let (Some(record), None) = (records.next(), records.next()) else {
+            return Ok(None);
+        };
+        // The record digests the task as stored; a caller's copy may carry
+        // admission's resolved crew.
+        if record.schema_version != 1
+            || record.failure_handoff
+            || record.task_digest != task_digest(&self.get_task(&task.id)?)?
+            || entries.iter().any(|e| {
+                e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
+            })
+            || self.recorded_final_recovery(&task.id, source_id)?
+                != Some(crate::application::task::FinalRecoveryOutcome::Requeued)
+        {
+            return Ok(None);
+        }
+        let pull_request = self.read_run_state(source_id)?.and_then(|state| {
+            state.pipeline.get("pr_open")?["pr_number"]
+                .as_str()
+                .map(str::to_string)
+        });
+        Ok(Some(PublishedResume {
+            source_run_id: source_id.to_string(),
+            pull_request,
+        }))
     }
 
     /// Authenticate the `[BLOCKED]` PR the failure handoff of `task`'s
@@ -443,7 +526,16 @@ impl OrbitRuntime {
                     || !matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)))
             || binding.schema_version != 1
             || binding.source_run_id == run_id
-            || (active && task_digest(&task)? != binding.task_digest)
+            // This run's commit may widen the task's selectors to files the
+            // adopted candidate changed (an auto-fix repair the task did not
+            // declare); only those system widenings are set aside.
+            || (active
+                && super::adoption::admitted_task_digest(
+                    &task,
+                    &self.get_task_history(&task.id)?,
+                    run_id,
+                    run.created_at,
+                )? != binding.task_digest)
             || output["phase"] != "candidate_resume"
             || !matches!(
                 output["outcome"].as_str(),

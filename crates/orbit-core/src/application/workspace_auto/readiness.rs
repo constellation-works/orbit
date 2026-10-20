@@ -279,6 +279,7 @@ pub fn explain_workspace_auto_readiness(
         workspace_root,
         runtime.unlocked_context_paths(),
         &holders,
+        &snapshot.published_resumes,
         free_slots,
         footprint,
         None,
@@ -361,6 +362,22 @@ pub fn explain_workspace_auto_readiness(
             }
             if let Some(deadline) = snapshot.expiring_batches.get(&task.id) {
                 object.insert("frozen_batch_deadline".to_string(), json!(deadline));
+            }
+            // The next run adopts and completes a preserved publication, so
+            // no context lock holds it back; whatever else it waits on is
+            // reported as for any task.
+            if let Some(resume) = snapshot.published_resumes.get(&task.id) {
+                object.insert(
+                    "published_delivery".to_string(),
+                    json!({
+                        "source_run_id": resume.source_run_id,
+                        "pull_request": resume.pull_request,
+                        "detail": "Resumes its published delivery: the next run adopts the \
+                                   existing branch and pull request before it edits, so other \
+                                   tasks' context locks do not hold it back. It takes them \
+                                   before any edit.",
+                    }),
+                );
             }
             let unmet = unmet_task_dependencies_with_index(
                 task,

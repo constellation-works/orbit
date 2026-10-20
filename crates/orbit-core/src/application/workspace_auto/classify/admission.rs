@@ -258,6 +258,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             runtime.paths().repo_root.as_path(),
             runtime.unlocked_context_paths(),
             &holders,
+            &snapshot.published_resumes,
             free_slots,
             FootprintGuard {
                 enabled: max_active_leaf_runs > 1,
@@ -294,9 +295,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // A pass that stops here admits nothing, so it gives them back: a pass
     // deferred on a busy lock is retried, and every retry would otherwise
     // stack another copy of the same reservations onto the host's forecast.
-    if let Err(error) =
-        admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)
-    {
+    if let Err(error) = admit_through_section(runtime, action, &mut selection, &snapshot) {
         return Err(release_unadmitted_reservations(runtime, &reserved, error));
     }
     // A candidate the section then refused starts no run, and gap fit would

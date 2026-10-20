@@ -37,6 +37,7 @@ use serde_json::{Value, json};
 use super::claim_holders::claim_detail;
 use super::gap_fit::GapFit;
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
+use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::{UnlockedContextPaths, lock_context_files_for_task};
 
 /// Where a blocking footprint came from, so a deferral says whether the lock is
@@ -316,6 +317,11 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// With `gap_fit`, a candidate that passed every other check must also fit
 /// under the host load forecast; one that does not is left out of the wave
 /// and recorded by the gap fit, not in [`AdmissionSelection::deferred`].
+///
+/// A candidate in `published_resumes` adopts its preserved publication
+/// before it edits anything, so neither holders nor the wave defer it. Its
+/// selectors still join the wave: once admitted it is `in-progress`, and
+/// overlapping work waits on it as on any holder.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn select_admissions(
     ordered_candidates: &[String],
@@ -323,6 +329,7 @@ pub(crate) fn select_admissions(
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
     holders: &AdmissionHolders,
+    published_resumes: &BTreeMap<String, PublishedResume>,
     free_slots: usize,
     footprint: FootprintGuard<'_>,
     mut gap_fit: Option<&mut GapFit<'_>>,
@@ -358,9 +365,11 @@ pub(crate) fn select_admissions(
             continue;
         }
         let mut conflicts = Vec::new();
-        for requested_selector in &selectors {
-            conflicts.extend(holders.conflicts_for(requested_selector));
-            conflicts.extend(wave_conflicts(requested_selector, &wave));
+        if !published_resumes.contains_key(candidate_id) {
+            for requested_selector in &selectors {
+                conflicts.extend(holders.conflicts_for(requested_selector));
+                conflicts.extend(wave_conflicts(requested_selector, &wave));
+            }
         }
         conflicts.sort();
         conflicts.dedup();

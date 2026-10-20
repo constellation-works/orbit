@@ -705,6 +705,22 @@ pub trait RuntimeHost: Send + Sync {
         input: &Value,
     ) -> Option<Value>;
 
+    /// Before agent activity `activity_name` of `run_id`, which may edit the
+    /// run's worktree, take the context locks the run's admission deferred,
+    /// waiting while other work holds them.
+    ///
+    /// Only a run admitted without its footprint has anything to take: a
+    /// resumed published delivery, which adopts its existing branch and pull
+    /// request before it edits. Every other run returns at once. The engine
+    /// asks for each agent dispatch that may write (not a read-only
+    /// `reviewer` profile). A footprint still held when the host's wait ends
+    /// refuses the dispatch, so two writers never share a file.
+    fn acquire_deferred_footprint(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+    ) -> Result<(), DispatchError>;
+
     /// The tag instructions `activity_name` of `run_id` receives for the task
     /// its `input` names, in application order.
     ///

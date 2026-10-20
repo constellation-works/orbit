@@ -368,6 +368,99 @@ pub(crate) fn reserve_with_index(
     }
 }
 
+/// Grant `task_ids` a reservation that holds no files, for a delivery that
+/// takes its footprint only when it first edits: a resumed published
+/// delivery, which adopts its existing branch and pull request without
+/// touching the working tree. `deferred_conflicts` are the holders an ordinary
+/// reservation was refused on; the grant names them rather than waiting.
+///
+/// The row keeps the reservation id the gate releases, and, holding no files,
+/// cannot block an overlapping task. The leaf takes the files itself before
+/// its first agent edit (`acquire_deferred_footprint`).
+pub(crate) fn reserve_deferred_footprint(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    agent: Option<String>,
+    model: Option<String>,
+    reservation_owner: Option<ReservationOwnerContext>,
+    deferred_conflicts: Value,
+) -> Result<Value, OrbitError> {
+    let task_ids = parse_task_ids(input)?;
+    let ttl_seconds =
+        optional_u32_alias(input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
+    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
+        )));
+    }
+    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
+    let owner_run_id = reservation_owner
+        .as_ref()
+        .map(|owner| owner.owner_run_id.clone());
+    let result = runtime
+        .stores()
+        .task_reservations()
+        .reserve_task_reservation(TaskReservationReserveParams {
+            workspace_orbit_dir: workspace_orbit_dir(runtime),
+            workspace_id: workspace_task_reservation_id(runtime)?,
+            task_ids: task_ids.clone(),
+            requested_files: Vec::new(),
+            stored_files: Vec::new(),
+            actor: actor.clone(),
+            ttl_seconds,
+            owner_run_id: owner_run_id.clone(),
+            owner_metadata_json: reservation_owner.and_then(|owner| owner.owner_metadata_json),
+        })?;
+    emit_expired_reservation_events(runtime, &result.expired_reservations)?;
+    let reservation_id = result.reservation_id.clone().ok_or_else(|| {
+        OrbitError::Execution("reservation grant is missing reservation_id".to_string())
+    })?;
+    record_task_lock_audit_event(
+        runtime,
+        "task.locks.reserve.granted",
+        "orbit.task.locks.reserve",
+        Some(reservation_id.as_str()),
+        first_task_id(&task_ids),
+        AuditEventStatus::Success,
+        json!({
+            "reservation_id": reservation_id,
+            "files": [],
+            "expires_at": result.expires_at.clone(),
+            "actor": actor,
+            "task_ids": task_ids,
+            "owner_run_id": owner_run_id,
+            "footprint_deferred": true,
+            "deferred_conflicts": deferred_conflicts.clone(),
+        }),
+    )?;
+    Ok(json!({
+        "reserved": true,
+        "reservation_id": reservation_id,
+        "expires_at": result.expires_at,
+        "reserved_files": [],
+        "footprint_deferred": true,
+        "deferred_conflicts": deferred_conflicts,
+    }))
+}
+
+/// Whether `run_id` owns an active reservation that holds files.
+pub(crate) fn run_holds_file_reservation(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<bool, OrbitError> {
+    let listed = runtime
+        .stores()
+        .task_reservations()
+        .list_active_task_reservations(
+            &workspace_orbit_dir(runtime),
+            workspace_task_reservation_id(runtime)?.as_deref(),
+        )?;
+    emit_expired_reservation_events(runtime, &listed.expired_reservations)?;
+    Ok(listed.reservations.iter().any(|reservation| {
+        reservation.owner_run_id.as_deref() == Some(run_id) && !reservation.files.is_empty()
+    }))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TaskLockReservationScope {
     TaskIds(Vec<String>),

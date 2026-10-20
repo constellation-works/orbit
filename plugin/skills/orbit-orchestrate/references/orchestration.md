@@ -252,6 +252,13 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
+  backlog task whose final-recovery requeue kept its pull request. Its next
+  run adopts that branch and pull request before it edits anything, so it is
+  admitted past other tasks' context locks rather than waiting on
+  `context_lock_conflict`. Before any agent of that run that may edit, the run
+  takes the task's own footprint locks, waiting while another task holds them,
+  so two writers never share a file.
 - `unverified_review_finding` means the workspace sets
   `review.verify_findings = true` and a review-filed bug has no CONFIRMED
   verdict for its current material. Claim and evidence-selector edits require

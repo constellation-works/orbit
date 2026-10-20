@@ -681,6 +681,14 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(Vec::new())
     }
 
+    fn acquire_deferred_footprint(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
     fn resolve_activity_tool_denials(
         &self,
         _task_ids: &[String],

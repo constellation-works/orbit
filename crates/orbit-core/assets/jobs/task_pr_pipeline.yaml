@@ -58,6 +58,13 @@
 #   after required validation passes on it; a reviewed head is re-reviewed
 #   through the rounds below first. Review gates, unreadable checks and other
 #   administrative blockers stop without an agent.
+# - A final-recovery `requeue` whose run had pushed or opened its PR preserves
+#   that publication; the next run's `resume_candidate` adopts the same branch
+#   and PR, at the head Orbit's own auto-fix last recorded publishing on it
+#   (`pr_auto_fix_pushed`), and refuses a branch moved any other way. Such a
+#   run is admitted without waiting on other tasks' context locks
+#   (`footprint_deferred`), and takes them before its first agent that may
+#   edit; re-applying the unchanged published patch is not an edit.
 #
 schemaVersion: 2
 kind: Job
@@ -124,6 +131,14 @@ spec:
     # agent activities below resolve their crew against this run input, so the
     # dispatch gate refuses a crew the window excluded before a provider starts.
     allowed_crews: []
+    # Set by the gate when it admitted a resumed published delivery without
+    # its context locks. Before an agent that may edit the worktree runs, the
+    # run then takes them like any reservation, polling every
+    # `footprint_poll_seconds` for at most `footprint_wait_seconds` while
+    # other tasks hold them; still held, the dispatch is refused.
+    footprint_deferred: false
+    footprint_wait_seconds: 3600
+    footprint_poll_seconds: 30
     title: null
     body: null
 
