@@ -4,7 +4,8 @@
 // this dashboard. Add, rename and remove call the same operations as
 // `orbit host`, so a refusal is the CLI's typed error, shown beside the
 // control that caused it. Opening the view, Reload and Add probe the hosts;
-// the background poll reads cached fields only (`?probe=false`) and keeps
+// first paint the cached list with pending reachability, then update it when
+// the probe finishes. The background poll reads cached fields only and keeps
 // each row's last live reading, so a host added from the CLI appears on the
 // next refresh without the dashboard opening SSH sessions every 30 seconds.
 //
@@ -32,6 +33,8 @@ const LIVE_FIELDS = ["reachable", "error", "binary_version", "protocol_fingerpri
 let lastPayload = null;
 let live = new Map();
 let probeNext = true;
+/// The active probe and its SSH targets; cached refreshes must not cancel it.
+let pendingProbe = null;
 /// The open editor: `{kind: "add" | "rename" | "remove", id, draft, pending,
 /// error, code, dependents}`. Operator state, so a refresh never discards it.
 let editing = null;
@@ -49,6 +52,7 @@ export function resetHostsView() {
   lastPayload = null;
   live = new Map();
   probeNext = true;
+  pendingProbe = null;
   editing = null;
   notice = "";
   health = new Map();
@@ -56,24 +60,53 @@ export function resetHostsView() {
 
 export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
   const token = ++epoch;
-  await requestPanel(
-    "config-body",
-    "hosts",
-    () => fetchJson(probe ? "/api/hosts" : "/api/hosts?probe=false"),
-    (payload) => {
-      if (token !== epoch) return;
-      if (probe) {
-        live = new Map();
-        remember(payload.hosts || []);
-        probeNext = false;
-      }
-      lastPayload = payload;
-      render();
-    },
-    "config-count",
-  );
-  if (token !== epoch) return;
-  await loadHealth(token);
+  const checking = probe ? { targets: new Map() } : null;
+  if (probe) pendingProbe = checking;
+  try {
+    await requestPanel(
+      "config-body",
+      "hosts",
+      () => fetchJson("/api/hosts?probe=false"),
+      (payload) => {
+        if (token !== epoch) return;
+        if (checking) {
+          checking.targets = new Map((payload.hosts || []).filter((row) => !row.local).map((row) => [row.machine_id, row.ssh]));
+          probeNext = false;
+        }
+        lastPayload = payload;
+        render();
+      },
+      "config-count",
+    );
+  } catch (error) {
+    if (pendingProbe === checking) pendingProbe = null;
+    throw error;
+  }
+  if (token !== epoch) {
+    if (checking && pendingProbe === checking) {
+      pendingProbe = null;
+      probeNext = true;
+    }
+    return;
+  }
+  if (checking) {
+    try {
+      const payload = await fetchJson("/api/hosts");
+      if (pendingProbe !== checking) return;
+      const targets = new Map((lastPayload.hosts || []).map((row) => [row.machine_id, row.ssh]));
+      live = new Map([...live].filter(([id, seen]) => targets.get(id) === seen.ssh));
+      remember((payload.hosts || []).filter((row) => targets.get(row.machine_id) === row.ssh));
+    } catch (error) {
+      if (pendingProbe !== checking) return;
+      notice = `Host checks failed: ${error.message}. Use Reload to try again.`;
+      probeNext = true;
+    }
+    pendingProbe = null;
+    // Keep the latest cached list: a host may have been renamed, removed or
+    // retargeted while the probe ran. Live fields match by id and SSH target.
+    render();
+  }
+  await loadHealth(epoch);
 }
 
 function remember(rows) {
@@ -84,10 +117,14 @@ function remember(rows) {
 }
 
 function withLiveFields(row) {
-  if (row.local || row.reachable != null) return row;
+  if (row.local) return row;
   const seen = live.get(row.machine_id);
-  if (!seen || seen.ssh !== row.ssh) return row;
-  return { ...row, ...seen.fields, task_prefix: row.task_prefix ?? seen.fields.task_prefix };
+  const fields = row.reachable == null && seen?.ssh === row.ssh ? seen.fields : {};
+  return {
+    ...row, ...fields,
+    task_prefix: row.task_prefix ?? fields.task_prefix,
+    checking: pendingProbe?.targets.get(row.machine_id) === row.ssh,
+  };
 }
 
 // ------------------------------------------------------------------ render
@@ -216,8 +253,8 @@ function hostRow(row, names) {
   cells.setAttribute("role", "row");
   for (const cell of cells.children) cell.setAttribute("role", "cell");
   node.appendChild(cells);
-  if (row.error) {
-    node.appendChild(el("div", { class: "host-error", text: `${row.error.code}: ${row.error.message}` }));
+  if (row.error && !row.checking) {
+    node.appendChild(el("div", { class: "host-error", text: hostError(row), title: row.error.message }));
   }
   if (editing?.id === row.machine_id) {
     node.appendChild(editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
@@ -272,9 +309,17 @@ function hostSwitchHref(name) {
   return `${path}${query ? `?${query}` : ""}${hash}`;
 }
 
+function hostError(row) {
+  if (row.error.code === "unreachable_destination") {
+    return `${row.name} could not be reached. Check the network connection and SSH access to ${row.ssh || row.name}, then use Reload to try again.`;
+  }
+  return `${row.error.code}: ${row.error.message}`;
+}
+
 function healthCell(row) {
+  if (row.checking) return el("span", { class: "host-health host-health-pending", text: "checking…" });
   if (row.reachable === false) {
-    const error = row.error ? `${row.error.code}: ${row.error.message}` : "unreachable";
+    const error = !row.error || row.error.code === "unreachable_destination" ? "could not be reached" : hostError(row);
     return el("span", { class: "host-health host-health-error", text: error });
   }
   if (row.reachable == null) return el("span", { class: "host-health host-health-pending", text: "not probed" });
@@ -359,6 +404,7 @@ async function loadHealth(token) {
 }
 
 async function readHealth(row) {
+  if (row.checking) return { kind: "checking" };
   if (row.reachable === false) return { kind: "unreachable" };
   if (row.reachable == null) return { kind: "unprobed" };
   const workspaces = Array.isArray(row.workspaces) ? row.workspaces : [];
@@ -400,7 +446,9 @@ async function readDrain(hostName, workspace) {
 
 function reachableCell(row) {
   if (row.local) return el("span", { class: "host-reach ok", text: "this host" });
+  if (row.checking) return el("span", { class: "host-reach unknown", text: "checking…" });
   if (row.reachable == null) return el("span", { class: "host-reach unknown", text: "not probed" });
+  if (row.reachable === false && row.error?.code === "unreachable_destination") return el("span", { class: "host-reach down", text: "could not be reached" });
   if (row.error) {
     return el("span", { class: `host-reach ${row.reachable ? "warn" : "down"}`, text: `${row.reachable ? "answered" : "no"} · ${row.error.code}` });
   }

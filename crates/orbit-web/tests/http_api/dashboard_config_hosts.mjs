@@ -166,6 +166,7 @@ const DRAINS = {
 const resourceFailures = {};
 const requests = [];
 const holds = [];
+let probeHold = null;
 const response = (payload, status = 200) => ({ ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 const refuse = (status, code, error, extra = {}) => response({ error, code, ...extra }, status);
 const route = (url, options) => {
@@ -214,6 +215,11 @@ const route = (url, options) => {
 const fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   requests.push({ path: url.pathname + url.search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
+  if ((options.method || 'GET') === 'GET' && url.pathname === '/api/hosts' && url.searchParams.get('probe') !== 'false' && probeHold) {
+    const snapshot = response(JSON.parse(JSON.stringify(await route(url, options).json())));
+    await probeHold;
+    return snapshot;
+  }
   if (holds.length) await holds.shift();
   return route(url, options);
 };
@@ -258,10 +264,32 @@ const chipOf = (id, resource) => {
 initConfig();
 setConfigSubtab('hosts');
 assert.equal(getConfigSubtab(), 'hosts', 'the Hosts sub-view is routable');
+let finishProbe;
+probeHold = new Promise(resolve => { finishProbe = resolve; });
+const opening = fetchAndRenderConfig();
+await settle();
+assert.deepEqual(rows().map(node => node.dataset.key), ['hm_local', 'hm_alpha', 'hm_beta', 'hm_gamma'], 'registered hosts render while the SSH probe is held');
+for (const id of ['hm_alpha', 'hm_beta', 'hm_gamma']) {
+  assert.match(textOf(row(id), 'host-reach')[0], /checking/i, 'pending probes have a visible reachability state');
+}
+assert.equal(requests.some(request => request.path.includes('/api/on/beta/')), false, 'a pending host is not asked for health');
+await fetchAndRenderConfig();
+assert.match(textOf(row('hm_beta'), 'host-reach')[0], /checking/i, 'a cached refresh keeps the in-flight probe');
+assert.equal(hostFileRequests().filter(request => request.path === '/api/hosts').length, 1, 'a cached refresh starts no second probe');
+button(body, 'Add host').click();
+type('host-input-ssh', 'during-probe');
+submit();
+await settle();
+assert.equal(textOf(row('hm_during-probe'), 'host-reach')[0], 'yes', 'Add supplies its own live probe while the list probe is pending');
+finishProbe();
+probeHold = null;
+await opening;
+assert.equal(textOf(row('hm_during-probe'), 'host-reach')[0], 'yes', "the older list probe cannot discard the newly added host's live fields");
+entries = entries.filter(entry => entry.machine_id !== 'hm_during-probe');
 await fetchAndRenderConfig();
 
 // ---- render: local host first, labelled as the host this dashboard edits ----
-assert.equal(hostFileRequests()[0].path, '/api/hosts', 'opening the view probes every host');
+assert.equal(hostFileRequests()[0].path, '/api/hosts?probe=false', 'opening lists registered hosts before probing');
 assert.equal(explainer.hidden, true, 'Hosts does not repeat the config explainer');
 assert.deepEqual(rows().map(node => node.dataset.key), ['hm_local', 'hm_alpha', 'hm_beta', 'hm_gamma']);
 assert.match(textOf(body, 'host-scope')[0], /edits the host file of box-a: \/home\/op\/\.orbit\/hosts\.toml/);
@@ -274,8 +302,8 @@ assert.equal(textOf(row('hm_alpha'), 'host-protocol')[0], 'abcdef012345');
 assert.equal(textOf(row('hm_alpha'), 'host-skew')[0], 'none');
 assert.match(textOf(row('hm_alpha'), 'host-workspace')[0], /orbit \(owner\)/);
 assert.match(textOf(row('hm_alpha'), 'host-facts')[0], /hm_alpha · ssh alpha · prefix AL/);
-assert.equal(textOf(row('hm_beta'), 'host-reach')[0], 'no · unreachable_destination', 'an unreachable host stays listed');
-assert.match(textOf(row('hm_beta'), 'host-error')[0], /unreachable_destination: ssh: Could not resolve hostname beta/);
+assert.equal(textOf(row('hm_beta'), 'host-reach')[0], 'could not be reached', 'an unreachable host stays listed');
+assert.match(textOf(row('hm_beta'), 'host-error')[0], /could not be reached.*check.*SSH/i);
 assert.equal(textOf(row('hm_gamma'), 'host-skew')[0], 'skew: binary_version');
 assert.equal(count.textContent, '3 remote hosts');
 
@@ -303,7 +331,7 @@ assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down 
 delete DRAINS.alpha;
 assert.match(named(row('hm_gamma'), 'host-health')[0].getAttribute('aria-label'), /Throttle verdict: held/);
 assert.equal(named(row('hm_beta'), 'host-resource').length, 0, 'an unreachable host has no readings');
-assert.match(named(row('hm_beta'), 'host-health')[0].textContent, /unreachable_destination: ssh: Could not resolve hostname beta/);
+assert.match(named(row('hm_beta'), 'host-health')[0].textContent, /could not be reached/i);
 const healthPaths = requests.filter((request) => request.path.startsWith('/api/on/')).map((request) => request.path.split('?')[0]);
 for (const name of ['box-a', 'alpha', 'gamma']) {
   assert.ok(healthPaths.includes(`/api/on/${name}/host/resources`), `${name} resources were read`);
@@ -338,7 +366,7 @@ assert.equal(hostFileRequests().at(-1).path, '/api/hosts?probe=false', 'the poll
 assert.ok(requests.filter((request) => request.path.startsWith('/api/on/alpha/host/resources')).length > alphaReads, 'the refresh reads resources again');
 assert.equal(chipOf('hm_alpha', 'cpu').v, '1.6× cores', 'a later refresh shows the new load');
 assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'yes', 'a cached row keeps its last live reading');
-assert.equal(textOf(row('hm_beta'), 'host-reach')[0], 'no · unreachable_destination');
+assert.equal(textOf(row('hm_beta'), 'host-reach')[0], 'could not be reached');
 assert.equal(textOf(row('hm_delta'), 'host-reach')[0], 'not probed', 'a host added from the CLI appears on the next refresh');
 assert.equal(named(row('hm_delta'), 'host-health')[0].textContent, 'not probed');
 assert.equal(requests.filter((request) => request.path.includes('/api/on/delta/')).length, 0, 'a host that has not been probed is not asked for readings');
@@ -428,6 +456,34 @@ assert.ok(focused('host-add-open'), 'focus lands on Add host when the row is gon
 button(controls, 'Reload').click();
 await settle();
 assert.equal(hostFileRequests().at(-1).path, '/api/hosts', 'Reload probes every host');
+
+// ---- delayed probes cannot overwrite a newer host file or a left view ----
+probeHold = new Promise(resolve => { finishProbe = resolve; });
+button(controls, 'Reload').click();
+await settle();
+const oldAlpha = entries.find(entry => entry.machine_id === 'hm_alpha');
+entries = entries.map(entry => entry === oldAlpha ? { ...entry, name: 'new-alpha', ssh: 'new-target' } : entry);
+await fetchAndRenderConfig();
+assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'not probed', 'a new SSH target does not inherit the old probe state');
+finishProbe();
+probeHold = null;
+await settle();
+assert.equal(textOf(row('hm_alpha'), 'host-name-text')[0], 'new-alpha', 'probe completion preserves the newer registered name');
+assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'not probed', "an old-target result cannot become the new target's live reading");
+entries = entries.map(entry => entry.machine_id === 'hm_alpha' ? oldAlpha : entry);
+await fetchAndRenderConfig();
+
+probeHold = new Promise(resolve => { finishProbe = resolve; });
+button(controls, 'Reload').click();
+await settle();
+setConfigSubtab('effective');
+body.replaceChildren();
+finishProbe();
+probeHold = null;
+await settle();
+assert.equal(rows().length, 0, 'a late probe cannot repaint Hosts after leaving the view');
+setConfigSubtab('hosts');
+await fetchAndRenderConfig();
 
 // ---- without the operator capability the view is read-only ----
 hostEdit = { authorized: false, reason: "operation 'host.edit' requires operator capability" };
@@ -584,10 +640,16 @@ async function assertHostColumnsAlign() {
     page.on('pageerror', (error) => pageErrors.push(String(error)));
     await page.goto(`http://127.0.0.1:${port}/hosts-layout`);
     await page.evaluate(async (body) => {
+      const probe = new Promise(resolve => { window.finishProbe = resolve; });
       window.fetch = async (input) => {
         const url = new URL(input, location.origin);
         if (url.pathname === '/api/hosts') {
-          return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+          const probing = url.searchParams.get('probe') !== 'false';
+          if (probing) await probe;
+          const payload = probing ? body : { ...body, hosts: body.hosts.map(row => row.local ? row : {
+            ...row, reachable: null, error: null, binary_version: null, protocol_fingerprint: null, skew: false, skew_fields: [], workspaces: [],
+          }) };
+          return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         if (url.pathname.endsWith('/host/resources')) {
           return new Response(JSON.stringify({
@@ -606,9 +668,18 @@ async function assertHostColumnsAlign() {
       const mod = await import('/js/config.js');
       mod.initConfig();
       mod.setConfigSubtab('hosts');
-      await mod.fetchAndRenderConfig();
+      window.hostsReady = mod.fetchAndRenderConfig();
     }, payload);
     await page.waitForSelector('.host-row[data-key="hm_remote"] .host-rename');
+    assert.equal(await page.locator('.host-row').count(), 3, 'Chromium paints the registered list before the probe finishes');
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.match(await page.locator('.host-row[data-key="hm_beta"] .host-reach').innerText(), /checking/i, `pending probe stays visible at ${width}px`);
+      const overflow = await page.locator('.host-list').evaluate(node => node.scrollWidth - node.clientWidth);
+      assert.ok(overflow <= 1, `pending list overflows by ${overflow}px at ${width}px`);
+    }
+    await page.evaluate(async () => { window.finishProbe(); await window.hostsReady; });
+    await page.setViewportSize({ width: 1280, height: 900 });
     assert.deepEqual(pageErrors, [], `hosts page errors: ${pageErrors.join('\n')}`);
     const wide = await page.evaluate(columnBoxes);
     sameTrack('local row', wide.local, wide.header);
@@ -621,7 +692,7 @@ async function assertHostColumnsAlign() {
     assert.equal(wide.remoteButtons, 2, 'the remote row has Rename and Remove');
     assert.equal(wide.renameInsideActions, true, 'Rename fits in the shared actions track');
     assert.equal(wide.errorBelowGrid, true, 'the host-error line sits under the row, not in a column');
-    assert.match(wide.errorText, /unreachable_destination: ssh: Could not resolve hostname beta/);
+    assert.match(wide.errorText, /could not be reached.*check.*SSH/i);
 
     await page.setViewportSize({ width: 720, height: 900 });
     const narrow = await page.evaluate(narrowLayout);
@@ -636,7 +707,7 @@ async function assertHostColumnsAlign() {
     assert.ok(narrow.actions.width > narrow.grid.width * 0.8, 'actions span the stacked row');
     assert.ok(narrow.error.top >= narrow.grid.bottom - 1, 'the host-error line stays under the stacked cells');
     assert.ok(narrow.error.height > 0 && narrow.error.width > 0, 'the host-error line is visible');
-    assert.match(narrow.errorText, /unreachable_destination/);
+    assert.match(narrow.errorText, /could not be reached.*check.*SSH/i);
     assert.ok(narrow.listOverflow <= 1, `host list overflows by ${narrow.listOverflow}px at 720px`);
     console.log('settings hosts: column edges align across header, local, and remote rows; error line and 720px stack hold');
   } finally {
