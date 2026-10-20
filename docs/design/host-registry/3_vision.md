@@ -3,8 +3,8 @@ summary: "Host Registry — Vision"
 type: design
 title: "Host Registry — Vision"
 owner: codex
-last_updated: 2026-10-07
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Accepted
 feature: host-registry
 doc_role: vision
@@ -34,9 +34,11 @@ host-qualified selector. The implemented federated stdio mode is a separate
 exception: it lists and routes to the accepting machine and registered SSH
 hosts through host-qualified selectors. The local host registry remains
 neither a fleet inventory nor a general routing authority. The host file
-([specs/host-commands.md](./specs/host-commands.md)) records operator-registered hosts with
-immutable identity only. Its one routing rule is the task-id prefix
-([specs/host-routing.md](./specs/host-routing.md)). Owner and replica
+([specs/host-commands.md](./specs/host-commands.md)) records each registered host's
+name, SSH target, machine identity and task prefix, plus an optional operating-system
+snapshot captured at registration for creation-time crew-pool selection. Reachability,
+version, protocol and workspace details remain live. Its one routing rule is the task-id
+prefix ([specs/host-routing.md](./specs/host-routing.md)). Owner and replica
 checkout roles stay catalog vocabulary, not a fleet control plane.
 
 ## Questions that require evidence
