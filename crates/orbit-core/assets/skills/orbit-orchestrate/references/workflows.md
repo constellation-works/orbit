@@ -206,9 +206,15 @@ creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
-work, conflicts, warnings and a `no-auto-approve` tag leave that task proposed
-without blocking other pilot children. An `orbit run auto --approve-proposed`
-drain hands the same apply boundary a drain-scoped authority instead, verified
+work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
+proposed without blocking other pilot children. `blocked_by`, `adr_conflicts`
+and deterministic `validation_tool_warnings` entries always hold. Surface and
+utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
+contract conflicts or an unreachable validation requirement; false preserves an
+advisory observation without holding promotion or showing it as held. Legacy
+plain-string surface and utility warnings still hold. Advisory findings remain
+in the assessment comment shown by `orbit task show` and the worker's brief. An
+`orbit run auto --approve-proposed` drain hands the same apply boundary a drain-scoped authority instead, verified
 against the drain that dispatched the pilot. A standalone task-pilot run has no
 promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child

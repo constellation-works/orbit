@@ -3,7 +3,7 @@
 //!
 //! The CI sweep and an `--approve-proposed` drain decide differently about
 //! what qualifies a task, but both refuse the same evidence: a duplicate, an
-//! already-landed repair, or any conflict or warning finding. Both also
+//! already-landed repair, or any conflict or holding warning finding. Both also
 //! honour the filer's `no-auto-approve` opt-out. Reading and validating those
 //! findings lives here once so the two modes cannot drift.
 
@@ -25,6 +25,25 @@ const WARNING_FIELDS: [&str; 5] = [
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
 ];
+
+/// Only surface and utility findings may explicitly be advisory. Legacy
+/// strings and malformed findings hold by default; prerequisite, conflict and
+/// deterministic validation findings cannot opt out through this flag.
+pub(super) fn finding_holds_promotion(field: &str, finding: &Value) -> bool {
+    !(matches!(field, "surface_warnings" | "utility_warnings")
+        && finding.get("holds_promotion").and_then(Value::as_bool) == Some(false)
+        && finding
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty()))
+}
+
+/// Plain or structured finding text, shared with warning normalization.
+pub(super) fn warning_text(finding: &Value) -> Option<&str> {
+    finding
+        .as_str()
+        .or_else(|| finding.get("text").and_then(Value::as_str))
+}
 
 /// Whether the task's filer opted it out of automatic approval. The tag is
 /// also the hold reason, so the report names what to remove.
@@ -72,6 +91,7 @@ pub(crate) fn promotion_findings<'a>(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
+                .filter(move |value| finding_holds_promotion(field, value))
                 .map(move |value| json!({ "field": field, "value": value }))
         })
         .collect();
@@ -93,6 +113,7 @@ pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding>
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
+                .filter(move |value| finding_holds_promotion(field, value))
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),
@@ -103,13 +124,12 @@ pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding>
         .collect()
 }
 
-/// First non-empty line of a warning item. Objects and other shapes use their
-/// compact JSON so a non-string finding is still named.
+/// First non-empty line of a plain or structured warning item. Unrecognized
+/// shapes use compact JSON so even a malformed historical finding is named.
 fn finding_text(value: &Value) -> Option<String> {
-    let raw = match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    };
+    let raw = warning_text(value)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| value.to_string());
     let text = raw
         .lines()
         .map(str::trim)

@@ -126,7 +126,15 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
         "reassessment_triggers": [],
         "blocked_by": [],
         "adr_conflicts": [],
-        "utility_warnings": utility_warnings,
+        // Exercise normalization of the new structured findings alongside
+        // legacy strings, including the false artifact warning itself.
+        "utility_warnings": utility_warnings.iter().enumerate().map(|(index, text)| {
+            if index % 2 == 0 {
+                json!({"text": text, "holds_promotion": true})
+            } else {
+                json!(text)
+            }
+        }).collect::<Vec<_>>(),
         "surface_warnings": [],
         "duplicate_of": null,
         "already_landed": null,
@@ -166,6 +174,7 @@ fn strings(value: &Value) -> Vec<String> {
         .iter()
         .map(|item| {
             item.as_str()
+                .or_else(|| item.get("text").and_then(Value::as_str))
                 .unwrap_or_else(|| panic!("expected a string finding: {item}"))
                 .to_string()
         })

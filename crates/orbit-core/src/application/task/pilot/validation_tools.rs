@@ -308,7 +308,7 @@ pub(super) fn drop_false_artifact_warnings(
     else {
         return;
     };
-    warnings.retain(|warning| match warning.as_str() {
+    warnings.retain(|warning| match super::promotion::warning_text(warning) {
         Some(text) => !false_artifact_attachment_warning(text, lane, &granted),
         None => true,
     });

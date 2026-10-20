@@ -11,6 +11,12 @@ fn assess(workspace: &Workspace, task: &Task, warning: bool) {
     let prepared = workspace.prepare(&[&task.id]);
     assert_eq!(prepared["task_ids"], json!([task.id]));
     let mut input = apply_input(workspace, &prepared);
+    for field in ["utility_warnings", "surface_warnings"] {
+        input["results"][0]["tasks"][0][field] = json!([{
+            "text": "Optional adjacent cleanup outside this task.",
+            "holds_promotion": false,
+        }]);
+    }
     if warning {
         input["results"][0]["tasks"][0]["utility_warnings"] =
             json!(["Operator review is needed before implementation."]);
