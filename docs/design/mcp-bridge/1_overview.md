@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-10-13
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: mcp-bridge
 doc_role: overview
@@ -49,7 +49,8 @@ Local processes can still connect to loopback without authentication. A browser
 page can also send HTTP to loopback, so the listener closes connections whose
 first byte is not a JSON object start before rmcp sees any message. It is a
 transport adapter only: it adds no broker, checkout preflight, placement
-routing, or capability filter.
+routing, or client-side capability filter. The listener's server context is
+agent-only, as described below.
 
 ## Runtime rule
 
@@ -69,9 +70,14 @@ for the call. It:
 2. uses definition scope to decide whether a workspace is required;
 3. resolves any required workspace against its own registry and opens that
    server-local runtime;
-4. sends every call, including an unknown raw name, through Orbit Core exactly
-   once; and
-5. records success, failure, or denial at that boundary.
+4. sends each host-dispatched tool call, including global discovery, unknown
+   raw names, and server-resolution failures, through Orbit Core exactly once;
+   and
+5. records outcomes for calls that cross this boundary.
+
+Adapter-owned UI presentation entrypoints may return open, empty-state, or
+input-validation results locally. Selected task and run reads delegate to the
+backing read tool through Core.
 
 This is the same rule for direct stdio, SSH-originated, and socket sessions. A
 transport changes only how MCP bytes reach the server. The federated mode is
@@ -81,13 +87,15 @@ resolution, authorization, and Core dispatch.
 
 ## Audit context
 
-Each tool call carries a fresh `trace_id`. The server also records:
+Each Core-dispatched tool call carries a fresh `trace_id`. The Core audit row
+records:
 
 - `caller_machine_id`: an audit-only label supplied by the direct SSH proxy, or
   the local process identity when available;
 - `caller_ip`: the first field of `SSH_CONNECTION` for an SSH session, or the
   accepted peer's address for a listener session;
-- `process_machine_id` and `process_host_id`: derived by the accepting server;
+- `process_machine_id` and `process_machine_name`: derived by the accepting
+  server. `process_host_id` is accepted as a legacy input alias for the latter;
 - `transport`: `local` or `ssh-mcp`. A listener session is `local`, because it
   is served by the same local process with the same envelope; `caller_ip` is
   what distinguishes it.
@@ -129,11 +137,13 @@ exception. It performs live discovery and host-qualified routing, and the
 destination additionally enforces whether its checkout holds the tool's
 `control_plane` or `execute` capability class.
 
-Advertised definitions contain only schema plus global-versus-workspace-required
-scope. `orbit.workspace.list` is the sole global discovery tool in the
-MCP-owned server surface; plugins may declare global tools through their own
-scope. In direct mode it reports active logical workspaces that have a checkout
-registered on the accepting machine; federated mode replaces that response
+Each tool definition's global-versus-workspace-required scope decides only
+whether a workspace selector is required; it does not encode caller capability,
+placement, or authorization. `orbit.workspace.list` is the sole global discovery
+tool in the MCP-owned server surface; plugins may declare global tools through
+their own scope. In direct mode it reports active logical workspaces with a
+registered checkout on the accepting machine; federated mode replaces that
+response
 with live descriptors for the accepting machine and configured destinations.
 
 The executable contract and validation map live in

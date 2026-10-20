@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-10-13
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -21,9 +21,13 @@ The v1 design rests on six invariants:
 
 1. The accepting machine is authoritative for registry and runtime state.
 2. A remote session is one direct SSH hop; no Orbit process relays it onward.
-3. The client-side proxy is byte-transparent and policy-free.
-4. Every direct v1 tools/call enters Core's dispatch and audit boundary exactly once,
-   including global discovery, unknown raw names, and setup failures.
+3. The client-side proxy is byte-transparent and does not inspect or filter
+   MCP calls; its startup argv selects destination authority, as described in §4.
+4. Each host-dispatched direct tool call enters Core's dispatch and audit
+   boundary exactly once, including global discovery, unknown raw names, and
+   server-resolution failures. Adapter-owned UI presentation calls may return
+   open/empty-state or input-validation results locally; selected task and run
+   reads delegate to the backing read tool through Core.
 5. The destination serves the authority its argv requests. A forwarded caller
    label is self-asserted audit metadata and does not grant or restrict authority.
 6. Direct local, remote, and socket calls use the same server implementation;
@@ -178,9 +182,9 @@ clients into one audit identity.
 
 Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
-audit boundary. The listener adds no broker, checkout preflight, placement
-decision, capability filter, or authorization step of its own; it is hardcoded
-to agent authority because it authenticates no client.
+audit boundary. The listener adds no broker, checkout preflight, or placement
+decision and makes no separate client-side capability or authorization check; it
+serves agent authority because it authenticates no client.
 
 ## 5. Direct v1 workspace authority
 
@@ -204,10 +208,11 @@ server authority.
 
 ## 6. Tool discovery and dispatch
 
-The canonical surface is assembled in `orbit-mcp` from builtin definitions in
-`orbit-tools` and MCP-owned discovery definitions. Definitions are sorted and
-validated before advertisement. One source therefore drives both advertised
-schemas and dispatch lookup.
+`ServerMcpHost` combines the canonical definitions from `orbit-mcp`—builtin
+definitions from `orbit-tools` and MCP-owned discovery definitions—with the
+resolved plugin definitions. The combined list is sorted and validated before
+advertisement. The same definitions drive advertised schemas and dispatch
+lookup.
 
 Each definition contains a schema and an `McpToolScope`. Scope controls only
 whether the server injects and resolves a workspace selector. It does not encode
@@ -216,8 +221,11 @@ caller capability, placement, or authorization.
 The concrete server classifies known tools before opening a runtime. Known global
 tools use Core's global in-process seam; known workspace tools use the resolved
 runtime seam. Unknown and unadvertised raw names use the global seam and return
-`tool_not_found`. All three paths cross Core exactly once, so audit coverage does
-not depend on recognition or outcome.
+`tool_not_found`. Known tools and the unknown-name path cross Core exactly once,
+so audit coverage does not depend on recognition or outcome. The adapter-owned UI
+presentation entrypoints are a separate wrapper: opening the control center or
+returning its no-selection state is handled locally, while a selected task or run
+is read through the same Core-backed tool path.
 
 ## 7. Audit envelope
 
@@ -227,7 +235,7 @@ not depend on recognition or outcome.
 | `caller_machine_id` | Local server identity, or the SSH proxy's forwarded label | Audit correlation only |
 | `caller_ip` | First field of `SSH_CONNECTION`, or the accepted peer address | Best-effort network observation |
 | `process_machine_id` | Accepting machine registry | Machine executing the call |
-| `process_host_id` | Accepting machine registry | Host executing the call |
+| `process_machine_name` | Accepting machine registry | Executing host name; `process_host_id` is a legacy input alias |
 | `transport` | Accepting server mode | `local` or `ssh-mcp`; a listener session is `local` |
 | `effective_capabilities` | The accepting server's `--operator` argv, resolved once at start | Capabilities Core may enforce for this call |
 
