@@ -256,9 +256,9 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Optional task type",
+                "Optional task type (defaults to chore)",
                 flag_named("type", "TASK_TYPE"),
-                "Task type",
+                "Task type (defaults to chore)",
             ),
             mcp_only(
                 "relations",

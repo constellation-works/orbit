@@ -1202,7 +1202,7 @@
             "refactor",
             "chore"
           ],
-          "description": "Optional task type"
+          "description": "Optional task type (defaults to chore)"
         },
         "relations": {
           "type": "array",

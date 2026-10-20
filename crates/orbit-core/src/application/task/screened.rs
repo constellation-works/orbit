@@ -139,10 +139,7 @@ impl OrbitRuntime {
             self.add_task_validated(params, agent, model, action_key, digest)?;
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
-        warnings.extend(compute_task_add_warnings(
-            &requested_context_files,
-            task.task_type,
-        ));
+        warnings.extend(compute_task_add_warnings(&requested_context_files, &task));
         // [ORB-15191] Filed straight into the backlog with no footprint, a
         // live drain admits it before a pilot can prepare one.
         warnings.extend(backlog_footprint_warning(&task));

@@ -62,7 +62,7 @@ Options:
           - xhard:  Reserved top tier for the most capable (and most expensive) crews. Spelled `xhard` everywhere, so neither serde's snake_case rename nor clap's kebab-case value naming may split it into `x_hard`/`x-hard`
 
       --type <TASK_TYPE>
-          Task type
+          Task type (defaults to chore)
 
           Possible values:
           - feature
