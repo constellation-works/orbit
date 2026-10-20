@@ -1210,7 +1210,7 @@
     },
     {
       "name": "orbit_workflow_run_list",
-      "description": "List durable workflow runs newest-first with optional bounded filters.",
+      "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -1247,7 +1247,7 @@
     },
     {
       "name": "orbit_workflow_run_resume",
-      "description": "Resume a terminal resumable workflow run as a new linked run.",
+      "description": "Resume a terminal resumable workflow run as a new linked run. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -1279,7 +1279,7 @@
     },
     {
       "name": "orbit_workflow_run_show",
-      "description": "Fetch one durable workflow run by ID.",
+      "description": "Fetch one durable workflow run by ID. Requires operator capability; agent sessions are refused.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
