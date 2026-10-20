@@ -175,8 +175,11 @@ worker; once it has, the two race to settle the run. A run interrupted with
   command that still has its end. A worker that ran in no scope (macOS, containment off, no
   user manager) reads `no worker scope evidence is available`; nothing is inferred.
 - `…; afterwards its supervisor reaped pid <pid> at <time>: …`: reconciliation won, and
-  the observer added the exit it reaped afterwards. A reap time well after the run's
-  `finished_at` means the worker was still running when the run was interrupted.
+  the observer recorded the exit it reaped before reconciliation interrupted the run.
+  `finished_at` is the run's last audit activity, not the interruption time. A much later
+  reap observation shows that the worker's exit was observed after that activity and
+  before the interruption; it does not mean the worker was still running when the run
+  was interrupted.
 
 ```text
 job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
