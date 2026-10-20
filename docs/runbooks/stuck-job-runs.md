@@ -817,16 +817,34 @@ merged/closed PR or uncertain merge intent explicitly before trying again.
 For a publication requeued before preservation bindings were introduced, use
 explicit source repair against the **original publishing run**. Inspection also
 accepts an owner-local failed source with a durable applied final-recovery
-requeue. If the task now names a newer cancelled replacement, inspection binds
-that successor's entire stopped execution and checkpoints in `binding.superseded`.
-The successor must belong to the same task and machine, be conclusively stopped,
-and have no commit or publication attempt. Its retained files are left intact.
-Missing, live, foreign or candidate-producing successors refuse inspection.
+requeue. If the task now names a newer replacement, inspection binds every
+owner run that bound the task after the publishing run, up to the current
+binding, in `binding.superseded`: it names the current binding and digests each
+run's entire stopped execution and checkpoints. Each must be a single-task
+`task_pr_pipeline` run of the same task on the same machine, created after the
+source, conclusively stopped, unclaimed and with no local pull record, and have
+no commit, push, PR or landing-push checkpoint, step or step-start audit row.
+Gate and auto-dispatch wrappers are not bindings and are skipped. A run is
+either:
+
+- **cancelled**. Its retained files are left intact; or
+- **failed before producing source**, with a settled final recovery
+  (escalated or requeued). It stopped at or before candidate adoption: no step
+  after `resume_candidate` has a state or a step-start audit row, adoption did
+  not succeed, its failure handoff (if any) recorded `no_candidate`, and its
+  retained worktree has no uncommitted changes. A failed run that reached
+  implementation or left work behind is a resume candidate; resume or discard
+  it explicitly instead.
+
+Missing, live, foreign, claimed, unsettled or candidate-producing runs anywhere
+in that chain refuse inspection, as does a publishing run older than the
+task's 64 most recent runs.
 Review the returned original head, branch, PR and successor binding, then submit
-that exact binding with a new request key and a diagnosis. A changed successor
-invalidates it. Do not reconstruct checkpoints, clear the newer run link, or
-restart the replacement. A lost submission reply is reconciled by replaying the
-identical request key and payload.
+that exact binding with a new request key and a diagnosis. A change to any run
+in the chain invalidates it. Do not reconstruct checkpoints, fabricate a
+cancellation, clear the newer run link, or restart the replacement. A lost
+submission reply is reconciled by replaying the identical request key and
+payload.
 
 A stopped, escalated owner publication can also be inspected when its terminal
 hook recorded a blocked-publication receipt. The retained head must be the

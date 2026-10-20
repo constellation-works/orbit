@@ -217,7 +217,7 @@ fn publication_inner(
     checkout
 }
 
-fn requeue(f: &mut Fixture) {
+pub(super) fn requeue(f: &mut Fixture) {
     let observed = f
         .runtime
         .final_recovery_revision(&f.runtime.get_task(&f.task).unwrap())
