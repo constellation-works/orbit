@@ -50,6 +50,7 @@ class Node {
     this.children.push(child);
   }
   appendChild(child) { this.append(child); return child; }
+  prepend(child) { this.insertBefore(child, this.children[0] || null); }
   dispatch(type, extra = {}) {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
     for (const fn of this.listeners[type] || []) fn(event);
