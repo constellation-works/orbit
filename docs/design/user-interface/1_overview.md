@@ -45,11 +45,12 @@ admission passes and waits, fleet drains and locked files. Its Log view is
 `#drain/log`. The same dock, with the Auto-drain status card, Start a window,
 Locks held and the Log view, sits beside the task list on Tasks and gives way
 to the task pane when a task opens.
-The Drain page shows a fleet table, including in **All workspaces** mode:
-host, workspace, drain phase, used/ceiling leaf slots, eligible tasks, most common
-wait reason, and admission/provider holds. Selecting a row switches host and
-workspace using the dashboard scope controls. The table stacks into labelled rows
-on narrow screens. The top-bar fleet indicator remains visible when an idle
+The Drain page shows the fleet drains, including in **All workspaces** mode,
+grouped under one heading per host: one line per workspace with its drain
+phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most
+common wait reason and admission/provider holds add a second line only when
+present. Selecting a row switches host and workspace using the dashboard scope
+controls. The top-bar fleet indicator remains visible when an idle
 workspace is selected; opening it selects the fleet overview.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered

@@ -205,14 +205,13 @@ async function assertPollBudget(browser, port) {
     await page.locator('#global-drain-state').click();
     await page.locator('.fleet-drains').waitFor({ state: 'visible' });
     assert.equal(await fleetReads(), beforeCard, 'opening the fleet card paints the snapshot without another host fan-out');
-    const card = await page.locator('.fleet-drains').innerText();
-    assert.match(card, /draining/i);
-    assert.match(card, /2 \/ 4/);
-    assert.match(card, /4/);
-    assert.match(card, /context lock conflict/);
-    assert.match(card, /codex usage limit/);
-    assert.match(card, /claude authentication failed/);
-    assert.equal(await page.locator('.fleet-drains tbody tr').count(), 3);
+    const field = (row, name) => page.locator(`.fleet-drains .fleet-row[data-phase="${row}"] [data-field="${name}"]`).first().textContent();
+    assert.equal(await field('draining', 'phase'), 'Phase draining');
+    assert.equal(await field('draining', 'slots'), 'Slots 2/4');
+    assert.equal(await field('idle', 'eligible'), 'Eligible 4 eligible');
+    assert.equal(await field('idle', 'top-wait'), 'Top wait top wait: context lock conflict');
+    assert.equal(await field('idle', 'holds'), 'Holds held: codex usage limit; claude authentication failed');
+    assert.equal(await page.locator('.fleet-drains .fleet-row').count(), 3);
     assert.deepEqual(errors, []);
     return polls;
   } finally {
@@ -329,23 +328,29 @@ try {
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
   assert.equal(new URL(page.url()).searchParams.get('workspace'), 'all', 'header chip opens All workspaces');
-  assert.equal(await page.locator('.fleet-drains tbody tr').count(), 4);
-  assert.match(await page.locator('.fleet-drains').textContent(), /Host unreachable/);
+  assert.equal(await page.locator('.fleet-drains .fleet-row').count(), 4);
+  assert.equal(await page.locator('.fleet-unavailable [data-field="error"]').textContent(), 'Error Host unreachable');
   assert.equal(await page.locator('#auto-drain-start').isVisible(), false, 'fleet inspection exposes no workspace write controls');
   const measurements = [];
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(() => document.fonts.ready);
-    const layout = await page.evaluate(() => ({ viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
-      tableWidth: document.querySelector('.fleet-drains').getBoundingClientRect().width,
-      bodyWidth: document.querySelector('#auto-drain-body').getBoundingClientRect().width }));
+    const layout = await page.evaluate(() => {
+      const line = row => row.querySelector('.fleet-line').getBoundingClientRect().height;
+      const rows = [...document.querySelectorAll('.fleet-drains .fleet-row:not(.fleet-unavailable)')];
+      return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
+        cardWidth: document.querySelector('.fleet-drains').getBoundingClientRect().width,
+        bodyWidth: document.querySelector('#auto-drain-body').getBoundingClientRect().width,
+        rowHeights: rows.map(row => [row.getBoundingClientRect().height, line(row), Boolean(row.querySelector('.fleet-detail'))]) };
+    });
     assert.ok(layout.pageWidth <= layout.viewport, JSON.stringify(layout));
-    assert.ok(layout.tableWidth <= layout.bodyWidth, JSON.stringify(layout));
-    assert.equal(await page.locator('.fleet-drains tbody td').first().evaluate(cell =>
-      getComputedStyle(cell, '::before').content === JSON.stringify(cell.dataset.label) && Boolean(cell.dataset.label)), width <= 650,
-      'only narrow fleet tables stack with visible field labels');
-    measurements.push(layout);
-    await page.locator('.fleet-drains tbody tr').first().scrollIntoViewIfNeeded();
+    assert.ok(layout.cardWidth <= layout.bodyWidth, JSON.stringify(layout));
+    // A long unbroken workspace name truncates rather than wrapping its row.
+    for (const [height, line, detail] of layout.rowHeights) {
+      assert.ok(line <= 24, `each workspace keeps its name, phase and slots on one line: ${JSON.stringify(layout)}`);
+      if (!detail) assert.ok(height <= line + 10, `a row with nothing waiting is one line: ${JSON.stringify(layout)}`);
+    }
+    await page.locator('.fleet-drains .fleet-row').first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'fleet-' + width + '.png'), fullPage: true });
   }
   // Select a row on another host through its native keyboard control.
@@ -362,10 +367,10 @@ try {
   assert.equal(url.searchParams.get('workspace'), 'busy');
   await page.waitForFunction(() => globalThis.fleetRequests.some(url => url.startsWith('/api/on/remote/workflows/auto/readiness?workspace=busy')));
   // Return through the pill, then select a serving-host row by clicking its
-  // phase cell: the whole row, not only the workspace button, is navigable.
+  // slots: the whole row, not only the workspace button, is navigable.
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
-  await page.locator('.fleet-drains tbody tr').first().locator('td').nth(2).click();
+  await page.locator('.fleet-drains .fleet-row').first().locator('[data-field="slots"]').click();
   await page.waitForFunction(async () => {
     const common = await import('/js/common.js');
     return common.getHost() === null && common.getWorkspace() === 'idle';
@@ -374,7 +379,7 @@ try {
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults,
-    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();

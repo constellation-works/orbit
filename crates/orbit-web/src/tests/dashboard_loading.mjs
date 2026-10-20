@@ -356,11 +356,15 @@ const aggregateDrainIndicator = node('global-drain-state');
 check(!aggregateDrainIndicator.hidden && fleetLabel() === selectedFleetLabel
   && aggregateDrainIndicator.dataset.drainState === 'draining', 'aggregate header retains the fleet drain count');
 check(aggregateDrainIndicator.getAttribute('aria-label').includes('Open fleet drains'), 'fleet indicator names its navigation action');
-const fleetRows = [...node('auto-drain-body').querySelectorAll('.fleet-drains tbody tr')]
-  .map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent));
-check(fleetRows.length === 2 && fleetRows[0][1] === 'one' && fleetRows[0][2] === 'idle'
-  && fleetRows[0][4] === '2' && fleetRows[1][1] === 'two' && fleetRows[1][2] === 'draining'
-  && fleetRows[1][3] === '1 / 4', 'aggregate fleet card shows idle eligible work beside the live drain');
+const fleetRows = [...node('auto-drain-body').querySelectorAll('.fleet-drains .fleet-row')].map(row => ({
+  workspace: row.querySelector('.fleet-workspace')?.textContent, phase: row.dataset.phase,
+  slots: row.querySelector('[data-field="slots"]')?.textContent,
+  eligible: row.querySelector('[data-field="eligible"]')?.textContent ?? null,
+}));
+const fleetRow = name => fleetRows.find(row => row.workspace === name);
+check(fleetRows.length === 2 && fleetRows[0].workspace === 'two' && fleetRow('two').phase === 'draining'
+  && fleetRow('two').slots === 'Slots 1/4' && fleetRow('one').phase === 'idle' && fleetRow('one').eligible === 'Eligible 2 eligible',
+  `aggregate fleet card leads with the live drain and shows idle eligible work: ${JSON.stringify(fleetRows)}`);
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
 check(text('rail-count-jobs') === '22 runs', `aggregate Jobs rail shows the fleet total in runs, not the one-item page: ${text('rail-count-jobs')}`);
