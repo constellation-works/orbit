@@ -167,6 +167,7 @@ const resourceFailures = {};
 const requests = [];
 const holds = [];
 let probeHold = null;
+let resourceHold = null;
 const response = (payload, status = 200) => ({ ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 const refuse = (status, code, error, extra = {}) => response({ error, code, ...extra }, status);
 const route = (url, options) => {
@@ -219,6 +220,9 @@ const fetch = async (path, options = {}) => {
     const snapshot = response(JSON.parse(JSON.stringify(await route(url, options).json())));
     await probeHold;
     return snapshot;
+  }
+  if (url.pathname === '/api/on/box-a/host/resources' && resourceHold) {
+    const hold = resourceHold; resourceHold = null; await hold;
   }
   if (holds.length) await holds.shift();
   return route(url, options);
@@ -484,6 +488,28 @@ await settle();
 assert.equal(rows().length, 0, 'a late probe cannot repaint Hosts after leaving the view');
 setConfigSubtab('hosts');
 await fetchAndRenderConfig();
+
+// ---- cached refresh during a probe preserves newer probe health readings [ORB-17130] ----
+setConfigSubtab('effective');
+setConfigSubtab('hosts');
+let finishProbeHealth;
+probeHold = new Promise(resolve => { finishProbeHealth = resolve; });
+const probeRun = fetchAndRenderConfig();
+await settle();
+let finishCachedHealth;
+resourceHold = new Promise(resolve => { finishCachedHealth = resolve; });
+const cachedRefresh = fetchAndRenderConfig();
+await settle();
+finishProbeHealth();
+probeHold = null;
+await probeRun;
+const afterProbe = chipOf('hm_alpha', 'cpu');
+assert.ok(afterProbe, 'probe completion shows remote health');
+finishCachedHealth();
+await cachedRefresh;
+const afterCached = chipOf('hm_alpha', 'cpu');
+assert.deepEqual(afterCached, afterProbe, 'stale checking results cannot replace completed probe health');
+assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'idle', 'drain state remains visible');
 
 // ---- without the operator capability the view is read-only ----
 hostEdit = { authorized: false, reason: "operation 'host.edit' requires operator capability" };

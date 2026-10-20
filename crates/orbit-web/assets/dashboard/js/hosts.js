@@ -42,13 +42,17 @@ let notice = "";
 /// Per-host resource snapshot and drain capacity, keyed by machine id.
 /// Replaced as a whole when a refresh's fan-out finishes.
 let health = new Map();
-/// Bumped when the view is left or a newer refresh starts, so a late fan-out
-/// cannot paint over the next one.
+/// Bumped when the view is left or a newer refresh starts, so an older
+/// refresh cannot paint over the next one.
 let epoch = 0;
+/// Bumped when the view is left or a newer health load starts, so an older
+/// health fan-out cannot paint over newer health readings.
+let healthEpoch = 0;
 
 /// Forget everything when the view is left, so reopening it probes again.
 export function resetHostsView() {
   epoch += 1;
+  healthEpoch += 1;
   lastPayload = null;
   live = new Map();
   probeNext = true;
@@ -106,7 +110,7 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
     // retargeted while the probe ran. Live fields match by id and SSH target.
     render();
   }
-  await loadHealth(epoch);
+  await loadHealth();
 }
 
 function remember(rows) {
@@ -393,12 +397,13 @@ function drainSummary(reading, verdict) {
   return { text: parts.join(" · ") || "…", active: draining || winding || pulling, title: lines.join("\n") };
 }
 
-async function loadHealth(token) {
+async function loadHealth() {
+  const token = ++healthEpoch;
   const payload = lastPayload;
-  if (!payload || token !== epoch) return;
+  if (!payload || token !== healthEpoch) return;
   const rows = (payload.hosts || []).map(withLiveFields);
   const entries = await Promise.all(rows.map(async (row) => [row.machine_id, await readHealth(row)]));
-  if (token !== epoch) return;
+  if (token !== healthEpoch) return;
   health = new Map(entries);
   render();
 }
