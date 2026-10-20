@@ -23,7 +23,9 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers, TaskPrForge};
+use orbit_core::runtime::task_pr_forge::{
+    ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
+};
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
@@ -43,6 +45,7 @@ struct ForgeState {
     /// What the forge reports blocking each pull request's completion.
     blockers: BTreeMap<u64, PullRequestBlockers>,
     blocker_reads: usize,
+    gh_blocker_reads: std::collections::BTreeSet<u64>,
 }
 
 #[derive(Default, Clone)]
@@ -56,6 +59,10 @@ impl FakeForge {
             body: String::new(),
             author: "orbit-bot".to_string(),
         });
+    }
+
+    fn use_gh_for_blockers(&self, number: u64) {
+        self.0.lock().unwrap().gh_blocker_reads.insert(number);
     }
 }
 
@@ -92,6 +99,10 @@ impl TaskPrForge for FakeForge {
             return Err(OrbitError::Execution(
                 "gh api graphql failed: timed out".into(),
             ));
+        }
+        if state.gh_blocker_reads.contains(&number) {
+            drop(state);
+            return GhTaskPrForge.pull_request_blockers(_repo_root, number);
         }
         Ok(state.blockers.get(&number).cloned())
     }

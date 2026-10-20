@@ -209,6 +209,42 @@ impl Fixture {
             },
         );
     }
+
+    /// Make the selected PR use the production GraphQL parser and report
+    /// GitHub's still-calculating mergeability answer.
+    #[cfg(unix)]
+    fn mergeability_unknown(&self, leaf: &Leaf) {
+        self.forge.use_gh_for_blockers(leaf.number);
+        let home = std::env::var_os("HOME").expect("scenario HOME");
+        let bin = std::path::PathBuf::from(home).join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let answer = bin.join("unknown-mergeability.json");
+        std::fs::write(
+            &answer,
+            json!({"data":{"repository":{"pullRequest":{
+                "state":"OPEN",
+                "body":format!("Delivers {}.", leaf.task),
+                "author":{"login":"orbit-bot"},
+                "headRefName":&leaf.head,
+                "headRefOid":"unknown-head",
+                "mergeable":"UNKNOWN",
+                "commits":{"nodes":[{"commit":{"oid":"unknown-head",
+                    "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[]}}
+                }}]}
+            }}}})
+            .to_string(),
+        )
+        .unwrap();
+        let quoted = answer.to_string_lossy().replace('\'', "'\\''");
+        let gh = bin.join("gh");
+        std::fs::write(
+            &gh,
+            format!("#!/bin/sh\n[ \"$1 $2\" = \"api graphql\" ] || exit 99\ncat '{quoted}'\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
 
 fn started<'a>(pass: &'a Value, task: &str) -> Option<&'a Value> {
@@ -336,6 +372,50 @@ fn red_checks_and_review_or_requeued_tasks_are_repaired_too() {
     );
 }
 
+#[cfg(unix)]
+fn unknown_mergeability_on_the_newest_pull_request_does_not_defer_older_repairs() {
+    let fx = fixture();
+    let older_conflicting = fx.stopped_leaf(85, "review", Shelf::Escalated);
+    fx.blocked(&older_conflicting, "ddd1", "orbit-bot", true, &[]);
+    let newest_unknown = fx.stopped_leaf(86, "review", Shelf::Escalated);
+    fx.mergeability_unknown(&newest_unknown);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+
+    assert_eq!(
+        repair_skip(&pass, &newest_unknown.task).as_deref(),
+        Some("mergeability_unknown"),
+        "the unknown answer is a per-pull-request skip: {pass}"
+    );
+    let repaired = started(&pass, &older_conflicting.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(repaired["blocker"], "conflict", "{pass}");
+    assert_eq!(fx.retries(&older_conflicting.run).len(), 1);
+    assert!(fx.retries(&newest_unknown.run).is_empty());
+}
+
+fn a_genuine_forge_failure_still_defers_later_blocker_reads() {
+    let fx = fixture();
+    let older = fx.stopped_leaf(87, "review", Shelf::Escalated);
+    fx.blocked(&older, "eee1", "orbit-bot", true, &[]);
+    let newest = fx.stopped_leaf(88, "review", Shelf::Escalated);
+    fx.blocked(&newest, "eee2", "orbit-bot", true, &[]);
+    fx.forge.0.lock().unwrap().unreachable = true;
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+
+    for leaf in [&newest, &older] {
+        assert_eq!(
+            repair_skip(&pass, &leaf.task).as_deref(),
+            Some("forge_unreadable"),
+            "a real forge failure defers this pass: {pass}"
+        );
+        assert!(fx.retries(&leaf.run).is_empty());
+    }
+    assert_eq!(fx.forge.0.lock().unwrap().blocker_reads, 1);
+}
+
 fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() {
     let fx = fixture();
     let held = fx.stopped_leaf(91, "review", Shelf::OperatorHold);
@@ -451,6 +531,13 @@ crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,
+    a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    unknown_mergeability_scenarios,
+    unknown_mergeability_on_the_newest_pull_request_does_not_defer_older_repairs,
 );

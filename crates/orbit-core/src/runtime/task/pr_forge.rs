@@ -100,8 +100,10 @@ pub trait TaskPrForge: Send + Sync {
     }
 
     /// What holds pull request `number` back from merging, or `None` when it
-    /// is not open or this forge cannot tell. The default cannot tell, so a
-    /// forge without it repairs nothing out of run.
+    /// is not open or this forge cannot tell. GitHub's still-calculating
+    /// `UNKNOWN` mergeability answer is reported as
+    /// [`OrbitError::PullRequestMergeabilityUnknown`]. The default cannot tell,
+    /// so a forge without it repairs nothing out of run.
     fn pull_request_blockers(
         &self,
         _repo_root: &Path,
@@ -253,6 +255,9 @@ impl TaskPrForge for GhTaskPrForge {
         if !has_state(pull, "open") {
             return Ok(None);
         }
+        if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
+            return Err(OrbitError::PullRequestMergeabilityUnknown { number });
+        }
         pull_request_blockers_from_json(number, pull)
             .map(Some)
             .ok_or_else(|| {
@@ -353,9 +358,9 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
     })
 }
 
-/// Read a GraphQL pull request answer. An unknown mergeability, a head the
-/// rollup does not describe, or a truncated rollup cannot be judged, so it
-/// reads as unknown rather than as no blocker.
+/// Read a GraphQL pull request answer whose mergeability can be judged. The
+/// caller classifies `UNKNOWN` separately; a head the rollup does not describe
+/// or a truncated rollup cannot be judged, so neither is reported as no blocker.
 fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequestBlockers> {
     let head_sha = pull.get("headRefOid")?.as_str()?.to_string();
     let conflicting = match pull.get("mergeable")?.as_str()? {

@@ -255,6 +255,11 @@ pub enum OrbitError {
          the task `delivery:task_local_pipeline` to deliver it locally"
     )]
     PrForgeRemoteMissing { remotes: String },
+    /// GitHub has not finished calculating whether an open pull request can
+    /// merge. Callers should defer that pull request without treating the
+    /// answer as a forge failure.
+    #[error("pull request #{number} mergeability is unknown")]
+    PullRequestMergeabilityUnknown { number: u64 },
     /// Completion cannot overtake the linked implementation run while its
     /// recorded PID and start-time identity still name a running owner.
     #[error(
