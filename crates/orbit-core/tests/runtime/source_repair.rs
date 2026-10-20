@@ -13,6 +13,8 @@ use std::path::PathBuf;
 mod association;
 #[path = "source_repair/failed_publication.rs"]
 mod failed_publication;
+#[path = "source_repair/failed_successors.rs"]
+mod failed_successors;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, git};
@@ -52,6 +54,10 @@ use completion::{
     repeated_observation_failure_escalates_after_one_retry,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
+};
+use failed_successors::{
+    failed_pre_adoption_chain_rebinds_the_original_publication,
+    failed_successor_chain_keeps_every_neighboring_refusal,
 };
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use published_owner::{
@@ -840,6 +846,8 @@ crate::scenario_table!(
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
+    failed_pre_adoption_chain_rebinds_the_original_publication,
+    failed_successor_chain_keeps_every_neighboring_refusal,
     cancelled_published_repair_accepts_fresh_generation,
     cancelled_candidate_requires_explicit_intent_and_continues_same_branch,
     cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift,

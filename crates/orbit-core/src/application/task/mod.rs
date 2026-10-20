@@ -37,6 +37,7 @@ mod records;
 mod requeue;
 mod resolves;
 mod retained_candidate;
+pub(crate) use retained_candidate::RetainedCandidate;
 mod screened;
 mod steering;
 mod transient_infra;

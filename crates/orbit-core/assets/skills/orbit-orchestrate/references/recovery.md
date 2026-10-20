@@ -275,6 +275,15 @@ PR must remain open and unmerged with automatic merge explicitly disabled;
 a draft remains a draft. Missing, contradictory or changed evidence refuses
 before reservation. A live/foreign/claimed source or a newer attempt that
 may have written a candidate cannot be bypassed by selecting an older head.
+Newer owner attempts between the source and the task's current binding are
+bound together in `binding.superseded`, and a change to any of them voids
+the binding. Each must be conclusively stopped and either cancelled, or failed
+at or before candidate adoption with a settled (escalated or requeued) final
+recovery, no failure handoff other than one that published nothing
+(`no_candidate`), and a clean retained worktree. A failed attempt that reached
+implementation or left work behind is a resume candidate, not a successor to
+set aside
+([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-cancelled-published-source-repair)).
 Diagnose the named missing receipt or identity mismatch, then inspect again;
 do not invent a checkpoint, copy another run's admission, or weaken gates.
 

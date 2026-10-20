@@ -5,7 +5,7 @@ use orbit_core::application::task::{
 };
 use std::path::Path;
 
-fn escalate(f: &Fixture, id: &str) {
+pub(super) fn escalate(f: &Fixture, id: &str) {
     let task = f.runtime.get_task(&f.task).unwrap();
     let request = FinalRecoveryRequest {
         task_id: f.task.clone(),
