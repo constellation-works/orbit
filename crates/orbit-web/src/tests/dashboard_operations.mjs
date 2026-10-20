@@ -16,6 +16,7 @@ const fetchAndRenderOperations = async () => {
 const get = id => document.getElementById(id);
 const descendants = node => [node, ...Array.from(node.children || []).flatMap(descendants)];
 const button = (id, label) => descendants(get(id)).find(node => node.textContent === label && node.type === 'button');
+const namedSwitch = (id, name) => descendants(get(id)).find(node => node.type === 'button' && node.getAttribute('role') === 'switch' && node.getAttribute('aria-label') === name);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 // A task's running job id with no break opportunity: it must wrap inside its
@@ -771,7 +772,8 @@ await fetchAndRenderOperations();
 const routineGroups = descendants(get('routines-body')).filter(node => String(node.className || '').includes('operation-group-title')).map(node => node.textContent);
 assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.some(text => text.startsWith('Paused1')), `routines grouped by state: ${routineGroups}`);
 const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
-assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable', 'routine toggle is a switch named by its action');
+const routineSwitchName = routineSwitch?.getAttribute('aria-label');
+assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable' && routineSwitchName?.includes('Routine one'), 'routine switch names its item and keeps its visible readback text');
 assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue?job=fixture'), 'routine row links the job it runs');
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
@@ -910,7 +912,7 @@ assert(button('auto-tasks-body', 'Disable').disabled, 'toggle denied independent
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'partial capability preserves mint');
 assert(button('clock-body', 'Pause clock').disabled, 'clock service denied independently');
 const explanation = descendants(get('auto-tasks-body')).find(node => node.getAttribute?.('aria-label')?.includes(denied.reason));
-assert(explanation?.tabIndex === 0, 'disabled action reason is keyboard accessible');
+assert(explanation?.tabIndex === 0 && explanation.getAttribute('aria-label').includes('Chore one') && explanation.getAttribute('aria-label').endsWith(denied.reason), 'disabled action reason is keyboard accessible and names its item');
 assert(!get('auto-tasks-body').textContent.includes('Ask the server operator'), 'no repeated per-card session warning');
 capabilities.auto_task_mint = denied;
 await fetchAndRenderOperations();
@@ -920,7 +922,9 @@ await fetchAndRenderOperations();
 
 // Toggle both ways with server readback; a second event on the old button is ignored.
 delayPost = true;
-let action = button('auto-tasks-body', 'Disable');
+let action = descendants(get('auto-tasks-body')).find(node => node.type === 'button' && node.getAttribute('role') === 'switch' && node.getAttribute('aria-label')?.includes('Chore one'));
+const autoTaskSwitchName = action?.getAttribute('aria-label');
+assert(autoTaskSwitchName?.includes('Chore one') && action.getAttribute('aria-checked') === 'true', 'auto-task switch names its item while enabled');
 action.click(); action.click();
 await tick();
 assert(requests.filter(r => r.path === '/api/auto-tasks/toggle').length === 1, 'toggle double click submits once');
@@ -928,16 +932,22 @@ const ordinaryToggle = requests.find(r => r.path === '/api/auto-tasks/toggle');
 assert(ordinaryToggle.body.name === 'Chore one' && ordinaryToggle.body.expected_enabled === true && ordinaryToggle.body.enabled === false, `ordinary toggle keeps the raw compare-and-set token: ${JSON.stringify(ordinaryToggle.body)}`);
 assert(button('auto-tasks-body', 'Pending…').disabled, 'toggle pending is disabled');
 releasePost(); await tick(); await tick();
-assert(button('auto-tasks-body', 'Enable'), 'toggle readback changes rendered state');
+const disabledAutoTaskSwitch = namedSwitch('auto-tasks-body', autoTaskSwitchName);
+assert(disabledAutoTaskSwitch?.textContent === 'Enable' && disabledAutoTaskSwitch.getAttribute('aria-checked') === 'false', 'auto-task readback changes only the checked state and visible action');
 delayPost = false;
-button('auto-tasks-body', 'Enable').click(); await tick(); await tick();
-assert(button('auto-tasks-body', 'Disable'), 'toggle can be re-enabled');
+disabledAutoTaskSwitch.click(); await tick(); await tick();
+const enabledAutoTaskSwitch = namedSwitch('auto-tasks-body', autoTaskSwitchName);
+assert(enabledAutoTaskSwitch?.textContent === 'Disable' && enabledAutoTaskSwitch.getAttribute('aria-checked') === 'true', 'auto-task can be re-enabled without changing its accessible name');
 
-// Routine uses the same guarded path, including readback in both directions.
-button('routines-body', 'Disable').click(); await tick(); await tick();
-assert(button('routines-body', 'Enable'), 'routine disable reads back');
-button('routines-body', 'Enable').click(); await tick(); await tick();
-assert(button('routines-body', 'Disable'), 'routine enable reads back');
+// Routine fixtures cover both checked states without changing a live routine.
+enabled.one = false;
+await fetchAndRenderOperations();
+const disabledRoutineSwitch = namedSwitch('routines-body', routineSwitchName);
+assert(disabledRoutineSwitch?.textContent === 'Enable' && disabledRoutineSwitch.getAttribute('aria-checked') === 'false', 'disabled routine keeps its item name while checked state and visible action update');
+enabled.one = true;
+await fetchAndRenderOperations();
+const enabledRoutineSwitch = namedSwitch('routines-body', routineSwitchName);
+assert(enabledRoutineSwitch?.textContent === 'Disable' && enabledRoutineSwitch.getAttribute('aria-checked') === 'true', 'enabled routine keeps the same item name');
 
 // Host controls post canonical action names and serialize service/cadence changes.
 delayPost = true;
@@ -1070,7 +1080,7 @@ assert(legacyCard, 'legacy-enabled consumer row is present');
 const legacyClasses = String(legacyCard.className).split(/\s+/);
 assert(legacyClasses.includes('enabled') && !legacyClasses.includes('disabled'), `legacy-enabled row is styled enabled: ${legacyCard.className}`);
 const legacySwitch = descendants(legacyCard).find(node => node.type === 'button' && (node.textContent === 'Disable' || node.textContent === 'Enable'));
-assert(legacySwitch?.textContent === 'Disable' && legacySwitch.getAttribute('aria-checked') === 'true', 'legacy-enabled consumer offers Disable');
+assert(legacySwitch?.textContent === 'Disable' && legacySwitch.getAttribute('aria-checked') === 'true' && legacySwitch.getAttribute('aria-label').includes('delivery-code-review'), 'legacy-enabled consumer offers a named Disable switch');
 const beforeLegacy = requests.length;
 legacySwitch.click(); await tick(); await tick();
 const legacyToggle = requests.slice(beforeLegacy).find(r => r.path === '/api/auto-tasks/toggle');
@@ -1078,13 +1088,13 @@ assert(legacyToggle && legacyToggle.body.name === 'delivery-code-review' && lega
 const legacyAfter = descendants(get('auto-tasks-body')).find(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('delivery-code-review'));
 const legacyAfterClasses = String(legacyAfter?.className || '').split(/\s+/);
 assert(legacyAfterClasses.includes('disabled') && !legacyAfterClasses.includes('enabled'), `readback styles the consumer disabled: ${legacyAfter?.className}`);
-assert(descendants(legacyAfter).some(node => node.type === 'button' && node.textContent === 'Enable'), 'readback offers Enable after Disable');
+assert(descendants(legacyAfter).some(node => node.type === 'button' && node.textContent === 'Enable' && node.getAttribute('aria-label').includes('delivery-code-review') && node.getAttribute('aria-checked') === 'false'), 'readback offers a stable named Enable switch after Disable');
 assert(get('auto-tasks-count').textContent.startsWith('2 enabled of 3'), `readback drops the consumer from the enabled count: ${get('auto-tasks-count').textContent}`);
 // The dashboard clock defaults to UTC, so the 22:00Z mint reads 22:00 UTC.
 // Cron triggers beside it stay in the host zone.
 assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('22:00 UTC')), `next mint uses the dashboard clock: ${autoStats}`);
 const autoSwitch = descendants(autoCard).find(node => String(node.className || '').includes('operation-switch'));
-assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true', 'auto-task toggle is a switch');
+assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true' && autoSwitch.getAttribute('aria-label').includes('Chore one'), 'auto-task toggle is a named switch');
 assert(autoHead.textContent.includes('still open · scheduler will skip'), 'open duplicate is called out on the row');
 
 // A skip_if_open auto-task whose only instance is parked in someday reports no open duplicate and mint confirmation does not claim an open instance exists [ORB-12158].

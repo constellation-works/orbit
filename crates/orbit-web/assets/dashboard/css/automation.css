@@ -196,8 +196,8 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .operation-chip.paused { color: var(--fg-mute); border-style: dashed; }
 a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 
-/* The switch keeps "Enable"/"Disable" as its text for the accessible
-   name and the readback tests; the text is drawn out of view. */
+/* Keep the visible "Enable"/"Disable" text for readback tests; aria-label
+   supplies the item-specific accessible name, and the text stays out of view. */
 .operation-switch {
   position: relative; width: 34px; height: 20px; padding: 0; border: 0; border-radius: 999px;
   background: var(--border); color: transparent; font-size: 0; cursor: pointer; overflow: hidden;
