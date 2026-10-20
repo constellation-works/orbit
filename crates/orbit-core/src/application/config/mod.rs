@@ -1,4 +1,4 @@
-//! Structured `config.toml` views and edits for non-CLI surfaces [ORB-12724].
+//! Structured `config.toml` views and edits for CLI and dashboard surfaces.
 //!
 //! `orbit config show` renders the layered view as text; the dashboard needs
 //! the same facts as data. Everything here is a projection of what
@@ -26,4 +26,6 @@ pub use orbit_config::ConfigScope;
 pub use paths::path_rows;
 pub use purposes::crew_purposes_view;
 pub use view::{effective_view, file_view, key_catalog, parse_config_scope};
-pub use write::{ConfigWriteInit, ConfigWriteOutcome, delete_crew, set_crew, set_key, unset_key};
+pub use write::{
+    ConfigWriteInit, ConfigWriteOutcome, delete_crew, set_crew, set_key, set_key_literal, unset_key,
+};

@@ -683,6 +683,59 @@ fn a_plugin_only_workspace_file_leaves_global_security_keys_in_effect() {
     );
 }
 
+fn literal_and_json_key_writes_preserve_their_input_contracts() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let path = workspace.join("config.toml");
+    let before = "# retained\n[workflow]\nbase_branch = 'before'\n";
+    std::fs::write(&path, before).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let typed = config::set_key(
+        &runtime,
+        "workflow.base_branch",
+        &json!("true"),
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, before).unwrap();
+    let literal = config::set_key_literal(
+        &runtime,
+        "workflow.base_branch",
+        "\"true\"",
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(literal.old_value, typed.old_value);
+    assert_eq!(literal.new_value, typed.new_value);
+    assert_eq!(literal.rows, typed.rows);
+    // A JSON string stays a string; raw CLI syntax infers a boolean.
+    config::set_key(
+        &runtime,
+        "workflow.auto_ship",
+        &json!("true"),
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap_err();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let written = config::set_key_literal(
+        &runtime,
+        "workflow.auto_ship",
+        "true",
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    )
+    .unwrap();
+    assert_eq!(written.new_value, json!(true));
+}
+
 /// One key's row from a Settings view's sections.
 fn row<'a>(view: &'a Value, key: &str) -> &'a Value {
     view["sections"]
@@ -715,5 +768,6 @@ crate::scenario_table!(
     settings_rows_report_built_in_fallback_equality_and_global_reach,
     settings_fallback_and_equality_use_admitted_global_values,
     settings_global_facts_keep_workspace_admission_context,
-    a_plugin_only_workspace_file_leaves_global_security_keys_in_effect
+    a_plugin_only_workspace_file_leaves_global_security_keys_in_effect,
+    literal_and_json_key_writes_preserve_their_input_contracts
 );
