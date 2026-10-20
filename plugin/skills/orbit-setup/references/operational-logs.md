@@ -262,8 +262,11 @@ A run that fails after its scope hit a limit carries the error code
 and how many processes were OOM-killed or forks refused. The worker records it
 itself; if the worker process died instead, its launcher records it when it is
 still watching the child. A run whose launcher had already exited can still
-end as `interrupted` / `process_not_found`; then correlate with the kernel log
-(`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
+end as `interrupted` / `process_not_found`. Its diagnostic's `worker exit:`
+clause then says no exit status was observed and what the scope recorded at
+claim time still reports: unit result and counters, or that the scope is gone
+and the `journalctl --user -u <unit>` command for it. Correlate with the kernel
+log (`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
 
 When a drain and its leaves die together (the user manager was killed), no
 cancel is needed. `orbit run history` or `orbit run show` on the follower

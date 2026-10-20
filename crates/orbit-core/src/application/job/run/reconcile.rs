@@ -9,6 +9,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
+use crate::application::job::pipeline::reconciled_worker_exit_clause;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -281,6 +282,12 @@ impl OrbitRuntime {
             return Ok(false);
         }
 
+        // [ORB-17179] Read only now that the interrupted write has won, so an
+        // exit the worker's supervisor recorded meanwhile is still named.
+        let message = match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
+            Some(clause) => format!("{message}; {clause}"),
+            None => message,
+        };
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
         log_best_effort(
             "record reconciliation diagnostic",
