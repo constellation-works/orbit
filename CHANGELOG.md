@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.0 — 2026-10-20
+
+### Breaking Changes
+
+- **Distributed pull compatibility**: the pull request fingerprint now covers browser-kit and forecast-fit admission fields, so an owner and followers on different builds refuse each other → upgrade every host together. ([ORB-16627])
+- **`plugin.legacy_callback_identity` removed**: the legacy environment-token and process-ancestry callback authentication is gone, and the key now only warns → plugin backends must preserve the inherited callback descriptor. ([ORB-16772])
+
+### Highlights
+
+- **Read-only exploration**: implementing and review-repair agents can ask an explorer crew bounded code-reading questions in the same worktree. The explorer runs read-only under a restricted tool policy and returns the paths it read with its answer. ([ORB-16814])
+- **Mid-run steering**: an opt-in setting delivers operator comments added after dispatch into managed agent runs. Orbit reruns a bounded checkpoint and holds promotion until the run has consumed the new guidance, including on claimed work. ([ORB-16601])
+- **Agent scorecards**: evidence-linked scorecards rank orchestrators, implementers, reviewers and pilots, with drill-down to the tasks and runs behind each score. The dashboard has role tabs, and `orbit agents` and `orbit.agents.*` expose the same scores. ([ORB-16952])
+- **Drain readiness and failure history**: `orbit run readiness` and `orbit run show` name admitted and waiting tasks and why they wait, and `orbit run history --failures` reports each leaf failure once by root cause, with a link to its logs. ([ORB-16918])
+- **Host resource analytics**: Analytics charts host CPU and memory profiles alongside forecast accuracy and measured delivery peaks, so operators can see where forecasts miss when tuning auto-concurrency. ([ORB-16616])
+- **Desktop fleet awareness**: the desktop tray watches registered remote hosts and notifies when a drain ends or a task is held. Linux `.deb` and `.AppImage` bundles for x86_64 and arm64 are attached to the release. ([ORB-16646])
+
 ## 0.29.0 — 2026-10-18
 
 ### Breaking Changes

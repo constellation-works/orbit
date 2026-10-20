@@ -212,14 +212,25 @@ echo "orbit init => OK ($SMOKE_HOME/.orbit)"
 
 WORKSPACE_DIR="$TMPDIR_ROOT/workspace"
 mkdir -p "$WORKSPACE_DIR"
-if ! ( cd "$WORKSPACE_DIR" && npx -y "$NPM_SPEC" workspace init ) \
+if ! ( cd "$WORKSPACE_DIR" && npx -y "$NPM_SPEC" workspace init --json ) \
      >"$TMPDIR_ROOT/ws-init.out" 2>"$TMPDIR_ROOT/ws-init.err"; then
   echo "FAIL: orbit workspace init exited non-zero" >&2
   echo "--- stderr ---" >&2
   cat "$TMPDIR_ROOT/ws-init.err" >&2
   exit 1
 fi
-echo "orbit workspace init => OK ($WORKSPACE_DIR/.orbit)"
+# Workspace init now offers a browser kit for web repositories. The empty
+# install-smoke workspace must stay on the no-web-UI path without a download.
+if ! node -e '
+const fs = require("fs");
+const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (result.browser_kit?.status !== "no_web_ui") process.exit(1);
+' "$TMPDIR_ROOT/ws-init.out"; then
+  echo "FAIL: empty smoke workspace did not report the no-web-UI browser-kit outcome" >&2
+  cat "$TMPDIR_ROOT/ws-init.out" >&2
+  exit 1
+fi
+echo "orbit workspace init => OK ($WORKSPACE_DIR/.orbit; no browser kit needed)"
 
 LAUNCH_DIR="$TMPDIR_ROOT/registry-launch"
 mkdir -p "$LAUNCH_DIR"
