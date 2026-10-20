@@ -85,6 +85,10 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?host=fixture-host&workspace=ws_fixture&window=24h#tasks`);
   const open = async id => {
     if (!await page.locator(`#detail-${id}`).count()) await page.locator(`[data-key="task-${id}"] .title`).click();
+    // Context files fold closed until opened for the task.
+    const toggle = page.locator(`#detail-${id} .context-files-block .field-toggle`);
+    await toggle.waitFor();
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
     await page.locator(`#detail-${id} .file-list`).waitFor();
   };
   const refresh = async () => {

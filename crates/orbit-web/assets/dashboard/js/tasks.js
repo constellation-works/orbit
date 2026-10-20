@@ -2589,6 +2589,8 @@ const LONG_DESCRIPTION_CHARS = 700;
 const LONG_DESCRIPTION_LINES = 12;
 // Tasks whose description the operator expanded; a rebuild keeps it open.
 const expandedDescriptions = new Set();
+// Tasks whose context files the operator opened; a rebuild keeps them open.
+const openContextFiles = new Set();
 
 function isLongDescription(text) {
   const value = String(text || "");
@@ -2625,17 +2627,34 @@ function buildTaskDetail(task, context, drain = null) {
     const block = el("div", { class: classes });
     const heading = [el("span", { class: "field-title", text: title })];
     if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
-    if (header.actions) heading.push(header.actions);
-    const h4 = el("h4", { class: "section-title" }, heading);
+    // A collapsible header that also holds actions keeps its title and count
+    // in one disclosure button, as the comments thread does, so its actions
+    // stay controls of their own rather than parts of a toggle.
+    const toggle = collapsible && header.actions ? el("button", { class: "field-toggle" }, heading) : null;
+    const h4 = toggle
+      ? el("h4", { class: "section-title" }, [toggle, header.actions])
+      : el("h4", { class: "section-title" }, header.actions ? [...heading, header.actions] : heading);
     if (collapsible) {
-      makeToggleRow(h4, {
-        expanded: !collapsed,
-        onToggle: (e) => {
-          e.stopPropagation();
-          const nowCollapsed = block.classList.toggle("collapsed");
-          h4.setAttribute("aria-expanded", String(!nowCollapsed));
-        },
-      });
+      const setOpen = (open) => {
+        block.classList.toggle("collapsed", !open);
+        (toggle || h4).setAttribute("aria-expanded", String(open));
+        if (header.onToggle) header.onToggle(open);
+      };
+      const onToggle = (e) => {
+        e.stopPropagation();
+        if (toggle && header.actions.contains(e.target)) return;
+        setOpen(block.classList.contains("collapsed"));
+      };
+      if (toggle) {
+        makeDisclosure(h4, toggle, { expanded: !collapsed, onToggle });
+        // Acting on the section (its Edit) opens it, so the editor is never
+        // hidden behind a collapsed header.
+        header.actions.addEventListener("click", () => {
+          if (block.classList.contains("collapsed")) setOpen(true);
+        }, true);
+      } else {
+        makeToggleRow(h4, { expanded: !collapsed, onToggle });
+      }
     }
     block.appendChild(h4);
     block.appendChild(child);
@@ -2754,10 +2773,19 @@ function buildTaskDetail(task, context, drain = null) {
     if (relations.children.length > 0) addField(rightCol, "Related tasks", relations);
   }
 
+  // A long selector list would push everything under it down the column, so
+  // it folds like Plan, closed until the operator opens it for this task.
   if (showsEditor("context_files")) {
     const actions = actionSlot();
     const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
-    addField(rightCol, "Context files", editor("context_files", actions), false, false, { actions, count });
+    const fold = el("div", { class: "detail-disclosures" });
+    addField(fold, "Context files", editor("context_files", actions), true, !openContextFiles.has(task.id), {
+      actions,
+      count,
+      class: "context-files-block",
+      onToggle: (open) => (open ? openContextFiles.add(task.id) : openContextFiles.delete(task.id)),
+    });
+    rightCol.appendChild(fold);
   }
 
   // The overview leads; history, runs, artifacts and the thread each have a
