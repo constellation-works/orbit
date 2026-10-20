@@ -3,7 +3,7 @@ Manage task artifact files
 Usage: orbit task artifact [OPTIONS] <COMMAND>
 
 Commands:
-  put  Store a UTF-8 source file under a task's artifacts directory
+  put  Store a source file under a task's artifacts directory
   get  Read one stored artifact back out of a task
 
 Options:

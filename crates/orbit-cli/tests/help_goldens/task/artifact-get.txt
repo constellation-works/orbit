@@ -7,7 +7,7 @@ Arguments:
           Task ID that owns the artifact
 
   <PATH>
-          Artifact path relative to the task artifacts directory, as listed by `orbit artifacts <ID> --task`
+          Artifact path relative to the task artifacts directory, as listed by `orbit task show <ID> --fields artifacts`
 
 Options:
       --host <HOST>

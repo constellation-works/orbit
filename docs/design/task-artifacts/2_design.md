@@ -137,7 +137,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit artifacts <ID> --task`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
+Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -152,7 +152,7 @@ Metadata listing stays compact and payloads are fetched on demand:
 | attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
 | attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
 | list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
-| list | CLI | `orbit artifacts <ID> --task` |
+| list | CLI | `orbit task show <ID> --fields artifacts` |
 | view | MCP | `orbit.task.artifact.get` with `id` and `path` |
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
