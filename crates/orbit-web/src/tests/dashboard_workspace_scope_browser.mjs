@@ -249,10 +249,10 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
       await page.locator('button.claim-action.approve').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'visible' });
-      await page.locator('input.claim-reason[data-reason-for="revoke"]').fill('Scope regression');
+      await page.locator('input.claim-reason[data-reason-for~="revoke"]').fill('Scope regression');
       await page.locator('button.claim-action.revoke').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'detached' });
-      await page.locator('input.claim-reason[data-reason-for="recover"]').fill('Scope regression');
+      await page.locator('input.claim-reason[data-reason-for~="recover"]').fill('Scope regression');
       await page.locator('button.claim-action.recover[data-status="backlog"]').click();
       await page.locator('button.claim-action.recover').first().waitFor({ state: 'detached' });
       const requests = await page.evaluate(() => globalThis.scopeRequests);

@@ -151,7 +151,7 @@ a.failure-id-link:focus-visible {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 12px;
-  margin-bottom: 6px;
+  margin-bottom: 12px;
 }
 .claim-header .claim-id { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
 .claim-header .claim-created { color: var(--fg-mute); font-size: 12px; }
@@ -179,10 +179,28 @@ a.failure-id-link:focus-visible {
 .claim-line.expired > .value { color: var(--state-failed); }
 .claim-line.remote > .value { color: var(--fg-dim); }
 .claim-line.released > .value { color: var(--fg-mute); }
-.claim-line.landing-stopped > .value { color: var(--danger-fg); }
-.claim-line.landing-merged > .value,
-.claim-line.authority-authorized > .value,
-.claim-line.authority-completed > .value { color: var(--state-success); }
+/* A status (phase, review verdict, authority, landing) is a dot and text in
+   one tone, like a state label elsewhere; the rest of the value stays dim. */
+.claim-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--tone, var(--fg));
+}
+.claim-status::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone, var(--fg-dim));
+}
+.claim-status.tone-ok { --tone: var(--state-success); }
+.claim-status.tone-active { --tone: var(--state-running); }
+.claim-status.tone-warn { --tone: var(--warn-fg); }
+.claim-status.tone-danger { --tone: var(--danger-fg); }
+.claim-status.tone-muted { --tone: var(--fg-mute); }
+.claim-status-detail { color: var(--fg-dim); }
 .claim-note {
   grid-column: 2;
   color: var(--fg-mute);
@@ -202,12 +220,20 @@ a.failure-id-link:focus-visible {
   .claim-line > .label { grid-row: auto; }
   .claim-note { grid-column: 1; }
 }
-/* The handoff's delivery facts lead the claim; a hairline parts them from
-   the attempt that produced them. */
-.handoff-panel {
-  margin-bottom: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--hair);
+/* The handoff's delivery facts lead the claim, then the attempt that
+   produced them; each group opens on a small subhead. */
+.claim-group + .claim-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.claim-subhead {
+  margin: 0 0 4px;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 /* Long lists and raw evidence sit behind a native disclosure. */
 .claim-disclosure > summary {
@@ -284,15 +310,83 @@ a.failure-id-link:focus-visible {
   font-size: 12px;
   margin-right: 8px;
 }
+/* The owner actions are one card, apart from the claim's facts and from the
+   task's own actions under the tabs: approval, then recovery with a single
+   reason field and its actions grouped by what they act on. */
 .claim-actions {
   position: relative;
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+}
+.claim-actions-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.claim-actions-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.claim-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.claim-recovery { display: grid; gap: 10px; }
+.claim-approval + .claim-recovery {
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.claim-recovery > .claim-subhead { margin: 0; }
+.claim-reason-field {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+}
+.claim-reason-label { color: var(--fg-mute); font-size: 12.5px; }
+.claim-reason-problem {
+  grid-column: 2;
+  color: var(--danger-fg);
+  font-size: 12px;
+}
+.claim-reason-problem:empty { display: none; }
+.claim-action-group {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.claim-action-group-label { color: var(--fg-mute); font-size: 12.5px; }
+.claim-action-group-body { display: grid; gap: 4px; min-width: 0; }
+.claim-action-buttons {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hair);
+}
+.claim-action-hint {
+  color: var(--fg-mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+@container task-pane (max-width: 400px) {
+  .claim-reason-field,
+  .claim-action-group { grid-template-columns: 1fr; }
+  .claim-reason-problem { grid-column: 1; }
+}
+@media (max-width: 480px) {
+  .claim-reason-field,
+  .claim-action-group { grid-template-columns: 1fr; }
+  .claim-reason-problem { grid-column: 1; }
 }
 .claim-action {
   min-height: 30px;
@@ -303,14 +397,23 @@ a.failure-id-link:focus-visible {
   padding: 0 12px;
   font: inherit;
   font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
 }
 .claim-action:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-dim); }
 .claim-action:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Approval is the card's primary decision and reads like the task's own
+   approve. */
+.claim-action.approve {
+  border-color: #24493e;
+  background: #0f1f18;
+  color: #bdf0d6;
+}
+.claim-action.approve:hover:not(:disabled) { border-color: var(--state-success); color: #d8fbe9; }
 /* Revoke and Recover withdraw authority or fence an attempt, so they carry
    the same destructive treatment as a reject. */
 .claim-action.revoke,
-.claim-action.recover { color: #e7b8b1; }
+.claim-action.recover { color: #e7b8b1; border-color: color-mix(in srgb, var(--danger-fg) 28%, var(--border)); }
 .claim-action.revoke:hover:not(:disabled),
 .claim-action.recover:hover:not(:disabled) {
   border-color: #5a2a27;
@@ -319,7 +422,8 @@ a.failure-id-link:focus-visible {
 }
 .claim-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .claim-reason {
-  min-height: 30px;
+  width: 100%;
+  min-height: 32px;
   box-sizing: border-box;
   background: var(--bg);
   color: var(--fg);
@@ -329,8 +433,9 @@ a.failure-id-link:focus-visible {
   font: inherit;
   font-size: 12.5px;
   min-width: 0;
-  flex: 1 1 160px;
 }
+.claim-reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.claim-reason[aria-invalid="true"] { border-color: var(--danger-fg); }
 
 /* An unauthorized action is explained, not hidden: the operator learns
    why, and the server refuses the call either way. */

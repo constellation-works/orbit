@@ -463,6 +463,22 @@ const LANDING_LABELS = {
   stopped: "stopped",
 };
 const REVIEW_LABELS = { not_required: "not required" };
+const VERDICT_LABELS = {
+  accept: "accepted",
+  accept_with_fixes: "accepted with fixes",
+  reject: "rejected",
+  incomplete: "incomplete",
+};
+
+// The tone a status reads in: its dot and text colour. A value missing from
+// a map reads neutral, so an unknown state is never dressed as good or bad.
+const PHASE_TONES = {
+  claimed: "active", running: "active", handed_off: "active", repair_pending: "warn",
+  failed: "danger", revoked: "danger", landed: "ok",
+};
+const AUTHORITY_TONES = { not_authorized: "warn", authorized: "ok", revoked: "danger", completed: "ok" };
+const LANDING_TONES = { none: "muted", dispatched: "active", merged: "ok", stopped: "danger" };
+const VERDICT_TONES = { accept: "ok", accept_with_fixes: "ok", reject: "danger", incomplete: "warn" };
 
 function humanize(value) {
   return String(value).replace(/_/g, " ");
@@ -471,6 +487,36 @@ function humanize(value) {
 function enumLabel(map, value) {
   if (value == null || value === "") return "—";
   return Object.prototype.hasOwnProperty.call(map, value) ? map[value] : humanize(value);
+}
+
+/// A status value: a coloured dot and text, wrapped so the line's info hint
+/// sits after it rather than inside it.
+function statusValue(text, tone) {
+  const status = el("span", { class: `claim-status tone-${tone || "neutral"}`, text });
+  return el("span", { class: "value" }, [status]);
+}
+
+/// The review disposition is `"not_required"` or one variant key holding the
+/// leaf's review evidence (`{ "before_landing": { verdict, reviewer_crew, … } }`).
+/// Read the verdict and who gave it; an unknown shape names its variant rather
+/// than printing an object.
+function readReviewDisposition(review) {
+  const disposition = review && review.disposition;
+  const policy = review && review.policy ? humanize(review.policy) : "?";
+  if (disposition == null || typeof disposition !== "object") {
+    return { label: enumLabel(REVIEW_LABELS, disposition), tone: "muted", detail: `policy ${policy}` };
+  }
+  const [variant] = Object.keys(disposition);
+  const evidence = variant && disposition[variant] && typeof disposition[variant] === "object" ? disposition[variant] : {};
+  const verdict = typeof evidence.verdict === "string" ? evidence.verdict : null;
+  const timing = variant ? humanize(variant) : "review";
+  return {
+    label: verdict ? enumLabel(VERDICT_LABELS, verdict) : timing,
+    tone: (verdict && VERDICT_TONES[verdict]) || "neutral",
+    detail: verdict
+      ? [timing, evidence.reviewer_crew].filter(Boolean).join(" · ")
+      : `policy ${policy}`,
+  };
 }
 
 /// Times go through the caller's formatter (the task detail's own), else the
@@ -516,8 +562,14 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
 
   if (claim.handoff) panel.appendChild(buildHandoffPanel(claim.handoff, options));
 
+  // The attempt that produced the handoff: where it ran, its run, and how
+  // far the claim has come.
+  const attempt = el("div", { class: "claim-group claim-attempt" }, [
+    el("div", { class: "claim-subhead", text: "Attempt" }),
+  ]);
+  panel.appendChild(attempt);
   const run = claim.bound_run;
-  panel.appendChild(line("execution", buildExecutionProvenance(
+  attempt.appendChild(line("execution", buildExecutionProvenance(
     claim.executed_on,
     run && run.run_id ? { runId: run.run_id } : null,
   )));
@@ -526,12 +578,12 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
     if (claim.bound_run_navigable) {
       const link = el("a", { class: "value mono", text: run.run_id });
       link.href = runHref(run.run_id);
-      panel.appendChild(line("bound run", link));
+      attempt.appendChild(line("bound run", link));
     } else {
       // No owner-local run exists for a run that executed elsewhere. Naming the
       // host is the honest answer; an owner-local link would resolve against
       // this checkout's job store and open the wrong thing or nothing.
-      panel.appendChild(
+      attempt.appendChild(
         line("bound run", run.run_id, {
           class: "remote mono-value",
           note: claim.inspect_on || `inspect this run on machine ${run.machine_id || "unknown"}`,
@@ -539,18 +591,18 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
       );
     }
   } else {
-    panel.appendChild(
+    attempt.appendChild(
       line("bound run", "none yet", {
         note: "a claim exists before its leaf run does; an absent run is not proof the attempt died",
       }),
     );
   }
 
-  panel.appendChild(line("phase", enumLabel(PHASE_LABELS, claim.phase), { note: claim.phase_summary }));
-  panel.appendChild(line("last event", enumLabel(EVENT_LABELS, claim.last_event)));
+  attempt.appendChild(line("phase", statusValue(enumLabel(PHASE_LABELS, claim.phase), PHASE_TONES[claim.phase]), { note: claim.phase_summary }));
+  attempt.appendChild(line("last event", enumLabel(EVENT_LABELS, claim.last_event)));
 
-  panel.appendChild(buildReservationLine(claim, options));
-  panel.appendChild(buildFootprintLine(claim));
+  attempt.appendChild(buildReservationLine(claim, options));
+  attempt.appendChild(buildFootprintLine(claim));
 
   if (claim.landing_invalidated) {
     panel.appendChild(
@@ -644,7 +696,9 @@ function uncertainMergeBanner(intentId) {
 }
 
 function buildHandoffPanel(handoff, options = {}) {
-  const wrap = el("div", { class: "handoff-panel" });
+  const wrap = el("div", { class: "claim-group handoff-panel" }, [
+    el("div", { class: "claim-subhead", text: "Handoff" }),
+  ]);
   wrap.setAttribute("data-handoff-id", handoff.handoff_id || "");
 
   const candidate = handoff.candidate || {};
@@ -665,10 +719,14 @@ function buildHandoffPanel(handoff, options = {}) {
   wrap.appendChild(line("delivery", deliveryValue(delivery, options.pullRequest)));
 
   const review = handoff.review || {};
-  // The typed not-required disposition, said plainly. `review` as a task status
-  // means delivery is awaiting completion authority; no reviewer ran.
+  // The verdict the leaf's review settled, or the typed not-required
+  // disposition said plainly. `review` as a task status means delivery is
+  // awaiting completion authority; it is not this verdict.
+  const read = readReviewDisposition(review);
+  const reviewNode = statusValue(read.label, read.tone);
+  reviewNode.appendChild(el("span", { class: "claim-status-detail", text: ` · ${read.detail}` }));
   wrap.appendChild(
-    line("review", `${enumLabel(REVIEW_LABELS, review.disposition)} · policy ${review.policy ? humanize(review.policy) : "?"}`, {
+    line("review", reviewNode, {
       class: "review-disposition",
       note: review.summary || "review not required — this is not a code review",
     }),
@@ -692,7 +750,7 @@ function buildHandoffPanel(handoff, options = {}) {
 
   const authority = handoff.authority || {};
   wrap.appendChild(
-    line("completion authority", enumLabel(AUTHORITY_LABELS, authority.state), {
+    line("completion authority", statusValue(enumLabel(AUTHORITY_LABELS, authority.state), AUTHORITY_TONES[authority.state]), {
       class: `authority-${authority.state}`,
       note: authority.summary,
     }),
@@ -700,7 +758,7 @@ function buildHandoffPanel(handoff, options = {}) {
 
   const landing = handoff.landing || {};
   wrap.appendChild(
-    line("landing", enumLabel(LANDING_LABELS, landing.state), {
+    line("landing", statusValue(enumLabel(LANDING_LABELS, landing.state), LANDING_TONES[landing.state]), {
       class: `landing-${landing.state}`,
       note: landing.summary,
     }),
@@ -752,14 +810,27 @@ function confirmed(message) {
 const MERGE_INTENT_BLOCK =
   "unavailable until the uncertain merge is reconciled against the provider";
 
+// The reason-gated actions, grouped by what they act on. Each group says in a
+// line what its buttons do, so the row of buttons needs no legend.
+const RECOVERY_GROUPS = [
+  { name: "landing", label: "Landing", hint: "run the stopped landing again for this exact candidate" },
+  { name: "authority", label: "Authority", hint: "withdraw approval; the owner will not land this candidate" },
+  { name: "claim", label: "Claim", hint: "fence this attempt and move the task; cannot be undone" },
+];
+
+let reasonFieldSeq = 0;
+
+/// The owner actions, in one card apart from the task's own actions: approval
+/// first, then recovery — one reason field shared by every reason-gated
+/// action, and those actions grouped by what they act on.
 function buildClaimActions(claim, capabilities, handlers) {
   const handoff = claim.handoff;
   const authority = (handoff && handoff.authority) || {};
-  const row = el("div", { class: "claim-actions" });
-  let any = false;
+  const row = el("section", { class: "claim-actions" });
+  row.setAttribute("aria-label", "Owner actions");
 
-  // Every control in this row, so one in-flight decision can lock them all and
-  // release only the ones that were enabled to begin with.
+  // Every control in this card, so one in-flight decision can lock them all
+  // and release only the ones that were enabled to begin with.
   const controls = [];
   let busy = false;
   const setBusy = (on, active) => {
@@ -783,14 +854,100 @@ function buildClaimActions(claim, capabilities, handlers) {
     return requestIds.get(identity);
   };
 
-  const add = (key, text, capabilityKey, onRun, opts = {}) => {
-    const capability = capabilityFor(capabilities, capabilityKey);
-    any = true;
+  const offers = [];
+  if (handoff && claim.phase === "handed_off" && authority.state === "not_authorized") {
+    offers.push({
+      key: "approve", text: "Approve handoff", capabilityKey: "handoff_approve",
+      onRun: (_reason, _status, requestId) => handlers.onApprove && handlers.onApprove(claim, requestId),
+      opts: {},
+    });
+  }
+  if (landingRetryOffered(claim)) {
+    offers.push({
+      key: "retry-handoff", text: "Retry landing", capabilityKey: "handoff_retry", group: "landing",
+      onRun: (reason, _status, requestId) => handlers.onRetryHandoff && handlers.onRetryHandoff(claim, reason, requestId),
+      opts: { reasonRequired: true },
+    });
+  }
+  if (handoff && authority.state === "authorized") {
+    offers.push({
+      key: "revoke", text: "Revoke authority", capabilityKey: "handoff_revoke", group: "authority",
+      onRun: (reason, _status, requestId) => handlers.onRevoke && handlers.onRevoke(claim, reason, requestId),
+      opts: {
+        reasonRequired: true,
+        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
+        confirm: () =>
+          `Revoke completion authority for task ${claim.task_id}?\n\nThis withdraws authority for this exact candidate, so the owner will not land it. The task stays in review.`,
+      },
+    });
+  }
+  if (claim.unsettled) {
+    offers.push({
+      key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",
+      onRun: (reason, status, requestId) => handlers.onRecover && handlers.onRecover(claim, reason, status, requestId),
+      opts: {
+        reasonRequired: true,
+        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
+        statusChoices: [
+          { value: "blocked", label: "Recover claim → blocked" },
+          { value: "backlog", label: "Recover claim → backlog" },
+        ],
+        confirm: (_reason, status) =>
+          `Recover claim ${shortId(claim.claim_id)} for task ${claim.task_id}?\n\nThis fences the current attempt and moves the task to ${status}. Recovery is deliberate and cannot be undone.`,
+      },
+    });
+  }
+  if (offers.length === 0) return null;
+  for (const offer of offers) offer.capability = capabilityFor(capabilities, offer.capabilityKey);
+
+  // With nothing to approve the card is recovery alone and says so; with an
+  // approval, recovery is its second part under its own subhead.
+  const approval = offers.find((offer) => offer.key === "approve");
+  row.appendChild(
+    el("div", { class: "claim-actions-head" }, [
+      el("h5", { class: "claim-actions-title", text: approval ? "Owner actions" : "Recovery" }),
+      infoHint("Approving records completion authority for this exact candidate; it does not merge. Recovery fences the attempt and is never automatic — there is no heartbeat."),
+    ]),
+  );
+
+  // One reason serves every reason-gated action the operator can take here,
+  // so the field appears once, above the groups, and its problem sits under
+  // it. Denied and blocked actions take no reason.
+  const reasoned = offers.filter((offer) => offer.opts.reasonRequired && offer.capability.authorized && !offer.opts.blocked);
+  let input = null;
+  let problem = null;
+  const clearProblem = () => {
+    if (input) input.setAttribute("aria-invalid", "false");
+    if (problem) problem.textContent = "";
+  };
+  let reasonField = null;
+  if (reasoned.length > 0) {
+    const problemId = `claim-reason-problem-${++reasonFieldSeq}`;
+    input = el("input", { class: "claim-reason" });
+    input.type = "text";
+    input.placeholder = "Why — recorded with the action you choose";
+    input.setAttribute("aria-label", "Recovery reason");
+    input.setAttribute("aria-describedby", problemId);
+    input.setAttribute("data-reason-for", reasoned.map((offer) => offer.key).join(" "));
+    input.addEventListener("input", clearProblem);
+    controls.push({ node: input, blocked: false });
+    problem = el("div", { class: "claim-reason-problem" });
+    problem.id = problemId;
+    problem.setAttribute("role", "alert");
+    reasonField = el("label", { class: "claim-reason-field" }, [
+      el("span", { class: "claim-reason-label", text: "Reason" }),
+      input,
+      problem,
+    ]);
+  }
+
+  const place = (offer, target) => {
+    const { key, text, capability, onRun, opts } = offer;
     if (!capability.authorized) {
       // Explain rather than hide: an operator who cannot act should learn why,
       // and the backend refuses the call regardless of what is rendered here.
       const reason = capability.reason || "not authorized";
-      row.appendChild(
+      target.appendChild(
         el("span", {
           class: "claim-action-denied",
           text: `${text} unavailable — ${reason}`,
@@ -799,23 +956,7 @@ function buildClaimActions(claim, capabilities, handlers) {
       );
       return;
     }
-    let input = null;
-    let problem = null;
-    const clearProblem = () => {
-      if (input) input.setAttribute("aria-invalid", "false");
-      if (problem) problem.textContent = "";
-    };
-    if (opts.reasonRequired && !opts.blocked) {
-      input = el("input", { class: "claim-reason" });
-      input.type = "text";
-      input.placeholder = opts.reasonPlaceholder || "reason";
-      input.setAttribute("aria-label", `${text} reason`);
-      input.setAttribute("data-reason-for", key);
-      input.addEventListener("input", clearProblem);
-      row.appendChild(input);
-      controls.push({ node: input, blocked: false });
-    }
-
+    const field = opts.reasonRequired && !opts.blocked ? input : null;
     const choices = opts.statusChoices || [{ value: null, label: text }];
     for (const choice of choices) {
       const button = el("button", { class: `claim-action ${key}`, text: choice.label });
@@ -827,19 +968,14 @@ function buildClaimActions(claim, capabilities, handlers) {
       controls.push({ node: button, blocked, text: choice.label });
       button.addEventListener("click", () => {
         if (button.disabled || busy) return;
-        const reason = input ? input.value : null;
+        const reason = field ? field.value : null;
         // The owner refuses a decision with no reason, but only after the
         // confirmation below has been answered and a replay identity spent.
-        // Ask for the reason first, where the operator is already looking.
-        if (input && !String(reason).trim()) {
-          if (!problem) {
-            problem = el("div", { class: "claim-feedback error" });
-            problem.setAttribute("role", "alert");
-            row.appendChild(problem);
-          }
+        // Ask for the reason first, under the field that needs it.
+        if (field && !String(reason).trim()) {
           problem.textContent = `${text} needs a reason.`;
-          input.setAttribute("aria-invalid", "true");
-          input.focus();
+          field.setAttribute("aria-invalid", "true");
+          field.focus();
           return;
         }
         clearProblem();
@@ -847,69 +983,52 @@ function buildClaimActions(claim, capabilities, handlers) {
         setBusy(true, button);
         const requestId = requestIdFor(`${key}|${choice.value || ""}|${reason || ""}`);
         // An async wrapper: the request starts now, and a synchronous throw in
-        // a handler still releases the row.
+        // a handler still releases the card.
         (async () => onRun(reason, choice.value, requestId))()
           .catch(() => {})
           .then(() => setBusy(false));
       });
-      row.appendChild(button);
+      target.appendChild(button);
     }
     if (opts.blocked) {
       // Visible text, not only a tooltip: a disabled button with no stated
       // reason reads as broken.
-      row.appendChild(el("span", { class: "claim-action-denied", text: opts.blocked, title: opts.blocked }));
+      target.appendChild(el("span", { class: "claim-action-denied", text: opts.blocked, title: opts.blocked }));
     }
   };
 
-  if (handoff && claim.phase === "handed_off" && authority.state === "not_authorized") {
-    add("approve", "Approve handoff", "handoff_approve", (_reason, _status, requestId) =>
-      handlers.onApprove && handlers.onApprove(claim, requestId),
-    );
-  }
-  if (landingRetryOffered(claim)) {
-    add("retry-handoff", "Retry landing", "handoff_retry",
-      (reason, _status, requestId) => handlers.onRetryHandoff && handlers.onRetryHandoff(claim, reason, requestId),
-      { reasonRequired: true, reasonPlaceholder: "why this landing should retry" });
-  }
-  if (handoff && authority.state === "authorized") {
-    add(
-      "revoke",
-      "Revoke authority",
-      "handoff_revoke",
-      (reason, _status, requestId) => handlers.onRevoke && handlers.onRevoke(claim, reason, requestId),
-      {
-        reasonRequired: true,
-        reasonPlaceholder: "why authority is withdrawn",
-        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
-        confirm: () =>
-          `Revoke completion authority for task ${claim.task_id}?\n\nThis withdraws authority for this exact candidate, so the owner will not land it. The task stays in review.`,
-      },
-    );
-  }
-  if (claim.unsettled) {
-    add(
-      "recover",
-      "Recover claim",
-      "claim_recover",
-      (reason, status, requestId) => handlers.onRecover && handlers.onRecover(claim, reason, status, requestId),
-      {
-        reasonRequired: true,
-        reasonPlaceholder: "why this attempt is over",
-        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
-        statusChoices: [
-          { value: "blocked", label: "Recover claim → blocked" },
-          { value: "backlog", label: "Recover claim → backlog" },
-        ],
-        confirm: (_reason, status) =>
-          `Recover claim ${shortId(claim.claim_id)} for task ${claim.task_id}?\n\nThis fences the current attempt and moves the task to ${status}. Recovery is deliberate and cannot be undone.`,
-      },
-    );
+  if (approval) {
+    const buttons = el("div", { class: "claim-action-buttons" });
+    place(approval, buttons);
+    row.appendChild(el("div", { class: "claim-approval" }, [
+      buttons,
+      el("span", { class: "claim-action-hint", text: "records completion authority for this candidate; does not merge" }),
+    ]));
   }
 
-  if (!any) return null;
-  row.appendChild(
-    infoHint("Approving records completion authority for this exact candidate; it does not merge. Recovery fences the attempt and is never automatic — there is no heartbeat."),
-  );
+  const grouped = RECOVERY_GROUPS
+    .map((group) => ({ group, members: offers.filter((offer) => offer.group === group.name) }))
+    .filter(({ members }) => members.length > 0);
+  if (grouped.length > 0) {
+    const recovery = el("div", { class: "claim-recovery" }, [
+      approval ? el("div", { class: "claim-subhead", text: "Recovery" }) : null,
+    ]);
+    if (reasonField) recovery.appendChild(reasonField);
+    for (const { group, members } of grouped) {
+      const buttons = el("div", { class: "claim-action-buttons" });
+      for (const offer of members) place(offer, buttons);
+      const node = el("div", { class: "claim-action-group" }, [
+        el("span", { class: "claim-action-group-label", text: group.label }),
+        el("div", { class: "claim-action-group-body" }, [
+          buttons,
+          el("span", { class: "claim-action-hint", text: group.hint }),
+        ]),
+      ]);
+      node.setAttribute("data-group", group.name);
+      recovery.appendChild(node);
+    }
+    row.appendChild(recovery);
+  }
   return row;
 }
 
