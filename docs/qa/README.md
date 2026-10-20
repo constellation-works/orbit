@@ -16,4 +16,4 @@ This directory holds coverage records from QA passes. Each file maps a surface t
 | [mcp-apps-probe.md](mcp-apps-probe.md) | The desktop control-center (MCP Apps) reproduction and native probe; desktop validation is still deferred |
 | [mcp-apps-evidence-template.json](mcp-apps-evidence-template.json) | The evidence template `scripts/probe-mcp-apps.py` fills in |
 
-Each record names the commit or date it was validated at. A record describes that point, not the current tree. Feature PRs do not need to keep these files current. A QA sweep that re-checks a surface refreshes its record and its validation date.
+Each completed validation record names the commit or date it covers. The MCP Apps probe above is explicitly deferred and does not record a completed desktop validation. A record describes that point, not the current tree. Feature PRs do not need to keep these files current. A QA sweep that re-checks a surface refreshes its record and its validation date.
