@@ -274,8 +274,8 @@ keeps the strict check. Task writes on every surface return the same advisory
 `warnings` (on add: a disabled required tool, an unreadable parent, or a
 proposed task added without `context_files` and without the `no-diff-expected`
 tag, regardless of type; on add and update: an unreadable dependency or a
-backlog task with no footprint; and on approval: task-pilot blockers); they
-never refuse the write.
+backlog task with no footprint; and on approval: task-pilot blockers and a
+backlog task with no footprint); they never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
