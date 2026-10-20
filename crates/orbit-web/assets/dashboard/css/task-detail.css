@@ -1380,3 +1380,12 @@ input.field-editor-input {
   font-size: 12px;
   background: var(--bg-elev);
 }
+
+.pilot-warning-findings {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.pilot-warning-findings li + li { margin-top: 8px; }

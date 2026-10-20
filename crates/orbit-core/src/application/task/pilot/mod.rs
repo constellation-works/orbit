@@ -67,13 +67,14 @@ use assessment::{
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
-    approval_disqualification, approved_by_drain, held_classification, warning_findings_for_hold,
+    approval_disqualification, approved_by_drain, held_classification,
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 pub(crate) use post_deploy::PostDeployRequirement;
 use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
+pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };

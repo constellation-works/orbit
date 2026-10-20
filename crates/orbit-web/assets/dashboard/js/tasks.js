@@ -564,6 +564,8 @@ function stopRowInteraction(node) {
 // with a blocking readiness gap. Readiness is derived per task rather than
 // stored, so it filters here instead of in the server's page query.
 let notReadyOnly = false;
+let pilotWarningsOnly = false;
+export function taskPilotWarningsFilter() { return pilotWarningsOnly; }
 
 function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
@@ -571,6 +573,7 @@ function filterTasks(tasks, context) {
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !isNotReady(t)) return false;
+    if (pilotWarningsOnly && !pilotWarnings(t).length) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -880,6 +883,7 @@ function refreshChips(context) {
     const isAll = chip.dataset.role === "all";
     const on = chip.dataset.role === "not-ready"
       ? notReadyOnly
+      : chip.dataset.role === "pilot-warnings" ? pilotWarningsOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
     // ORB-10874: chip state must not rely on the active/inactive color
@@ -913,6 +917,7 @@ function buildTasksListHash(context) {
     sp.set("status", selected.length > 0 ? selected.join(",") : "none");
   }
   if (notReadyOnly) sp.set("ready", "not");
+  if (pilotWarningsOnly) sp.set("pilot", "warnings");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   if (openTaskId) sp.set("open", openTaskId);
@@ -955,7 +960,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
   // the chips and search to their defaults.
-  if (open && !["status", "q", "ready"].some((key) => query.has(key))) return;
+  if (open && !["status", "q", "ready", "pilot"].some((key) => query.has(key))) return;
   // A replay names the list already shown. Back fires popstate and then
   // hashchange for the address the router just normalized; the second must
   // not send the list to its first page and top.
@@ -975,6 +980,7 @@ export function applyTasksHashQuery(query, context, page = null) {
     setActiveStatuses(context, new Set(order.filter((s) => wanted.has(s))));
   }
   notReadyOnly = query.get("ready") === "not";
+  pilotWarningsOnly = query.get("pilot") === "warnings";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -1070,13 +1076,18 @@ export function buildChips(context) {
     notReadyOnly = !notReadyOnly;
     navigateTasksHash(context);
   });
-  secondary.append(allChip, notReady);
+  const pilotFilter = chip("Pilot warnings", { role: "pilot-warnings" }, true, "Proposed tasks held by their latest pilot findings");
+  pilotFilter.addEventListener("click", () => {
+    pilotWarningsOnly = !pilotWarningsOnly;
+    navigateTasksHash(context);
+  });
+  secondary.append(allChip, notReady, pilotFilter);
   const more = el("button", {
     class: "chip-more",
     type: "button",
     "aria-controls": "task-filter-more",
     "aria-expanded": "false",
-    title: "Closed statuses, All and Not ready",
+    title: "Closed statuses, All, Not ready and Pilot warnings",
   }, [el("span", { text: "More" })]);
   more.addEventListener("click", () => {
     const open = more.getAttribute("aria-expanded") !== "true";
@@ -1127,6 +1138,7 @@ function renderFilterSummary(context) {
     parts.push(`status: ${order.filter((s) => activeStatuses.has(s)).join(", ")}`);
   }
   if (notReadyOnly) parts.push("not ready");
+  if (pilotWarningsOnly) parts.push("pilot warnings");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
@@ -1211,6 +1223,42 @@ function buildReadinessBadge(task) {
     text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
     title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
   })];
+}
+
+// Core supplies only the findings that hold promotion; clients do not
+// reinterpret pilot assessments or read the drain's latest-pass snapshot.
+function pilotWarnings(task) {
+  return Array.isArray(task.pilot_warnings) ? task.pilot_warnings : [];
+}
+
+function buildPilotWarningBadge(task) {
+  const count = pilotWarnings(task).length;
+  return count ? [el("span", {
+    class: "chip pilot-warning-chip",
+    role: "img",
+    "aria-label": `Pilot warnings: ${count} holding findings`,
+  }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
+}
+
+function buildPilotWarnings(task) {
+  const findings = pilotWarnings(task);
+  if (!findings.length) return null;
+  const labels = {
+    utility_warnings: "Utility", surface_warnings: "Surface",
+    validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
+    adr_conflicts: "Conflict",
+  };
+  return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
+    el("div", { class: "task-attention-content" }, [
+      el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
+      el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
+      el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
+        el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
+        el("span", { text: finding.text }),
+      ]))),
+    ]),
+  ]);
 }
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as
@@ -2818,6 +2866,8 @@ function buildTaskDetail(task, context, drain = null) {
     },
   ], context);
   detail.appendChild(metaBlock);
+  const pilotCallout = buildPilotWarnings(task);
+  if (pilotCallout) detail.appendChild(pilotCallout);
   detail.appendChild(attentionSlot);
   detail.appendChild(progressSlot);
   for (const section of sections) detail.appendChild(section);
@@ -4471,7 +4521,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -4491,6 +4541,7 @@ export function renderTasks(tasks, context) {
             : null,
           ...buildOsBadges(t),
           ...buildReadinessBadge(t),
+          ...buildPilotWarningBadge(t),
           ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
         ].filter(Boolean);
         // The title is the row's disclosure: the row holds the copy-id button,

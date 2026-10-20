@@ -41,7 +41,8 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   },
   {
     "id": "ORB-00001",
@@ -85,7 +86,8 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   },
   {
     "id": "ORB-00000",
@@ -129,6 +131,7 @@
           "fix": "add context files, run the task pilot, or tag no-diff-expected if no diff is expected"
         }
       ]
-    }
+    },
+    "pilot_warnings": []
   }
 ]

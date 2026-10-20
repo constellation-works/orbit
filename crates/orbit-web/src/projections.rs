@@ -12,8 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskOsReadout, TaskRow, declared_context_files, task_record_json,
-    task_show_json, task_status_transition_allowed, task_status_transition_required_field,
+    PullRequestLinks, TaskOsReadout, TaskRow, declared_context_files, task_pilot_warnings,
+    task_record_json, task_show_json, task_status_transition_allowed,
+    task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -203,6 +204,10 @@ impl TaskListProjection {
     ) -> Result<Value, OrbitError> {
         let task = &row.task;
         let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
+        object.insert(
+            "pilot_warnings".into(),
+            json!(task_pilot_warnings(task.status, &row.comments)),
+        );
         self.os_readout
             .as_ref()
             .map_err(|error| OrbitError::Execution(error.clone()))?

@@ -51,7 +51,7 @@ use crate::runtime::engine::crew::normalized_task_crew;
 use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    approval_disqualification, approved_by_drain, held_classification, warning_findings_for_hold,
+    approval_disqualification, approved_by_drain, held_classification, task_pilot_warnings,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -183,12 +183,7 @@ fn approval_snapshot(
             && let Some(classification) = held_classification(runtime, entry)
         {
             let findings = if classification == "warnings" {
-                match entry.receipt() {
-                    Some(operation_id) => {
-                        warning_findings_for_hold(runtime, &task.id, operation_id)?
-                    }
-                    None => Vec::new(),
-                }
+                task_pilot_warnings(task.status, &runtime.get_task_comments(&task.id)?)
             } else {
                 Vec::new()
             };

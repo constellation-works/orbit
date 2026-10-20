@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
-import { cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
@@ -1239,6 +1239,7 @@ function tasksListPath(base = "/api/tasks") {
     sp.set("status", "none");
   }
   if (searchQuery) sp.set("q", searchQuery);
+  if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
   if (taskPageCursor) sp.set("cursor", taskPageCursor);
   const qs = sp.toString();
   return qs ? `${base}?${qs}` : base;

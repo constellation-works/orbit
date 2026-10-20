@@ -427,6 +427,19 @@ pub(in crate::api) async fn auto_drain_readiness(
     .await
     {
         Ok(mut payload) => {
+            // Findings are durable task data. The card needs only counts and
+            // reasons; CLI readiness keeps the full per-task readout.
+            if let Some(held) = payload
+                .get_mut("approvals")
+                .and_then(|approvals| approvals.get_mut("held"))
+                .and_then(Value::as_array_mut)
+            {
+                for task in held {
+                    if let Some(task) = task.as_object_mut() {
+                        task.remove("findings");
+                    }
+                }
+            }
             // So the form can hide/disable the `complete` and
             // `approve_proposed`, `auto_fix` and forecast-mode opt-ins and the stop control before the
             // operator ever hits the separately-governed 403 at submission.

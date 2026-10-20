@@ -459,6 +459,18 @@ source_sensitivity = "ignore"
 
 A routine's `eligibility` block still decides which tasks are piloted: a newly eligible task with no fresh assessment is piloted, while retagging an assessed, still-eligible task is not. A task-pilot routine's `trigger.state.freshness` overrides either key (routine, then this table, then defaults). A non-default value is itself material, so changing it re-pilots tasks assessed under the old value once. Assessments from before this setting existed stay fresh while their task is unchanged. See [automation triggers](design/automation-triggers/5_operations.md).
 
+The dashboard's Auto-drain card shows approval and hold counts with a short
+breakdown by reason. The pilot-warning count links to proposed tasks filtered
+by their holding findings. Task rows (including the grouped status cards) carry
+an amber **⚠ pilot warnings · N** chip, and the detail's **Pilot warnings**
+callout lists the full findings by kind. These come from the task's latest
+durable pilot verification, so they remain visible without a live drain.
+Advisory findings do not count. Approval, leaving proposed, or a clean pilot
+verification clears them; an ordinary comment or edit alone does not.
+Task list/detail JSON and MCP expose the same `pilot_warnings` array of
+`{kind, text}` entries, and CLI readiness uses that source for warning holds.
+The dashboard drain payload omits per-finding text.
+
 An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
 
 ### `[workflow.mid_run_steering]` — operator comments after dispatch
