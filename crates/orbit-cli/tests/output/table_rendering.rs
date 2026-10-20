@@ -302,3 +302,204 @@ fn non_tty_sink_has_zero_width_and_no_color_however_loudly_the_env_claims_otherw
     );
     assert_record_lines(&output, 1, true, "non-TTY table");
 }
+
+#[test]
+fn workspace_list_obeys_format_plain_and_header_and_table_and_ndjson() {
+    let workspace = workspace();
+
+    // 1. Plain without header: 1 record, tab-separated fields, NO header row.
+    let plain = workspace.run(
+        &["workspace", "list", "--format", "plain"],
+        "workspace list plain",
+    );
+    let stdout = String::from_utf8(plain.stdout).expect("utf-8 stdout");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "exactly one line for one workspace in plain mode: {stdout:?}"
+    );
+    let fields = lines[0].split('\t').collect::<Vec<_>>();
+    assert!(
+        fields.len() >= 7,
+        "tab-separated fields in plain row: {stdout:?}"
+    );
+    assert!(
+        !lines[0].starts_with("NAME\t"),
+        "no header row without --header: {stdout:?}"
+    );
+
+    // 2. Plain with --header: header row first, tab-separated fields.
+    let plain_header = workspace.run(
+        &["workspace", "list", "--format", "plain", "--header"],
+        "workspace list plain --header",
+    );
+    let stdout_header = String::from_utf8(plain_header.stdout).expect("utf-8 stdout");
+    let lines_header = stdout_header.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_header.len(),
+        2,
+        "header row plus one data row: {stdout_header:?}"
+    );
+    assert!(
+        lines_header[0].contains('\t'),
+        "header row is tab-separated: {stdout_header:?}"
+    );
+    assert!(
+        lines_header[1].contains('\t'),
+        "data row is tab-separated: {stdout_header:?}"
+    );
+    assert_eq!(
+        lines_header[0].split('\t').count(),
+        lines_header[1].split('\t').count(),
+        "header and data rows have same field count: {stdout_header:?}"
+    );
+
+    // 3. Table: aligned columns with header, exactly 2 lines.
+    let table = workspace.run(
+        &["workspace", "list", "--format", "table"],
+        "workspace list table",
+    );
+    let stdout_table = String::from_utf8(table.stdout).expect("utf-8 stdout");
+    let lines_table = stdout_table.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_table.len(),
+        2,
+        "header row plus one data row in table: {stdout_table:?}"
+    );
+    assert!(
+        !stdout_table.chars().any(|c| BOX_GLYPHS.contains(&c)),
+        "table must not draw box rules: {stdout_table}"
+    );
+
+    // 4. NDJSON: one line per workspace, valid JSON document.
+    let ndjson = workspace.run(
+        &["workspace", "list", "--format", "ndjson"],
+        "workspace list ndjson",
+    );
+    let stdout_ndjson = String::from_utf8(ndjson.stdout).expect("utf-8 stdout");
+    let lines_ndjson = stdout_ndjson.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_ndjson.len(),
+        1,
+        "one line per workspace: {stdout_ndjson:?}"
+    );
+    let doc: Value = serde_json::from_str(lines_ndjson[0]).expect("valid JSON line");
+    assert!(doc.is_object());
+    assert!(doc.get("id").is_some());
+    assert!(doc.get("name").is_some());
+    assert!(doc.get("status").is_some());
+
+    // 5. JSON: array of workspace objects preserving current fields.
+    let json = workspace.run(
+        &["workspace", "list", "--format", "json"],
+        "workspace list json",
+    );
+    let doc_json: Value = serde_json::from_slice(&json.stdout).expect("valid JSON array");
+    let array = doc_json.as_array().expect("array");
+    assert_eq!(array.len(), 1);
+    assert!(array[0].get("id").is_some());
+    assert!(array[0].get("name").is_some());
+    assert!(array[0].get("status").is_some());
+}
+
+#[test]
+fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
+    let workspace = workspace();
+
+    // 1. JSON document keeps current {"keys": [...]} shape and fields
+    let json = workspace.run(&["config", "keys", "--format", "json"], "config keys json");
+    let doc_json: Value = serde_json::from_slice(&json.stdout).expect("valid JSON object");
+    let keys = doc_json["keys"].as_array().expect("keys array");
+    assert!(!keys.is_empty(), "registry has keys");
+    let key_count = keys.len();
+    assert!(keys[0].get("key").is_some());
+    assert!(keys[0].get("type").is_some());
+    assert!(keys[0].get("section").is_some());
+    assert!(keys[0].get("description").is_some());
+
+    // 2. Plain without header: key_count rows, all tab-separated, no header row.
+    let plain = workspace.run(
+        &["config", "keys", "--format", "plain"],
+        "config keys plain",
+    );
+    let stdout = String::from_utf8(plain.stdout).expect("utf-8 stdout");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        key_count,
+        "exactly one line per key: {stdout:?}"
+    );
+    for line in &lines {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 4, "4 tab-separated fields per row: {line}");
+    }
+    assert!(
+        !lines[0].starts_with("KEY\t"),
+        "no header without --header: {stdout:?}"
+    );
+
+    // 3. Plain with --header: header row first, key_count + 1 lines.
+    let plain_header = workspace.run(
+        &["config", "keys", "--format", "plain", "--header"],
+        "config keys plain --header",
+    );
+    let stdout_header = String::from_utf8(plain_header.stdout).expect("utf-8 stdout");
+    let lines_header = stdout_header.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_header.len(),
+        key_count + 1,
+        "header row plus keys: {stdout_header:?}"
+    );
+    for line in &lines_header {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(
+            fields.len(),
+            4,
+            "4 tab-separated fields in each row: {line}"
+        );
+    }
+    assert_eq!(
+        lines_header[0].split('\t').count(),
+        4,
+        "header has 4 fields"
+    );
+
+    // 4. Table: aligned columns with header, key_count + 1 lines.
+    let table = workspace.run(
+        &["config", "keys", "--format", "table"],
+        "config keys table",
+    );
+    let stdout_table = String::from_utf8(table.stdout).expect("utf-8 stdout");
+    let lines_table = stdout_table.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_table.len(),
+        key_count + 1,
+        "header plus keys in table: {stdout_table:?}"
+    );
+    assert!(
+        !stdout_table.chars().any(|c| BOX_GLYPHS.contains(&c)),
+        "table must not draw box rules: {stdout_table}"
+    );
+
+    // 5. NDJSON: one line per key, key_count lines, each a valid JSON document.
+    let ndjson = workspace.run(
+        &["config", "keys", "--format", "ndjson"],
+        "config keys ndjson",
+    );
+    let stdout_ndjson = String::from_utf8(ndjson.stdout).expect("utf-8 stdout");
+    let lines_ndjson = stdout_ndjson.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines_ndjson.len(),
+        key_count,
+        "one NDJSON line per key: {stdout_ndjson:?}"
+    );
+    for line in lines_ndjson {
+        let doc: Value = serde_json::from_str(line).expect("valid JSON line");
+        assert!(doc.is_object());
+        assert!(doc.get("key").is_some());
+        assert!(doc.get("type").is_some());
+        assert!(doc.get("section").is_some());
+        assert!(doc.get("description").is_some());
+    }
+}
