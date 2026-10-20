@@ -561,6 +561,18 @@ recorded but quiet. A `history_diverged` stall clears itself only when the orpha
 provably reachable from the branch head again, which moves no debt and needs no
 audit.
 
+`crew_os_ineligible` is a held admission rather than a deferred reason. Before
+it mints a claimed batch's review task, the evaluator asks Core whether any
+`workflow.purpose_crews.review` member's executor can run under the
+definition's `os:` tags. When none can, the claim stays as it is and the
+consumer records a stall whose `crew_hold` names the definition, the pool key,
+each excluded crew with its executor and `host_os`, and the tags; the tick
+reports `stalled: crew_os_ineligible` instead of an error. Every later tick
+asks again and refreshes the names, and the first one whose configuration
+admits a crew clears the stall and mints the held batch in the same pass. No
+recovery or reset is needed, and its friction (after the window) names the
+configuration change that clears it instead of those commands.
+
 ### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
 
 `orbit auto-task reset` is the audited counterpart to recovery: the only

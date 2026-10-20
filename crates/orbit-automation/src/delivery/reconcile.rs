@@ -173,6 +173,20 @@ pub fn action_liveness(
 
     let mut active = active.clone();
     active.action_id = host.action_id(&active)?;
+    // A claim the host holds was refused before anything was minted for its
+    // key, and no action resolves for that key, so none can be executing.
+    if active.action_id.is_none()
+        && active.state == BatchState::Claimed
+        && state
+            .stall
+            .as_ref()
+            .is_some_and(|stall| stall.reason == super::stall::CREW_OS_INELIGIBLE)
+    {
+        return Ok(ActionLiveness {
+            terminal: true,
+            failed_without_evidence: false,
+        });
+    }
     if active.action_id.is_none() {
         // Settlement schedules a fresh claim and clears its action id. On a
         // later pass its key legitimately has no action yet [ORB-14579].

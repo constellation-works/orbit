@@ -194,6 +194,19 @@ impl DeliveryHost for Host<'_> {
         Ok(None)
     }
 
+    fn admission_hold(
+        &self,
+        _attempt: &BatchAttempt,
+    ) -> Result<Option<orbit_types::workflow::automation::recovery::CrewOsHold>, AutomationError>
+    {
+        match self.action {
+            Action::Task(definition) => {
+                super::after_landing::review_crew_hold(self.runtime, definition).map_err(Into::into)
+            }
+            Action::Job(_) => Ok(None),
+        }
+    }
+
     fn stall_window_minutes(&self) -> u32 {
         self.runtime.automation_stall_window_minutes()
     }

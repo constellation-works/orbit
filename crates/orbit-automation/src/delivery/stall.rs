@@ -17,6 +17,13 @@
 //! rebase that preserved content is provable, so the evaluator runs the same
 //! replay proof `recover --replay-history` previews and applies it under a
 //! system-attributed audit record. Only an unprovable rewrite stalls.
+//!
+//! `crew_os_ineligible` is a configuration fact, not a source one: the host
+//! reports an admission hold because no crew the action could be minted with
+//! can run under its task's `os:` tags. It stalls like a stuck reason, so the
+//! consumer reports one durable fact instead of an error per tick, and every
+//! later evaluation asks the host again: once the pool or the tags admit a
+//! crew, the stall clears and the held claim is admitted in the same pass.
 
 use super::{DeliveryHost, Evaluation, recovery};
 use crate::AutomationError;
@@ -24,12 +31,17 @@ use crate::checkpoint::diagnostic;
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{
-    AutomationStall, DEFAULT_STALL_WINDOW_MINUTES, HistoryDivergence, RecoveryRequest, SYSTEM_ACTOR,
+    AutomationStall, CrewOsHold, DEFAULT_STALL_WINDOW_MINUTES, HistoryDivergence, RecoveryRequest,
+    SYSTEM_ACTOR,
 };
 use orbit_types::workflow::automation::{AutomationDiagnostic, AutomationState};
 
 /// The observed revision is no longer an ancestor of the configured head.
 pub const HISTORY_DIVERGED: &str = "history_diverged";
+
+/// No crew the claimed action could be minted with can run under its task's
+/// `os:` tags; see [`DeliveryHost::admission_hold`].
+pub const CREW_OS_INELIGIBLE: &str = "crew_os_ineligible";
 
 /// Reasons that never clear themselves: every later evaluation reads the same
 /// fact, so retrying is indistinguishable from doing nothing.
@@ -60,6 +72,8 @@ pub struct StallReport<'a> {
     pub reason: &'a str,
     /// Divergence facts, present only for `history_diverged`.
     pub divergence: Option<&'a HistoryDivergence>,
+    /// The excluded crews, present only for `crew_os_ineligible`.
+    pub crew_hold: Option<&'a CrewOsHold>,
     /// True when the evaluator already repaired the consumer, so the friction
     /// records what happened rather than asking for operator action.
     pub repaired: bool,
@@ -101,6 +115,28 @@ pub(super) fn suspended(
 
     let state = if request.dry_run {
         state.clone()
+    } else if stall.reason == CREW_OS_INELIGIBLE {
+        // The hold is re-read every pass: a configuration that admits a crew
+        // again clears it, and one that still excludes every crew refreshes
+        // which crews and tags the marker names.
+        let hold = match &state.active {
+            Some(active) => host.admission_hold(active)?,
+            None => None,
+        };
+        let Some(hold) = hold else {
+            *state = write(store, state, None)?;
+            return Ok(None);
+        };
+        mark(
+            store,
+            host,
+            request,
+            state,
+            AutomationStall {
+                crew_hold: Some(hold),
+                ..stall.clone()
+            },
+        )?
     } else {
         escalate_if_due(store, host, request, state, stall.clone())?
     };
@@ -148,6 +184,7 @@ pub(super) fn deferred(
             escalated_at: None,
             friction_id: None,
             divergence: None,
+            crew_hold: None,
         },
     )?;
 
@@ -155,6 +192,38 @@ pub(super) fn deferred(
         store,
         request.consumer,
         &stalled_reason(&reason),
+        Some(state),
+    )
+}
+
+/// Stall on an admission hold the host reported for the claimed action,
+/// leaving the claim as it is for the pass that finds the hold gone.
+pub(super) fn held(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn DeliveryHost,
+    request: &Evaluation<'_>,
+    state: &AutomationState,
+    hold: CrewOsHold,
+) -> Result<AutomationDiagnostic, AutomationError> {
+    let state = mark(
+        store,
+        host,
+        request,
+        state,
+        AutomationStall {
+            reason: CREW_OS_INELIGIBLE.into(),
+            since: request.now,
+            escalated_at: None,
+            friction_id: None,
+            divergence: None,
+            crew_hold: Some(hold),
+        },
+    )?;
+
+    diagnostic(
+        store,
+        request.consumer,
+        &stalled_reason(CREW_OS_INELIGIBLE),
         Some(state),
     )
 }
@@ -180,6 +249,7 @@ fn diverged(
         since: request.now,
         escalated_at: None,
         friction_id: None,
+        crew_hold: None,
         divergence: Some(HistoryDivergence {
             observed: state.observed.clone(),
             head,
@@ -242,6 +312,7 @@ fn replay(
         branch: &request.trigger.branch,
         reason: HISTORY_DIVERGED,
         divergence: Some(&divergence),
+        crew_hold: None,
         repaired: true,
         at: request.now,
     })?;
@@ -313,6 +384,7 @@ fn mark(
             branch: &request.trigger.branch,
             reason: &stall.reason,
             divergence: stall.divergence.as_ref(),
+            crew_hold: stall.crew_hold.as_ref(),
             repaired: false,
             at: request.now,
         })?;

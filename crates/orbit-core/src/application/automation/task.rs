@@ -25,7 +25,8 @@ pub(super) fn mint(
     let mut params =
         crate::application::auto_tasks::scheduler::template_params(runtime, definition);
     // [ORB-13896] After-landing review is reviewed by `workflow.purpose_crews.review`,
-    // one crew drawn per batch when it is a pool [ORB-15195].
+    // one crew drawn per batch when it is a pool [ORB-15195], from the members
+    // whose executor can run under the task's `os:` tags.
     if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {
         params.crew = Some(crew);
         params.crew_source = Some(orbit_config::REVIEW_CREW_KEY.to_string());

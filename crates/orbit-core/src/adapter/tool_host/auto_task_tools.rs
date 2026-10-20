@@ -156,6 +156,11 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         Err(error) => value["cursor_state_error"] = json!(error.to_string()),
     }
     let definition = listed.definition;
+    if let Some(note) =
+        crate::application::automation::review_crew_overrides_definition(runtime, &definition)
+    {
+        value["crew_overridden"] = json!(note);
+    }
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input.optional_bool("preview")?.unwrap_or(false) {
             crate::application::automation::evaluate_auto_task(
@@ -207,7 +212,11 @@ fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
     response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
-    let warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
+    let mut warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
+    // An edited crew the review pool replaces would otherwise read as applied.
+    warnings.extend(
+        crate::application::automation::review_crew_overrides_definition(runtime, &definition),
+    );
     with_warnings(response, warnings)
 }
 

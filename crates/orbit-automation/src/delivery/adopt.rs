@@ -12,7 +12,10 @@
 //! Everything that path refuses still fails closed as `definition_changed`,
 //! now naming why. So does a consumer the automatic path cannot reason about
 //! alone: one with no recorded trigger to name the change, or one already
-//! stalled for an operator.
+//! stalled for an operator. A consumer held because no crew could run its
+//! review task is not stalled for an operator: an edit, such as new `os:`
+//! tags, is adopted over its never-minted claim, and the same pass asks the
+//! host again whether the claim can be admitted.
 
 use super::{DeliveryHost, Evaluation, recovery};
 use crate::AutomationError;
@@ -98,8 +101,14 @@ pub fn refusals(
     }
 
     // Adoption clears the stall marker, and clearing a stall is an operator's
-    // decision.
-    if state.stall.is_some() {
+    // decision, except a held admission's: that stall clears itself as soon
+    // as configuration admits a crew, and an edited definition is such a
+    // change.
+    if state
+        .stall
+        .as_ref()
+        .is_some_and(|stall| stall.reason != super::stall::CREW_OS_INELIGIBLE)
+    {
         refuse(refusal::CONSUMER_STALLED);
     }
 

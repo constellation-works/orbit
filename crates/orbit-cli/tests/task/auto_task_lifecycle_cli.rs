@@ -814,6 +814,7 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
         escalated_at: None,
         friction_id: None,
         divergence: None,
+        crew_hold: None,
     });
     assert!(store.automation_stall(&baseline, &stalled).unwrap());
     let listed = stalled_consumers(&runtime).unwrap();

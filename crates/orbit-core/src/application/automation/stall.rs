@@ -285,6 +285,14 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
              the rewrite is not invisible.",
             report.branch
         );
+    } else if let Some(hold) = report.crew_hold {
+        let _ = writeln!(
+            body,
+            "Delivery automation cannot mint the next `{definition}` action: {}. Every \
+             obligation it holds is retained, and nothing new is observed while it waits. It \
+             resumes on its own at the first evaluation after the configuration admits a crew.",
+            hold.summary()
+        );
     } else {
         let _ = writeln!(
             body,
@@ -321,7 +329,18 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
         }
     }
 
-    if !report.repaired {
+    if let Some(hold) = report.crew_hold.filter(|_| !report.repaired) {
+        let _ = writeln!(body);
+        let _ = writeln!(
+            body,
+            "Resolve it with one of:\n\
+             - add a crew whose executor can run on one of {} to `{}`;\n\
+             - change the definition's `os:` tags with `orbit auto-task update {definition} \
+             --tag <tag> ...`.",
+            hold.os_tags.join(", "),
+            hold.pool_key
+        );
+    } else if !report.repaired {
         let _ = writeln!(body);
         let _ = writeln!(
             body,

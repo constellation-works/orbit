@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_core::OrbitError;
-use orbit_types::workflow::automation::recovery::{RecoveryPreview, ResetPreview};
+use orbit_types::workflow::automation::recovery::{AutomationStall, RecoveryPreview, ResetPreview};
 use serde_json::Value;
 
 use super::prepare::StateFilter;
@@ -20,7 +20,10 @@ pub(super) fn render(
 ) -> CommandOut {
     match verb {
         AutoTaskVerb::Add | AutoTaskVerb::Update => {
-            let text = text(&value, "name");
+            let mut text = text(&value, "name");
+            for warning in strings(&value["warnings"]) {
+                let _ = write!(text, "\nwarning: {warning}");
+            }
             Ok(Payload::detail(value, text).into())
         }
         AutoTaskVerb::List => list(value, filter),
@@ -173,6 +176,9 @@ fn show(value: Value) -> CommandOut {
     let _ = writeln!(out, "  schedule: {}", schedule_summary(&doc["schedule"]));
     let _ = writeln!(out, "  dedupe: {}", text(&doc, "dedupe"));
     let _ = writeln!(out, "  template: {}", text(&doc["template"], "title"));
+    if let Some(note) = doc["crew_overridden"].as_str() {
+        let _ = writeln!(out, "  crew: {note}");
+    }
     if let Some(skip) = doc.get("skip_if_unchanged").filter(|skip| !skip.is_null()) {
         let _ = writeln!(
             out,
@@ -204,6 +210,22 @@ fn show(value: Value) -> CommandOut {
                 .and_then(Value::as_str)
                 .map(|id| format!(" from {id}"))
                 .unwrap_or_default(),
+        );
+    }
+    if let Some(stall) = doc
+        .pointer("/automation/state/stall")
+        .filter(|stall| !stall.is_null())
+    {
+        let stall: AutomationStall = decode(stall)?;
+        let _ = writeln!(
+            out,
+            "  stalled: {} since {}{}",
+            stall.reason,
+            stall.since.to_rfc3339(),
+            stall
+                .crew_hold
+                .map(|hold| format!(" — {}", hold.summary()))
+                .unwrap_or_default()
         );
     }
     if let Some(automation) = doc.get("automation") {
