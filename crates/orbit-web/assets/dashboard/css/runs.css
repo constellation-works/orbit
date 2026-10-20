@@ -3,7 +3,7 @@
 .runs-row {
   display: grid;
   grid-template-columns:
-    104px minmax(100px, 1fr) minmax(140px, 1.3fr) minmax(170px, 1.5fr) minmax(130px, 1fr)
+    104px minmax(156px, 1.2fr) minmax(124px, 1.3fr) minmax(102px, 1fr) minmax(184px, 1.2fr)
     56px 68px 84px 84px 96px;
   gap: 12px;
   min-height: 42px;
@@ -25,7 +25,7 @@
 #runs-body { overflow-x: auto; }
 .runs-row.workspace-attributed {
   grid-template-columns:
-    104px minmax(70px, 0.6fr) minmax(90px, 1fr) minmax(130px, 1.3fr) minmax(170px, 1.5fr) minmax(116px, 1fr)
+    104px minmax(70px, 0.6fr) minmax(156px, 1.2fr) minmax(124px, 1.3fr) minmax(102px, 1fr) minmax(184px, 1.2fr)
     56px 68px 84px 84px 96px;
 }
 .runs-row .run-workspace {
@@ -270,12 +270,12 @@
 /* The runs card, not the viewport, decides when the grid overflows: the rail
    and page padding make a 1280px window's card about 1038px. Chromium's
    minimum scroll width is the track minimums, the 12px gaps and the 16px
-   start padding it counts: 1156px for the default grid and 1204px with the
+   start padding it counts: 1182px for the default grid and 1264px with the
    Workspace column. Pin State and fade the scroll edges while the card is
    narrower than that by more than the 1px overflow tolerance. A card that
    can hold the tracks keeps the plain grid. */
 #runs-panel { container: runs-card / inline-size; }
-@container runs-card (max-width: 1154px) {
+@container runs-card (max-width: 1180px) {
   /* The grid's tracks overflow the row's auto-sized box at these widths.
      Give the row its table width so its sticky State cell stays pinned for
      the full scroll range. */
@@ -312,7 +312,7 @@
   }
 }
 /* All-workspaces still overflows after the default grid fits. */
-@container runs-card (max-width: 1202px) {
+@container runs-card (max-width: 1262px) {
   #runs-body:has(.runs-row.workspace-attributed) {
     background:
       linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,

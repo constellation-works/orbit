@@ -1138,7 +1138,7 @@ async function assertNarrowTableLayouts(page) {
   const assertRunsCard = async (attributed, widths) => {
     await renderRunsFixture(attributed);
     // Cards at or under this width are narrower than the grid's minimum tracks.
-    const overflowLimit = attributed ? 1202 : 1154;
+    const overflowLimit = attributed ? 1262 : 1180;
     const seen = [];
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
@@ -1165,6 +1165,30 @@ async function assertNarrowTableLayouts(page) {
     }
     return seen;
   };
+  // Realistic job names and full run IDs must not clip at 1440px, and a failed
+  // run must still name the step it stopped at (Failed at keeps its column).
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(async () => {
+    const { renderRuns } = await import('/js/runs.js');
+    const now = Date.now();
+    const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
+    renderRuns([
+      { run_id: 'jrun-20261020-0422-c1', job_id: 'task_pilot_pipeline', state: 'running', created_at: iso(4), duration_ms: 240000 },
+      { run_id: 'jrun-20261020-0410-a7', job_id: 'task_gate_pipeline', state: 'success', created_at: iso(30), duration_ms: 180000 },
+      {
+        run_id: 'jrun-20261019-2310-f3', job_id: 'task_pr_pipeline', state: 'failed', created_at: iso(180), duration_ms: 360000,
+        steps: [{ target_id: 'open-pr', state: 'failed', error_code: 'gh.pr_create_failed', error_message: 'GitHub returned 422' }],
+      },
+    ]);
+  });
+  await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
+  const desktopRuns = await page.evaluate(() => ({
+    clipped: [...document.querySelectorAll('#runs-body .runs-row:not(.runs-header) .id, #runs-body .runs-row:not(.runs-header) .run-id')]
+      .filter(cell => cell.scrollWidth > cell.clientWidth).map(cell => cell.textContent.trim()),
+    failedStep: document.querySelector('#runs-body .run-failed-step')?.textContent.trim() || '',
+  }));
+  if (desktopRuns.clipped.length) throw new Error(`Jobs › History clips job names or run IDs at 1440px: ${JSON.stringify(desktopRuns)}`);
+  if (desktopRuns.failedStep !== 'open-pr') throw new Error(`Failed at no longer names the failed step at 1440px: ${JSON.stringify(desktopRuns)}`);
   const runsCardWidths = [1280, 1360, 1396, 1400, 1444, 1460, 1600];
   await assertRunsCard(false, runsCardWidths);
   await assertRunsCard(true, runsCardWidths);
