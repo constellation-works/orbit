@@ -5,8 +5,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, OrbitRuntime};
+use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
 use orbit_types::task::{TaskComplexity, TaskOrigin, TaskStatus};
 use serde_json::{Value, json};
 
@@ -382,4 +383,173 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         refused.contains("nobody"),
         "a crew with no row is refused by name: {refused}"
     );
+}
+
+/// A crew that ran two models in the window has two implementers rows, so
+/// `show` without a model is refused. The refusal names the selector each
+/// surface takes and lists the candidate models; a listed model is accepted
+/// through the selector its surface names.
+#[test]
+fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models",
+    ) {
+        return;
+    }
+
+    const MODELS: [&str; 2] = ["claude-haiku-5-5", "claude-sonnet-5-5"];
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        // A managed run exports worker authority that would bind the fixture
+        // runtime to the live store.
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        let workspace = runtime.workspace_id().unwrap();
+        for (index, model) in MODELS.iter().enumerate() {
+            let id = runtime
+                .add_task(TaskAddParams {
+                    title: format!("implemented {index}"),
+                    description: "agent detail fixture".into(),
+                    plan: "implement the change".into(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            // An agent's move into in-progress starts the attempt the run worked.
+            runtime
+                .update_task_with_identity(
+                    &id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    Some("claude".into()),
+                    Some((*model).into()),
+                )
+                .unwrap();
+            // The implementation run that worked the task, on the crew and
+            // model its implementers row is keyed by. It began before the
+            // attempt and finished during it, so no run owned the status move.
+            let finished = Utc::now();
+            let started = finished - chrono::Duration::hours(1);
+            runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &workspace,
+                    &JobRun {
+                        run_id: format!("jrun-sol-{index}"),
+                        job_id: "task_pr_pipeline".into(),
+                        attempt: 1,
+                        state: JobRunState::Success,
+                        scheduled_at: started,
+                        created_at: started,
+                        started_at: Some(started),
+                        finished_at: Some(finished),
+                        duration_ms: None,
+                        pid: None,
+                        pid_start_time: None,
+                        input: Some(json!({ "task_ids": [id] })),
+                        retry_source_run_id: None,
+                        knowledge_metrics: None,
+                        resolved_crew: Some("sol".into()),
+                        crew_model: Some((*model).into()),
+                        steps: Vec::new(),
+                        executed_on: None,
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+    }
+
+    // The CLI's selector is `--model`.
+    let refused = fixture
+        .command(&[
+            "agents",
+            "show",
+            "--role",
+            "implementers",
+            "--crew",
+            "sol",
+            "--window",
+            "30d",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let refused = String::from_utf8_lossy(&refused);
+    assert!(
+        refused.contains("--model"),
+        "the CLI names --model: {refused}"
+    );
+    for model in MODELS {
+        assert!(refused.contains(model), "a candidate model: {refused}");
+    }
+
+    // Over MCP and `orbit tool run` the selector is `row_model`, and the
+    // refusal keeps its error code. The JSON error payload goes to stderr.
+    let refused = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.agents.show",
+            "--input",
+            &json!({ "role": "implementers", "crew": "sol", "window": "30d" }).to_string(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    let message = refused["error"].as_str().unwrap();
+    assert!(
+        message.contains("row_model"),
+        "the tool names row_model: {message}"
+    );
+    for model in MODELS {
+        assert!(message.contains(model), "a candidate model: {message}");
+    }
+
+    // A listed model is accepted through each surface's selector.
+    let by_row_model = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.agents.show",
+        "--full",
+        "--input",
+        &json!({
+            "role": "implementers", "crew": "sol", "window": "30d",
+            "row_model": MODELS[1],
+        })
+        .to_string(),
+    ]);
+    assert_eq!(by_row_model["row"]["model"], MODELS[1], "{by_row_model}");
+    let by_model = fixture.json(&[
+        "agents",
+        "show",
+        "--role",
+        "implementers",
+        "--crew",
+        "sol",
+        "--window",
+        "30d",
+        "--model",
+        MODELS[0],
+        "--json",
+    ]);
+    assert_eq!(by_model["row"]["model"], MODELS[0], "{by_model}");
 }

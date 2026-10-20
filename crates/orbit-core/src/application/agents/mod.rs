@@ -271,11 +271,19 @@ pub fn agent_detail(
             )));
         }
         _ => {
+            // Core cannot tell which surface called, so the refusal names each
+            // surface's selector: `--model` on the CLI, `row_model` over MCP and
+            // `orbit tool run`, and the dashboard's detail `model` query parameter.
+            let candidates: Vec<&str> = matching
+                .iter()
+                .map(|row| row.input.model.as_str())
+                .collect();
             return Err(OrbitError::InvalidInput(format!(
-                "crew '{crew}' has {} {} rows in the {} window; name one with model",
+                "crew '{crew}' has {} {} rows in the {} window; name one with --model (CLI), row_model (MCP and orbit tool run) or the model query parameter (dashboard API). Candidate models: {}",
                 matching.len(),
                 role.as_str(),
                 query.window,
+                candidates.join(", "),
             )));
         }
     };
