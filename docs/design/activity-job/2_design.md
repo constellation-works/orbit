@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-14
+last_updated: 2026-10-19
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -17,7 +17,7 @@ This document describes the shipped Activity / Job substrate across `orbit-types
 
 ---
 
-## 1. Asset Shape and Two-Pass Loading
+## 1. Asset Shape and Header-First Loading
 
 Activity / Job assets are `schemaVersion: 2` YAML envelopes with:
 
@@ -25,7 +25,7 @@ Activity / Job assets are `schemaVersion: 2` YAML envelopes with:
 - `metadata.name`
 - typed `spec`
 
-The loader in `crates/orbit-engine/src/activity_job/asset_loader.rs` reads the schema header first, then parses the full envelope into `ActivityV2` or `JobV2`; that shape arrived in [T20260418-2010]. `schemaVersion: 1` is retired after [T20260419-2156], and `kind` mismatches are structural errors, so an activity cannot dispatch as a job or vice versa.
+The loader in `crates/orbit-engine/src/activity_job/asset_loader.rs` checks the schema header before accepting the typed `ActivityV2` or `JobV2` envelope. Its fast path parses YAML once into an untyped document, checks the header and retired `role` declarations, then deserializes the typed body from that document. When that path cannot judge the document, it falls back to separate parses from the original text to preserve compatibility, error messages, and source positions. The envelope shape arrived in [T20260418-2010]. `schemaVersion: 1` is retired after [T20260419-2156], and `kind` mismatches are structural errors, so an activity cannot dispatch as a job or vice versa.
 
 ---
 
@@ -126,6 +126,8 @@ Job execution deliberately has a different order: explicit `ORBIT_JOB_DIR` / `OR
 
 Activity resolution is likewise execution-oriented, but its directory order is explicit `ORBIT_ACTIVITY_DIR` / `ORBIT_V2_CATALOG_DIR`, then global seeded activities, then workspace activities. Explicit and global directories use first-wins loading. Workspace activities may add names that are absent from the catalog, but any workspace name matching a shipped default is skipped even if the global file is missing; a workspace activity also cannot replace an earlier explicit or global entry. Duplicate names inside one activity directory tree remain invalid.
 
+Active plugin job and activity files load after those directory layers, retaining existing entries; `orbit run show` identifies their layer as `plugin:<namespace>`.
+
 This is an intentional default-shadowing asymmetry: job *listing* is workspace-preferred, while named job execution and activity resolution keep shipped defaults authoritative over workspace resources. The split follows [L-0060] and its originating security fix [ORB-00356]: display/catalog override semantics must not make checked-in workspace YAML executable in place of a trusted shipped default. That learning is the rationale; the runtime and job catalog code are authoritative for the exact loading behavior.
 
 ### 4.1 Managed materialization and retirement
@@ -200,7 +202,7 @@ same question for every kind.
 
 Activity *fault* detection is the exception: it walks every production catalog
 directory (env override, global managed tree, workspace `.orbit/resources/activities/`)
-and applies the same `load_activity_asset` + tool-allowlist validation catalog
+and applies the same `load_activity_catalog_asset` + tool-policy validation catalog
 construction uses, so a workspace file that fails job
 dispatch cannot be reported healthy. Retired `spec.backend: http|auto` findings
 name `orbit doctor --fix-retired-activity-backends`, which deletes only that
@@ -380,13 +382,14 @@ boundary: the leaf does not stage, abort, continue, or restart a rebase. After
 a successful terminal invocation, the host-side worktree boundary rechecks the
 live run and task owner, retry-lineage worktree checkpoint, prepared branch,
 original HEAD and merge base, stopped-rebase metadata (whose `onto` is the
-pinned target SHA), and exact unmerged path set. It rejects incomplete or
-out-of-scope file edits, stages only that authenticated set, and runs one
-`rebase --continue`. A later conflict or changed/cancelled owner remains a
-failed recovery; the terminal handoff keeps the original error and preserved
-candidate/PR evidence. The boundary then requires the target as an ancestor
-and a remaining candidate commit. Ordinary providers still cannot move HEAD;
-primary-checkout drift checks apply to recovery too.
+pinned target SHA), and exact unmerged path set. It rejects incomplete conflict
+repairs, stages the authenticated conflict set and companion edits, and runs one `rebase --continue`. A later conflicting
+pick preserves the stopped rebase for the next bounded recovery round described
+above; a changed or cancelled owner refuses recovery. A completed continuation
+requires target ancestry and either a remaining candidate commit or the
+authenticated absorbed-candidate settlement described below. Terminal handoff
+retains the failure and preserved candidate/PR evidence. Ordinary providers
+still cannot move HEAD; primary-checkout drift checks apply to recovery too.
 
 After [F2026-10-237], a conflict file repaired before the recovery invocation
 counts as repaired. Final recovery repairs a stopped rebase's conflict files
@@ -624,7 +627,7 @@ Run finalization moves the task to `backlog` under a `provider_failure_hold` his
 - **Host scope** ([ORB-16379]): an unavailable hold names the failing host's `machine` and excludes its crews only there; pull admission reads the hold as the executor's machine sees it. Capacity, limit and refusal holds name no machine and exclude everywhere, as does a hold stored before `machine` existed. A new hold keeps a still-standing earlier hold's crews in their own scope: everywhere-crews move to `carried_crews` under a machine-scoped hold, and machine-scoped crews stay scoped under a new everywhere hold.
 - **Host outage**: the crews an unavailable failure excluded are also recorded in the host's `provider_crew_outages` until that failure's backoff ends. Local admission adds every live outage to each task's hold, so one expired login keeps every task on this host off the crew, independent of the held task's status.
 - **Refusal** excludes every crew of the provider.
-- **Backoff** doubles for each hold the task got in the last 24 hours, capped at 24 hours (6 hours for a usage-limit hold).
+- **Backoff** doubles for recent holds in the last 24 hours, capped at 24 hours (6 hours for a usage-limit hold without a reported reset). Usage-limit growth counts only earlier limit holds on the same provider. A reported limit reset instead sets the deadline, clamped to between 5 minutes and 7 days from now.
 - **Admission** (`auto_task_crew_candidates`) draws around the excluded crews while the hold is the task's latest status event and `not_before` has not passed, or while a host outage of the crew lasts. When nothing is left, the backlog snapshot excludes the task with `provider_backoff`.
 
 After [ORB-14697], admission also reads the host's `provider_limit_observations` before dispatch. A live reading that is exhausted, or used at or above `workflow.provider_limit_max_used_pct` (or the provider's `workflow.provider_limit_overrides` entry), removes that provider's crews (or its model's) from the draw that follows the hold. An override written `provider:off` leaves every reading of that provider, including a ledger budget reading, out of that draw; the reading is still recorded and shown, and a usage-limit failure still holds the task. It counts until its reset, else for its window's length, or 60 minutes when the length is unknown, or 30 minutes for an exhausted error reading. A purpose-sourced task retries the unlimited members of its purpose pool before any complexity-pool fallback. A pool or default task falls back to the unlimited members of its complexity pool, never to the default. An explicit crew waits under `workflow.provider_limit_explicit_crews = "wait"`, as does a usage-limit hold on it, and draws from the pool under `"pool"`. With nothing left, the backlog snapshot excludes the task with `provider_limit`. An explicit run-input crew is not gated; `crew_selection.provider_limit` records the reading. A provider that reports no usage can be given a `workflow.provider_limit_budgets` entry [ORB-14699]: admission then reads its spend from the host invocation ledger as a `ledger` observation, computed on each read, which a live stored reading of the provider overrides.
@@ -1117,9 +1120,8 @@ paths; the host may therefore stage that reviewer's entire repair delta
 without heuristically forcing implementer task selectors onto it.
 
 **Declared exceptions.** No shipped `agent_loop` activity opts out of
-`require_completion_envelope`. Every seeded agent step performs work whose
-absence must stop the pipeline, so the empty opt-out list is pinned by a test
-and any future exception requires a deliberate edit with a stated reason.
+`require_completion_envelope`. The schema defaults it to `true`; an exception
+requires an explicit `false` with a stated reason in the activity asset.
 
 ### 7.6b Structured output is the Claude prevention layer
 
@@ -1262,7 +1264,7 @@ The executor implementation lives under `crates/orbit-engine/src/activity_job/jo
 
 ### 8.1 Template rendering and pipeline context
 
-The executor exposes outputs as `{{ steps.<id>.output.* }}`. Initial context follows the §3 merge contract: object caller input overlays object `job.default_input`, while `null` and non-object inputs keep their special cases. Step `default_input` is rendered recursively; strings that parse as JSON convert back into `Value`.
+The executor exposes outputs as `{{ steps.<id>.output.* }}`. Initial context follows the §3 merge contract: object caller input overlays object `job.default_input`, while `null` and non-object inputs keep their special cases. Step `default_input` is rendered recursively. An exact step-output reference preserves its source JSON type; other template-bearing strings are rendered and parsed back into `Value` when the result is valid JSON. Literal strings without templates stay strings. The exact whole-input forwarding exception is described in §3.
 
 `fan_out` workers see `{{ item }}` / `{{ input.item }}`. Loop bodies see `{{ input.iteration }}`.
 
@@ -1292,7 +1294,7 @@ Fan-in `collect` aliases carry the producing fan-out step's guard chain too. A c
 
 Step IDs must be unique throughout a job, including parallel branches, fan-out worker templates, and loop bodies. `validate_job` rejects a duplicate and names the ID before checking conditions. A fan-in `collect` alias may equal its own fan-out step's ID; it is another name for that output, not another step.
 
-The retry wrapper re-runs the whole step body up to `max_attempts`, with exponential or linear backoff. Some errors bypass retry:
+The retry wrapper re-runs the whole step body up to `max_attempts`, with full jitter under an exponentially or linearly growing backoff cap. Some errors bypass retry:
 
 - tool denial
 - unknown deterministic action
@@ -1343,7 +1345,7 @@ count: independent successful pilots finish and apply before the guard makes a
 failed, stale, cancelled, interrupted, or timed-out pilot visible as a failed
 sweep, while a genuinely empty candidate list remains a successful no-op.
 
-Workers use isolated pipeline/session maps. The validator rejects any worker template with `session:` because concurrent workers would otherwise share one mutable `Session`.
+Workers use isolated pipeline maps initialized from the parent at dispatch. Named sessions are retired for all job steps, including workers: orbit-core calls `validate_job_retired_sessions` after resolving activity references and before execution (§5). `validate_job` itself does not enforce that retired-session check.
 
 `validate_job` also rejects a `fan_in` quorum with `n == 0`, naming the owning fan-out step. Positive fan-in quorums are accepted at validation because the item count is rendered at runtime; `max_workers` limits concurrency, not the total number of workers.
 
@@ -1356,7 +1358,7 @@ A loop runs either:
 
 `loop.items` uses the same rendering rules as `fan_out.items`. Non-array JSON fails the step with `JobExecution` naming `loop.items` before the first iteration.
 
-The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating.
+The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating. Exhausting the planned iterations without satisfying `break_when` emits `LoopDidNotConverge` but returns a successful loop outcome with `broke: false`; a workflow that requires convergence must check that output.
 
 ### 8.6 Persisted state for v2 job runs
 
@@ -1423,7 +1425,9 @@ After [T20260505-21], whole-run replay creates a fresh durable `JobRun` from an 
 
 Replay takes the shared workspace-claim and drain-entry admission gates before creating a run: a replica checkout or a task held by a live execution claim cannot replay delivery. `orbit job replay` remains foreground and accepts `--claim-token` (or `ORBIT_WORKSPACE_CLAIM_TOKEN`) for the workspace claim holder. Historical trusted-host admission is stripped and review admission is captured from current policy. Both foreground and detached replay discard automatic crew selections and captured pools for the delivery pipelines, then select under current pool policy and standing provider-failure holds. A crew whose recorded selection source was `explicit` is retained; caller-supplied pool overrides and crew allowlists remain in the replay input. The dashboard's `POST /api/runs/:id/replay?workspace=…` instead persists and submits a detached worker, returning `{run_id, state}` with `state: submitted | queued` immediately; its body optionally carries `claim_token`. It requires the `job.run` operator capability and additionally checks the completion capability when the recorded input carries `completion: done`.
 
-After [ORB-10002], the executor also persists per-step recovery checkpoints, and interrupted runs are resumable. After each completed *top-level* step, `execute_job_with_resume` calls `RuntimeHost::checkpoint_step`, which orbit-core records into the run's existing persisted `PipelineState` (`step_states`, `step_outputs`, `next_step_index`, and the step's output merged into `pipeline[step_id]`; the checkpoint payload is the completing step's output alone, so per-step persistence cost does not grow with the run) — no new table; the checkpoint store is the `pipeline_state_json` column that already backs run state (since schema v38 it lives in the 1:1 `job_run_states` table, so run listings never read it). Checkpoint failures are non-fatal (a `tracing` warning; the run continues without durability). Orphan reconciliation — which already probed `pid` + `pid_start_time` owner identity on run list/show/exec and now also runs best-effort at workspace open (`OrbitRuntime::from_resolved_roots`) — finalizes conclusively-dead-owner `running` runs to a new terminal `interrupted` state (`RunEvent::Interrupt`) instead of `failed`, with an `interrupted` diagnostic step carrying the liveness reason; inconclusive probes still leave the run alone. `orbit job resume <run_id>` accepts `interrupted` / `failed` / `timeout` runs and creates a fresh linked run (`retry_source_run_id`, `attempt + 1`) whose seeded `PipelineState` comes from the source's checkpoints: top-level steps recorded `success` are skipped (audited as `step.skipped` with a resume reason) and their outputs are fed back into the pipeline for later steps' templates. Checkpoint granularity is intentionally the top-level step — `parallel:` / `fan_out:` / `loop:` blocks re-run as a whole if incomplete — and in-memory agent sessions are not restored across processes. A completed compound step also checkpoints every other pipeline entry it exposed (nested step outputs, nested fan-in `collect` aliases) into `PipelineState.compound_outputs[step_index]` in the same write [ORB-13420], so a resumed run's later steps render the same `steps.*` values as an uninterrupted run; a top-level fan-in alias is derived from the step's own checkpointed output rather than stored twice. Entries written by a failed branch tolerated by a successful `any` / `quorum` parallel join are kept as the uninterrupted run exposed them. Checkpoints recorded before `compound_outputs` existed restore the step's output and top-level fan-in alias only; nested outputs they never recorded stay absent, so a template reading one fails with the usual "no data recorded" error. A source run with no successful checkpoint degrades to whole-run replay semantics. A run that ends `success` or `cancelled` can never resume, so the terminal write compacts its state in the same transaction [ORB-14587]: `pipeline_patches` and `compound_outputs` are dropped, and each step output the `pipeline` already holds (every checkpointed one) leaves `step_outputs` for a JSON pointer into `pipeline` in `step_output_pointers`. Readers go through `PipelineState::step_output`, which reads either form; `failed`, `timeout`, `interrupted` and `held` runs keep their full checkpoints.
+After [ORB-10002], the executor also persists per-step recovery checkpoints, and interrupted runs are resumable. After each completed *top-level* step, `execute_job_with_resume` calls `RuntimeHost::checkpoint_step`, which orbit-core records into the run's existing persisted `PipelineState` (`step_states`, `step_outputs`, `next_step_index`, and the step's output merged into `pipeline[step_id]`; the checkpoint payload is the completing step's output alone, so per-step persistence cost does not grow with the run) — no new table; the checkpoint store is the `pipeline_state_json` column that already backs run state (since schema v38 it lives in the 1:1 `job_run_states` table, so run listings never read it). Checkpoint failures are non-fatal (a `tracing` warning; the run continues without durability). Orphan reconciliation — which already probed `pid` + `pid_start_time` owner identity on run list/show/exec and now also runs best-effort at workspace open (`OrbitRuntime::from_resolved_roots`) — finalizes conclusively-dead-owner `running` runs to a new terminal `interrupted` state (`RunEvent::Interrupt`) instead of `failed`, with an `interrupted` diagnostic step carrying the liveness reason; inconclusive probes still leave the run alone. `orbit job resume <run_id>` accepts `interrupted` / `failed` / `timeout` runs, plus `held` runs carrying a forge hold, and creates a fresh linked run (`retry_source_run_id`, `attempt + 1`) whose seeded `PipelineState` comes from the source's checkpoints: top-level steps recorded `success` are skipped (audited as `step.skipped` with a resume reason) and their outputs are fed back into the pipeline for later steps' templates. Checkpoint granularity is intentionally the top-level step — `parallel:` / `fan_out:` / `loop:` blocks re-run as a whole if incomplete — and in-memory agent sessions are not restored across processes. A completed compound step also checkpoints every other pipeline entry it exposed (nested step outputs, nested fan-in `collect` aliases) into `PipelineState.compound_outputs[step_index]` in the same write [ORB-13420], so a resumed run's later steps render the same `steps.*` values as an uninterrupted run; a top-level fan-in alias is derived from the step's own checkpointed output rather than stored twice. Entries written by a failed branch tolerated by a successful `any` / `quorum` parallel join are kept as the uninterrupted run exposed them. Checkpoints recorded before `compound_outputs` existed restore the step's output and top-level fan-in alias only; nested outputs they never recorded stay absent, so a template reading one fails with the usual "no data recorded" error. A source run with no successful checkpoint degrades to whole-run replay semantics. A run that ends `success` or `cancelled` can never resume, so the terminal write compacts its state in the same transaction [ORB-14587]: `pipeline_patches` and `compound_outputs` are dropped, and each step output the `pipeline` already holds (every checkpointed one) leaves `step_outputs` for a JSON pointer into `pipeline` in `step_output_pointers`. Readers go through `PipelineState::step_output`, which reads either form; `failed`, `timeout`, `interrupted` and `held` runs keep their full checkpoints.
+
+Resume planning also refuses generic resume for claimed execution, operator source-repair runs, review-reconciliation invocations, and trusted-host invocations: those admissions cover one attempt. An `interrupted` run whose recorded owner is confirmed alive is refused; an inconclusive liveness probe alone does not refuse it. These checks precede checkpoint reuse in `application/job/resume/plan.rs`.
 
 After [ORB-10470] / [Resume is a durable submission scoped by explicit retry lineage](./4_decisions.md#resume-is-a-durable-submission-scoped-by-explicit-retry-lineage), resume is a durable *submission* scoped by explicit retry lineage. `OrbitRuntime::submit_resume_run` persists the resumed run seeded with the source's checkpoints and hands it to the same detached pipeline worker `submit_ship_run` uses, so `POST /job-runs/:id/resume` and `orbit job resume` return the new run ID as soon as it is durable. CLI `--wait` joins that detached run and maps its terminal outcome to the exit code; the resumed pipeline never occupies the caller process. The pipeline worker takes its resume cursor from the run's *own* persisted `PipelineState`, which makes checkpoint reuse a property of the run record rather than of the caller and makes a worker restart idempotent — steps already recorded `success` are skipped, never re-dispatched. Before the first step runs, resume reconciles the tasks its lineage owns (the source run, its `retry_source_run_id` ancestors, and their descendants, narrowed by the run input's `task_ids` when present): a task blocked by that lineage's own failure is re-admitted to `in_progress`, and its `job_run_id` is realigned to the batch id the reused checkpoints carry (`steps.<worktree>.output.job_run_id`). This closes both halves of the F2026-07-122 catch-22 — checkpoint resume skips `worktree_setup`, so nothing else would re-claim the task — while leaving `load_handoff_context`'s ownership equality check untouched: a task owned by a run outside the lineage is never re-admitted or re-stamped. Planning compares each targeted task's `job_run_id` and `job_run_machine` with that lineage before a resumed run is inserted. A binding on another run or another machine refuses the resume, names that binding, and tells the operator to continue it on its machine or admit a new attempt after an authorized rebind. Resume does not copy checkpoints or render validation input for that binding, and it does not overwrite the claim. A lineage resume re-keys only the pipeline document's run id; `job_run_id` and `batch_id` inside the copied checkpoints and input stay the batch that created the worktree, which is the id lineage reconcile restamps the task onto. The attach guard that rejects validation evidence from a run that does not own the task stays in place (F2026-07-121).
 
@@ -1480,7 +1484,7 @@ The remote-mode refusal remains part of `git_merge`: a caller that requests remo
 
 After [T20260428-8], task-starting workflows own explicit admission instead of relying on generic task updates. After [ORB-11305] the admissible set is exactly `backlog` and `in-progress`: `backlog` is fresh authorized work, and `in-progress` is either this run's own idempotent retry or work a human explicitly restarted through `orbit.task.update`. `worktree_setup` moves the former into `in-progress` and leaves the latter alone.
 
-Everything else is refused, because every other status is somebody's decision that the task should not be running: `proposed` and `someday` are unapproved or withdrawn, `archived` and `rejected` are closed, `review` and `done` already landed, and `blocked` is a failed or interrupted run nobody has looked at yet. The set previously included `proposed`, `rejected`, and `archived`, which let a gate dispatching on a stale snapshot move a withdrawn, archived task to `in-progress` [ORB-11305].
+Everything else is refused, because every other status is somebody's decision that the task should not be running: `proposed` and `someday` are unapproved or withdrawn, `archived` and `rejected` are closed, `review` and `done` are already handed off or completed, and `blocked` is a failed or interrupted run nobody has looked at yet. The set previously included `proposed`, `rejected`, and `archived`, which let a gate dispatching on a stale snapshot move a withdrawn, archived task to `in-progress` [ORB-11305].
 
 The repair is that eligibility is re-asked at the boundaries where it is consequential, not just where dispatch was first decided, and that the answer cannot go stale between the check and the write:
 
@@ -1499,13 +1503,13 @@ After [ORB-10464] / [Workflow admission verifies dependency delivery into the pi
 
 ### 8.11 Task PR handoff summaries
 
-`task_pr_pipeline` sends the selected task IDs to `pr_open` as `completed_task_ids`. Before `pr_open` pushes or creates the pull request, the deterministic action reloads each task record, checks that the task still belongs to the batch, confirms it can enter review, and requires a meaningful persisted `execution_summary` for every completed task. Empty, whitespace-only, and explicit placeholder summaries fail the PR step with an error naming the task id; generated default PR bodies also omit placeholder summary details blocks. When callers pass a non-empty `body`, `pr_open` preserves that body verbatim after the same durable-summary guard passes. [T20260430-31]
+`task_pr_pipeline` sends the selected task IDs to `pr_open` as `completed_task_ids`. Before `pr_open` looks up or creates the pull request, the deterministic action reloads each task record, checks that the task still belongs to the batch, confirms it can enter review, and requires a meaningful persisted `execution_summary` for every completed task. Empty, whitespace-only, and explicit placeholder summaries fail the PR step with an error naming the task id; generated default PR bodies also omit placeholder summary details blocks. When callers pass a non-empty `body`, `pr_open` uses it in place of the generated task body after the same durable-summary guard passes; validation and review-fix sections can still be appended, and the final body is bounded to the GitHub byte limit. [T20260430-31]
 
 After [T20260508-3], generated one-task PR bodies render the task contract first: `## Task`, optional collapsed `## Execution Summary`, `## Validation`, then `## Branch Freshness`. The task section includes the task link, description, and plain-bullet acceptance criteria so reviewers can see the requested work beside the implementation summary. Multi-task callers keep the legacy `## Tasks` plus files-changed layout until those paths are retired.
 
-After [ORB-10644] / [Delivery fails closed against a base branch that can no longer carry work to the landing branch](./4_decisions.md#delivery-fails-closed-against-a-base-branch-that-can-no-longer-carry-work-to-the-landing-branch), `pr_open` and `pr_promote` also ask whether the base itself can still carry the work. The base name flows from `input.base_branch` through `prepare_branch` and `sync_base` untouched, and `resolve_worktree_start_point` is satisfied by any `origin/<base>` that resolves, so a base that merged and was deleted — or was restored to its pre-merge tip — still passed every check while the merge never reached the branch work lands on. A base is refused when either (a) the repository has an `origin` remote and the base branch is gone from it, or (b) an `input.landing_branch` is declared, differs from the base, and the base carries nothing that branch does not already have: the pinned `base_sha` is a strict ancestor of the landing tip, or every commit unique to the base is already delivered there under its task marker. Distinct base and landing branches at the same SHA stay live: a freshly created stacked base has no work of its own to have landed yet, so it must accept its first delivery. Test (b) reuses the same `[ORB-NNNNN]` marker rule as §8.10, lifted into `vcs::delivery_marker` so the dependency gate and the base gate share one definition; the pinned `base_sha` is the subject and only the landing branch is resolved live. The refusal is recorded as the `obsolete-base` handoff phase and names the stale base, the landing branch, the marker that already landed, and a recovery path. Ordinary non-stacked delivery is unaffected — with no `landing_branch`, or with it equal to the base, only the remote-existence probe runs — and `input.base_obsolescence: 'ignore'` disables the gate for a base deliberately kept off `origin` or one whose commits repeat an already-landed task id.
+After [ORB-10644] / [Delivery fails closed against a base branch that can no longer carry work to the landing branch](./4_decisions.md#delivery-fails-closed-against-a-base-branch-that-can-no-longer-carry-work-to-the-landing-branch), `pr_open` and `pr_promote` also ask whether the base itself can still carry the work. The base name flows from `input.base_branch` through `prepare_branch` and `sync_base` untouched, and `resolve_worktree_start_point` is satisfied by any `origin/<base>` that resolves, so a base that merged and was deleted — or was restored to its pre-merge tip — still passed every check while the merge never reached the branch work lands on. A base is refused when either (a) the repository has an `origin` remote and the base branch is gone from it, or (b) an `input.landing_branch` is declared, differs from the base, and the base carries nothing that branch does not already have: the pinned `base_sha` is a strict ancestor of the landing tip, or the base has at most 25 unique commits and every one is already delivered there under its task marker. The marker probe keeps a base with more than 25 unique commits live rather than scanning an unbounded history. Distinct base and landing branches at the same SHA stay live: a freshly created stacked base has no work of its own to have landed yet, so it must accept its first delivery. Test (b) reuses the same `[ORB-NNNNN]` marker rule as §8.10, lifted into `vcs::delivery_marker` so the dependency gate and the base gate share one definition; the pinned `base_sha` is the subject and only the landing branch is resolved live. The refusal is recorded as the `obsolete-base` handoff phase and names the stale base, the landing branch, the marker that already landed, and a recovery path. Ordinary non-stacked delivery is unaffected — with no `landing_branch`, or with it equal to the base, only the remote-existence probe runs — and `input.base_obsolescence: 'ignore'` disables the gate for a base deliberately kept off `origin` or one whose commits repeat an already-landed task id.
 
-After [ORB-00016], `pr_open` treats a branch with zero commits ahead of the selected base as a successful no-repository-diff handoff after the same durable task guards pass. This path advances completed `in-progress` tasks to `review`, returns `pr_created: false` with base/head freshness fields, and does not call GitHub PR creation or stamp `github-pr` external refs. The normal branch-with-commits path still pushes, opens the PR, returns `pr_created: true`, and records the PR ref on participating tasks.
+Clean-tree completion bypasses `pr_open`: the commit checkpoint verifies the applicable `no-diff-expected`, `no-diff.json`, or `already-landed.json` route described in §4.1.1, and the seeded pipeline takes `promote_no_diff` (`pr_promote` with `no_diff_expected: true`) without creating a PR or stamping a GitHub PR ref. `pr_open` itself refuses a prepared branch with zero commits ahead of the pinned base, or any commits behind it. For a candidate with commits, the preceding `git_push` checkpoint publishes the branch, `pr_open` creates or reuses the PR, and `pr_promote` records its ref and moves participating tasks to `review`. `pr_created: false` on a normal `pr_open` output means it reused a PR.
 
 After [ORB-10313], the VCS handoff seam uses one shared durable predicate (`reject_failed_delivery`) to block a task whose first nonblank execution-summary line is exactly `Outcome: failed`; other meaningful summary shapes remain deliverable, while empty and placeholder summaries keep their existing rejection. The predicate is enforced at two points so both fresh and resumed delivery stop against an explicit durable failure. First, `commit_batch_changes` invokes it immediately after loading the single coupled task and before it resolves the delivery checkout, stages files, mutates the index, or creates a commit — covering both the PR and local task pipelines. Second, `load_handoff_context` invokes the same predicate, so every direct or resumed `pr_prepare`, rebase, push, `pr_open`, `pr_promote`, and no-diff promotion revalidates durable state and cannot deliver a task that now reports failure. This reads the durable task record only; it does not make the advisory agent response envelope authoritative and does not teach `pipeline_success_guard` to parse task prose. See [Fail delivery before Git mutation when execution outcome is not success](./4_decisions.md#fail-delivery-before-git-mutation-when-execution-outcome-is-not-success).
 
@@ -1532,8 +1536,8 @@ first through the public workflow boundary, following the test strategy.
 
 Recovery is scoped to delivery workflows. Configured step-failure recovery can repair a failed
 step and resume from it, including the conflict-only PR base-sync repair above. After step recovery
-is spent, `final_recovery_activity` can make a deterministic decision for an eligible task. The
-owner's blocked-task recovery pipeline can process eligible blocked tasks outside an active
+is spent, `final_recovery_activity` can propose a typed decision for an eligible task;
+the engine and deterministic host applier admit and apply it. The owner's blocked-task recovery pipeline can process eligible blocked tasks outside an active
 delivery run. Higher-level shipment parents, including workspace auto, still fail when a required
 child run fails.
 
@@ -1554,8 +1558,8 @@ Readers must distinguish "profile on the reusable activity" from "profile on thi
 
 Host-owned state is denied after both layers resolve, so no profile or provider
 convenience grant can reopen it: Git metadata (see [ORB-11506]) and the recovery
-authority root described in §8.6 are appended as subtree denies at the end of
-the resolved modify list.
+authority root described under [Recovery authority is host-only](#recovery-authority-is-host-only)
+are appended as subtree denies at the end of the resolved modify list.
 
 ---
 
@@ -1631,7 +1635,7 @@ The v2 envelope and loop-event rows live in the `v2_audit_events` table of the h
 
 ### 11.6 The substrate still leaks into the public product story
 
-README frames tasks, jobs, and activities as substrate. The CLI and seeded assets still expose this layer because Orbit needs it to operate today.
+README emphasizes coding agents and gated delivery. The CLI's `orbit job` / `orbit run` surfaces and the seeded job/activity assets still expose the underlying execution layer.
 
 ### 11.7 Nearby comments still carry migration-era drift
 
