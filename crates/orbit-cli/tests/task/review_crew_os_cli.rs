@@ -320,3 +320,76 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
             .is_none()
     );
 }
+
+/// [ORB-17129] A parked compatible crew cannot admit a batch or clear an
+/// existing OS hold. Adding a selectable compatible crew resumes that same
+/// batch while the parked member stays out of the draw.
+#[test]
+fn parked_compatible_crews_hold_the_batch_until_a_positive_member_is_added() {
+    const TEST: &str = "review_crew_os_cli::parked_compatible_crews_hold_the_batch_until_a_positive_member_is_added";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = linux_tagged_consumer();
+    set_policy(&fixture, POOL_KEY, r#"["muse-wonder:1", "sonnet:0"]"#);
+    let runtime = open_runtime(&fixture);
+    assert_eq!(
+        land_and_evaluate(&fixture, &runtime, "landed\n"),
+        None,
+        "a parked compatible crew does not mint a review"
+    );
+    let initial = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    assert_eq!(
+        initial["automation"]["reason"],
+        "stalled: crew_os_ineligible"
+    );
+    let active = initial["automation"]["state"]["active"].clone();
+    assert_eq!(active["state"], "claimed", "{initial}");
+    assert!(active["action_id"].is_null(), "{initial}");
+    let stall = initial["automation"]["state"]["stall"].clone();
+    assert_eq!(
+        stall["crew_hold"]["excluded"],
+        json!([{"crew": "muse-wonder", "executor": "muse", "host_os": ["macos"]}]),
+        "only selectable crews contribute to the OS exclusion: {initial}"
+    );
+
+    // Exercise both repeated ticks and replacing an already-held pool with
+    // one that adds a parked, OS-compatible crew.
+    for pool in [
+        r#"["muse-wonder:1", "sonnet:0"]"#,
+        r#"["muse-wonder:1"]"#,
+        r#"["muse-wonder:1", "sonnet:0"]"#,
+    ] {
+        set_policy(&fixture, POOL_KEY, pool);
+        let runtime = open_runtime(&fixture);
+        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+            .expect("parked crews neither fail a tick nor clear an existing OS hold");
+        assert_eq!(held.reason, "stalled: crew_os_ineligible");
+        let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+        assert_eq!(shown["automation"]["state"]["active"], active);
+        assert_eq!(shown["automation"]["state"]["stall"], stall);
+    }
+    let config = fixture.json(&["config", "show", "--json"]);
+    assert!(
+        config["review"]["after_landing"]["health"]["stall"]
+            .as_str()
+            .is_some_and(|text| text.contains("crew_os_ineligible")),
+        "the hold is visible in review health: {config}"
+    );
+
+    set_policy(
+        &fixture,
+        POOL_KEY,
+        r#"["muse-wonder:1", "sonnet:0", "haiku:1"]"#,
+    );
+    let runtime = open_runtime(&fixture);
+    assert_eq!(minted_crew(&fixture, &runtime), "haiku");
+    let resumed = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    let state = &resumed["automation"]["state"];
+    assert!(state["stall"].is_null(), "{resumed}");
+    assert_eq!(state["active"]["batch"], active["batch"]);
+    assert_eq!(state["active"]["action_key"], active["action_key"]);
+    assert!(state["active"]["action_id"].is_string(), "{resumed}");
+}

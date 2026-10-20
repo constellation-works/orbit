@@ -80,9 +80,9 @@ fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> 
     runtime.operation_policy().review_crew.value.clone()
 }
 
-/// The `workflow.purpose_crews.review` members a review task minted for
-/// `definition` may carry under its `os:` tags, and the members those tags
-/// exclude. Both are empty when no pool replaces the template's crew.
+/// The positive-weight `workflow.purpose_crews.review` members a review task
+/// minted for `definition` may carry under its `os:` tags, and the members
+/// those tags exclude. Both are empty when no pool replaces the template's crew.
 fn eligible_review_pool(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
@@ -101,10 +101,11 @@ fn minted_tags(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<S
 }
 
 /// Why no review task can be minted for `definition` under the current
-/// configuration: every `workflow.purpose_crews.review` member's executor
-/// declares a `host_os` outside the task's `os:` tags. `None` when a member
-/// remains, or when no pool replaces the template's crew. The evaluator holds
-/// the claimed batch on this rather than failing its mint every tick.
+/// configuration: every positive-weight `workflow.purpose_crews.review`
+/// member's executor declares a `host_os` outside the task's `os:` tags.
+/// `None` when a positive-weight member remains, or when no pool replaces the
+/// template's crew. The evaluator holds the claimed batch on this rather than
+/// failing its mint every tick.
 pub(super) fn review_crew_hold(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
