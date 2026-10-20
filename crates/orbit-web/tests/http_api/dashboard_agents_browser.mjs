@@ -7,7 +7,7 @@
 // banner, `accepts often` tag and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets).
-// Screenshots of each role tab at 1440 and 375 go to the evidence directory.
+// Screenshots of each role tab (and the Implementers ranking) at 1440 and 375 go to the evidence directory.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -225,6 +225,24 @@ try {
   const body = page.locator('#agents-body');
   const shot = name => page.screenshot({ path: path.join(evidence, `${name}.png`), animations: 'disabled' });
 
+  // Where the leading cells and the score sit against the ranking's scroll box.
+  const rankingVisibility = () => page.evaluate(() => {
+    const wrap = document.querySelector('.agents-table-wrap');
+    const box = wrap.getBoundingClientRect();
+    const inside = node => { const rect = node.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5; };
+    const heads = [...document.querySelectorAll('.agents-table thead th')];
+    const head = text => heads.find(th => th.textContent.trim() === text);
+    const rows = [...document.querySelectorAll('.agents-row')];
+    return {
+      headersInside: ['Rank', 'Crew · model', 'Score'].map(text => [text, inside(head(text))]),
+      scoreInsideEveryRow: rows.every(row => inside(row.querySelector('.agents-score-col .agents-score-value'))),
+      rowCount: rows.length,
+      scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
+      cue: getComputedStyle(wrap).backgroundImage.includes('radial-gradient'),
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+
   // The retired Analytics › Orchestrators link opens Agents › Orchestrators.
   await page.goto(`${origin}#analytics/orchestrators?window=30d`);
   await body.locator('.agents-row').first().waitFor();
@@ -324,6 +342,12 @@ try {
   assert.equal(await body.locator('.agents-tier-table tbody tr').count(), 12);
   assert.match(await body.locator('.agents-tier-table').textContent(), /20%20\.59%/);
   await shot('agents-implementers-dark-1440');
+  const desktopRanking = await rankingVisibility();
+  assert.deepEqual(desktopRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible without scrolling at 1440px: ${JSON.stringify(desktopRanking)}`);
+  assert.equal(desktopRanking.scoreInsideEveryRow, true, 'every row shows its score at 1440px');
+  assert.equal(desktopRanking.scrolls, true, 'the evidence columns still scroll at 1440px');
+  assert.equal(desktopRanking.cue, true, 'a scrolling ranking shows edge fades');
+  await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-1440.png'), animations: 'disabled' });
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
   await page.evaluate(() => window.scrollBy(0, -80));
   await shot('agents-implementers-panel-dark-1440');
@@ -337,6 +361,12 @@ try {
     return getComputedStyle(box).overflowX === 'auto' && box.scrollWidth > box.clientWidth;
   });
   assert.ok(tierFits, 'the tier table scrolls inside its box at 375px');
+  const phoneRanking = await rankingVisibility();
+  assert.deepEqual(phoneRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible at 375px: ${JSON.stringify(phoneRanking)}`);
+  assert.equal(phoneRanking.scoreInsideEveryRow, true, 'every row shows its score at 375px');
+  assert.equal(phoneRanking.pageOverflow, false);
+  assert.equal(phoneRanking.cue, true, 'a scrolling ranking shows edge fades at 375px');
+  await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-375.png'), animations: 'disabled' });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-implementers-dark-375');
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));

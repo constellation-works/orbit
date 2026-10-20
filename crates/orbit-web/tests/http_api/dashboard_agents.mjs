@@ -301,11 +301,11 @@ assert.equal(segments.length, 3, 'one segment per owner with problems');
 assert.equal(segments[0].style.width, '60%');
 assert.ok(segments[0].classList.contains('is-current'));
 
-// The ranking: rank, crew and model, support, one column per term and the
-// score; the below-support row is greyed, tagged and unranked.
+// The ranking: rank, crew and model, the score, support, then one column per
+// term; the below-support row is greyed, tagged and unranked.
 assert.deepEqual(rankingRows().map(entry => entry.dataset.row.split('\0')[0]), ['opus', 'sonnet', 'haiku']);
 assert.deepEqual(part('ranking').querySelectorAll('thead th').map(th => th.textContent),
-  ['Rank', 'Crew · model', 'Support', 'Landed', 'Spec defects', 'Spec-caused rework', 'Score']);
+  ['Rank', 'Crew · model', 'Score', 'Support', 'Landed', 'Spec defects', 'Spec-caused rework']);
 assert.ok(rowNamed('haiku').classList.contains('agents-row-below'));
 assert.match(rowNamed('haiku').textContent, /below 10/);
 assert.equal(rowNamed('haiku').children[0].textContent, '—', 'a below-support row has no rank');

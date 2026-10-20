@@ -445,13 +445,13 @@ function rankingNode(ranking) {
   const header = el("tr", {}, [
     el("th", { class: "agents-num", text: "Rank" }),
     el("th", { text: "Crew · model" }),
+    el("th", { class: "agents-score-col", text: "Score" }),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
     ...terms().map((term) => el("th", {
       class: "agents-num",
       text: term.label,
       title: `${term.label} per 100 ${scorecard.unit} (weight ${weight(term.weight)}): ${term.definition}`,
     })),
-    el("th", { class: "agents-score-col", text: "Score" }),
   ]);
   const body = ranking.map((row) => {
     const key = rowKey(row);
@@ -493,15 +493,16 @@ function rankingNode(ranking) {
     const tr = el("tr", { class: classes.join(" ") }, [
       el("td", { class: "agents-num agents-rank", text: row.rank == null ? "—" : String(row.rank) }),
       nameCell,
+      score,
       support,
       ...cells,
-      score,
     ]);
     tr.dataset.row = key;
     tr.addEventListener("click", () => selectRow(row));
     return tr;
   });
   const table = el("table", { class: "agents-table" }, [el("thead", {}, [header]), el("tbody", {}, body)]);
+  // Rank, crew and score lead the table; the evidence columns after them scroll.
   const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${ROLE_LABELS[role]} ranking` }, [table]);
   wrap.tabIndex = 0;
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
