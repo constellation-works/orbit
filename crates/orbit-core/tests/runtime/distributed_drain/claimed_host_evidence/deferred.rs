@@ -53,6 +53,7 @@ fn probe(cases: &[(&str, &str)]) -> String {
 /// each `(command, os)` of `hosts` is a `host_sandbox_test` requirement with
 /// its own `not_run` record when `narrow`.
 struct Deferred<'a> {
+    broad: String,
     deferred: &'a [&'a str],
     hosts: Vec<(String, EvidenceHostOs)>,
     narrow: bool,
@@ -63,6 +64,7 @@ struct Deferred<'a> {
 impl<'a> Deferred<'a> {
     fn covering(deferred: &'a [&'a str]) -> Self {
         Self {
+            broad: BROAD.into(),
             deferred,
             hosts: deferred
                 .iter()
@@ -98,7 +100,7 @@ impl<'a> Deferred<'a> {
             ),
             record(
                 "V2".into(),
-                BROAD,
+                &self.broad,
                 self.outcome,
                 self.deferred.iter().map(|test| notice(test)).collect(),
             ),
@@ -143,11 +145,11 @@ impl<'a> Deferred<'a> {
     }
 }
 
-fn broad_record(certificate: &ReviewCertificate) -> &ReviewValidation {
+fn broad_record<'a>(certificate: &'a ReviewCertificate, command: &str) -> &'a ReviewValidation {
     certificate
         .validation
         .iter()
-        .find(|record| record.command == BROAD)
+        .find(|record| record.command == command)
         .expect("the broader record stays on the certificate")
 }
 
@@ -197,7 +199,7 @@ fn a_broader_run_deferring_only_host_tests_settles_on_their_replays() {
             (exact(B).as_str(), true, tree.as_str())
         ]
     );
-    let broad = broad_record(&certificate);
+    let broad = broad_record(&certificate, BROAD);
     assert_eq!(broad.executed_outcome(), ValidationOutcome::Passed);
     assert!(broad.deferred.is_empty(), "{broad:?}");
     for (index, test) in [A, B].into_iter().enumerate() {
@@ -298,16 +300,41 @@ fn a_broader_run_the_host_cannot_establish_runs_no_replay() {
             },
         ));
     }
+    for selector in [
+        "--lib",
+        "--bins",
+        "--bin orbit",
+        "--tests",
+        "--examples",
+        "--example demo",
+        "--benches",
+        "--bench perf",
+        "--all-targets",
+        "--doc",
+        "--workspace",
+        "--all",
+    ] {
+        cases.push((
+            selector,
+            Deferred {
+                broad: format!(
+                    "cargo test -p orbit-exec {selector} --test probe fixture_children -- --nocapture"
+                ),
+                ..covering()
+            },
+        ));
+    }
     let requirements = |deferred: &Deferred| deferred.hosts.len();
     for (case, deferred) in cases {
         let (leaf, attempt_id) = leaf_with_probe(&probe(&[]));
         let count = requirements(&deferred);
         let failed = deferred.outcome == ValidationOutcome::Failed;
+        let broad_command = deferred.broad.clone();
         deferred.report(&leaf, &attempt_id);
         let refused = leaf.settle().expect_err(case);
         assert!(refused.contains("review_gate_blocked"), "{case}: {refused}");
         assert_no_replay(&leaf, case, count);
-        let broad = broad_record(&certificate(&leaf)).clone();
+        let broad = broad_record(&certificate(&leaf), &broad_command).clone();
         let expected = if failed {
             ValidationOutcome::Failed
         } else {
@@ -371,7 +398,7 @@ fn a_replay_short_of_executing_its_test_leaves_the_broader_run_short() {
             "{case}"
         );
         assert!(leaf.owner_artifact(&artifact(1)).is_none(), "{case}");
-        let broad = broad_record(&certificate);
+        let broad = broad_record(&certificate, BROAD);
         if reason == HostEvidenceReason::TestFailed {
             assert!(refused.contains("review_gate_blocked"), "{case}: {refused}");
             assert_eq!(broad.outcome, ValidationOutcome::Failed, "{case}");
@@ -433,7 +460,7 @@ fn a_deferral_owed_to_another_os_holds_the_review_for_it() {
     assert_eq!(refused.reason, Some(HostEvidenceReason::OsMismatch));
     assert!(refused.host_command.is_none(), "{refused:?}");
     assert!(leaf.owner_artifact(&log_artifact(1)).is_none());
-    assert_eq!(broad_record(&certificate).deferred, [notice(B)]);
+    assert_eq!(broad_record(&certificate, BROAD).deferred, [notice(B)]);
 }
 
 crate::scenario_table!(
