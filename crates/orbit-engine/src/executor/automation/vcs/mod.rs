@@ -27,6 +27,7 @@ mod push;
 mod remote_probe;
 mod required;
 mod resume;
+mod retry_lineage;
 pub mod review_gate;
 mod scratch_target;
 mod validation_log;

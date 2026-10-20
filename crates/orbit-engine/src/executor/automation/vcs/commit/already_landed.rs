@@ -21,6 +21,7 @@ use crate::context::RuntimeHost;
 
 use super::super::delivery_marker::delivery_markers;
 use super::super::git::{git_output, git_output_paths, git_success};
+use super::super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
 use super::checkpoint::pinned_object_id;
 use super::clean_tree::{Specification, Verifier};
 use super::no_diff;
@@ -262,22 +263,23 @@ pub(super) fn run_in_lineage<H: RuntimeHost + ?Sized>(
     run_id: &str,
     evidence_run: &str,
 ) -> Result<bool, OrbitError> {
-    let mut current = run_id.to_string();
-    let mut seen = BTreeSet::new();
-    for _ in 0..64 {
-        if !evidence_run.is_empty() && current == evidence_run {
-            return Ok(true);
+    let is_evidence = |id: &str| !evidence_run.is_empty() && id == evidence_run;
+    if is_evidence(run_id) {
+        return Ok(true);
+    }
+    let Some(run) = host.get_job_run(run_id)? else {
+        return Ok(false);
+    };
+    // Matches the current run and at most `RETRY_LINEAGE_MAX_HOPS - 1`
+    // ancestors by the id their descendant names, stored or not.
+    let mut lineage = RetryLineage::any_job(&run);
+    for _ in 1..RETRY_LINEAGE_MAX_HOPS {
+        match lineage.step(host)? {
+            LineageStep::Ancestor(source, _) if is_evidence(&source) => return Ok(true),
+            LineageStep::Ancestor(..) => {}
+            LineageStep::Stop(LineageStop::Missing(source)) => return Ok(is_evidence(&source)),
+            LineageStep::Stop(_) => return Ok(false),
         }
-        if !seen.insert(current.clone()) {
-            break;
-        }
-        let Some(source) = host
-            .get_job_run(&current)?
-            .and_then(|run| run.retry_source_run_id)
-        else {
-            break;
-        };
-        current = source;
     }
     Ok(false)
 }
