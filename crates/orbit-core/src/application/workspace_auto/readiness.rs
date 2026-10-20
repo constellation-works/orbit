@@ -734,6 +734,7 @@ pub fn explain_workspace_auto_readiness(
             .as_ref()
             .map(|drain| &drain.input)
             .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
+        &snapshot.task_lookup,
     )?;
 
     // [ORB-14880] Build budget inspection is advisory: an invalid setting or
