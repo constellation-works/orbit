@@ -134,6 +134,8 @@ Federated list does **not** inherit that envelope or that filter:
 1. **Session-unbound.** The tool must not require a workspace selector. Session/initialize workspace metadata is not an input and not a filter.
 2. **`machine_id` on each descriptor**, not on the envelope. Each descriptor keeps today's v1 workspace fields (`id`, `name`, `ship_mode`, `owner_machine_id`, `git_remote`, `base_branch`, `status`, `created_at`, `updated_at`) and adds:
 
+   When present, `git_remote` passes through the shared `redact_git_remote` projection, as in `orbit workspace show`. Both local and federated destination envelopes apply it, and the accepting mux applies it again when building a descriptor so credentials from an older destination are never relayed. Optional fields retain their existing presence rules; the stored workspace record is unchanged.
+
    | Field | Meaning |
    |---|---|
    | `selector` | Structured, caller-uninterpreted host-qualified route token (`hm_<id>/ws_*`). Copy this field; do not parse it. |

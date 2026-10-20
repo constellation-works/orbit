@@ -118,13 +118,42 @@ pub fn validate_source_repository_fingerprint(fingerprint: &str) -> Result<(), W
                 .to_string(),
         ));
     }
-    if remote_has_credentials(fingerprint) {
+    // Preserve invalid-identity diagnostics on reconcile/rebind. Fresh init
+    // checks credentials independently because it also admits local origins.
+    git_remote_identity(fingerprint)?;
+    validate_source_remote_credentials(fingerprint)
+}
+
+/// Refuse credentials in a source remote without requiring a portable origin.
+/// Local paths and credential-free non-portable origins remain valid at init.
+pub fn validate_source_remote_credentials(remote: &str) -> Result<(), WorkspaceError> {
+    let has_credentials = if let Some((scheme, remainder)) = remote.split_once("://") {
+        Url::parse(remote)
+            .map(|url| url_has_credentials(&url))
+            .unwrap_or_else(|_| {
+                // Malformed URLs may put password punctuation outside the
+                // authority. Inspect userinfo without requiring a Git identity.
+                remainder.split_once('@').is_some_and(|(userinfo, _)| {
+                    userinfo.contains(':')
+                        || (!userinfo.is_empty() && matches!(scheme, "http" | "https"))
+                })
+            })
+    } else if looks_like_local_path(remote) {
+        false
+    } else {
+        remote_has_credentials(remote)
+            || (parse_git_remote(remote).is_err()
+                && remote
+                    .split_once('@')
+                    .is_some_and(|(userinfo, _)| userinfo.contains(':')))
+    };
+    if has_credentials {
         return Err(WorkspaceError::Invalid(format!(
             "source_repository_fingerprint '{}' must not contain credentials",
-            redact_git_remote(fingerprint)
+            redact_git_remote(remote)
         )));
     }
-    git_remote_identity(fingerprint).map(|_| ())
+    Ok(())
 }
 
 pub fn validate_publication_remote(remote: &str) -> Result<(), WorkspaceError> {
@@ -268,12 +297,16 @@ fn parse_url_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
         }
         _ => format!("{host}/{path}"),
     };
-    let has_credentials = url.password().is_some()
-        || (!url.username().is_empty() && matches!(url.scheme(), "http" | "https"));
+    let has_credentials = url_has_credentials(&url);
     Ok(ParsedGitRemote {
         identity,
         has_credentials,
     })
+}
+
+fn url_has_credentials(url: &Url) -> bool {
+    url.password().is_some()
+        || (!url.username().is_empty() && matches!(url.scheme(), "http" | "https"))
 }
 
 fn parse_scp_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
