@@ -143,6 +143,20 @@
     padding-block: 6px;
     row-gap: 4px;
   }
+  /* If the first count is itself an attention pill, it needs the same row
+     below the label as the second count. Free the max-content column so the
+     label keeps the full rail width. */
+  .rail .tab:has(> .rail-count.alert:not([hidden]) + .rail-count:not([hidden])) {
+    grid-template-columns: 17px minmax(0, 1fr);
+  }
+  .rail .tab:has(> .rail-count.alert:not([hidden]) + .rail-count:not([hidden])) > .rail-count.alert:not([hidden]) {
+    grid-column: 2 / -1;
+    justify-self: end;
+    margin-left: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .rail .tab > .rail-count + .rail-count {
     grid-column: 2 / -1;
     justify-self: end;
