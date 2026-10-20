@@ -32,7 +32,7 @@ pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 /// pull request merged outside Orbit (`external_merge`). Like the delivery
 /// pipeline's own completion, the settlement is not an edge of the table
 /// below: the forge's merge, not a caller's claim, is its evidence.
-pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+pub use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 
 /// Refuse an ordinary surface's status change while a local run owns the
 /// task. Call under the task write lock, before recording any field edits.

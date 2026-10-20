@@ -447,6 +447,71 @@ impl TaskCommitBoundary {
         Ok(())
     }
 
+    /// Check a [`ClaimMutation::SettleExternalMerge`]: `pull_request`, merged
+    /// into `base_branch`, is exactly the candidate pull request of the
+    /// claim's accepted handoff on its landing branch; an operator revoked
+    /// that handoff's completion authority; no owner landing job still
+    /// carries it and no merge intent is unresolved; and the task owes no
+    /// criterion after deploy. An unrevoked handoff is refused: approval or
+    /// the owner landing job completes it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_external_merge_settlement(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        handoff_id: &str,
+        pull_request: u64,
+        base_branch: &str,
+        merge_commit: &str,
+        history: &[TaskHistoryEntry],
+    ) -> Result<(), OrbitError> {
+        if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(invalid(
+                "current operator handoff settlement context required",
+            ));
+        }
+        if merge_commit.trim().is_empty() {
+            return Err(invalid("verified merge evidence required"));
+        }
+        if state.unresolved_merge_intent.is_some() {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
+        }
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        if accepted.handoff_id != handoff_id {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
+        }
+        if !self.handoff_authority_revoked(handoff_id)? {
+            return Err(invalid(
+                "handoff completion authority is not revoked; approval or the owner landing \
+                 job completes this handoff",
+            ));
+        }
+        if let Some(raw) = self.attempt_row(handoff_id)?
+            && decode::<LandingAttempt>(&raw.payload_json)?.state == LandingAttemptState::Dispatched
+        {
+            return Err(invalid("an owner landing job still carries this handoff"));
+        }
+        let candidate = &accepted.handoff.candidate;
+        if candidate.delivery
+            != (HandoffDelivery::PullRequest {
+                number: pull_request,
+            })
+            || candidate.landing_branch != base_branch
+        {
+            return Err(invalid(
+                "the merged pull request is not this handoff's candidate on its landing branch",
+            ));
+        }
+        if PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty()) {
+            return Err(invalid("the task owes acceptance criteria after deploy"));
+        }
+        Ok(())
+    }
+
     /// Stop the live attempt with durable evidence. The task stays in `review`
     /// with its authorization intact; a repair is a new validated handoff.
     ///

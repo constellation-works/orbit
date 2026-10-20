@@ -155,7 +155,17 @@ each PR Orbit recorded for the task, including a held or kept PR from a released
 or failed claim even without an accepted handoff. That PR must name the task and
 be merged into the landing branch its claim's admission receipt recorded; a
 missing or expired receipt cannot prove it. An owed post-deploy measurement still
-requires the operator's met record. The command names the reason when the task
+requires the operator's met record.
+
+A claimed handoff whose completion authority an operator revoked keeps its
+claim `handed_off` and its task in `review`; Approve is refused and the
+revocation is final. When exactly that handoff's PR merged into its landing
+branch outside Orbit, `orbit task settle-merged <task-id>` settles it: one
+owner store write ends the claim as `revoked` and moves the task to `done`.
+It is refused while an owner landing job still carries the handoff or a merge
+intent is unresolved. When the PR will not merge, recover the claim to
+`blocked` or `backlog` instead. The owner console's authority line names both
+steps. The command names the reason when the task
 does not settle. The settlement starts no work, so another task's claim on the
 same files does not refuse it. History records it as `external_merge_settled`, with a
 landing note naming the PR and merge commit

@@ -133,6 +133,20 @@ impl TaskCommitBoundary {
         Ok(())
     }
 
+    /// Whether this handoff's completion authorization was recorded and then
+    /// revoked: its landing-start request reads `revoked`. A handoff that was
+    /// never authorized has no request, so it is not revoked.
+    pub(in super::super) fn handoff_authority_revoked(
+        &self,
+        handoff_id: &str,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .coordination_row(START, handoff_id)?
+            .map(|raw| decode::<LandingStartRequest>(&raw.payload_json))
+            .transpose()?
+            .is_some_and(|start| start.state == LandingStartState::Revoked))
+    }
+
     /// The unrevoked completion authorization scoped to exactly this handoff
     /// and candidate. Every landing decision re-reads it; a historical row is
     /// never permission on its own.
