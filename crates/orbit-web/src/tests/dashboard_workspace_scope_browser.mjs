@@ -1,6 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Workspace names differ from their ids, so a chip that shows the id is caught.
+const WORKSPACE_NAMES = { one: 'Orbit fixture', two: 'Second fixture' };
+
+// The Events workspace chip names the selected workspace as the header picker
+// does; the id stays in the request scope.
+async function assertWorkspaceChipName(page, name) {
+  const chipValue = () => page.locator('#audit-scope-chips [data-chip="workspace"] .scope-chip-v').textContent();
+  await page.waitForFunction(expected =>
+    document.querySelector('#audit-scope-chips [data-chip="workspace"] .scope-chip-v')?.textContent === expected, name, { timeout: 5000 })
+    .catch(async () => { throw new Error(`The Events workspace chip must name the workspace "${name}": ${await chipValue()}`); });
+  if (await page.locator('#workspace-select').count()) {
+    const picked = await page.locator('#workspace-select option:checked').textContent();
+    if (picked !== name) throw new Error(`The header picker must show the selected workspace as "${name}": ${picked}`);
+  }
+}
+
 // Drive scope chips and their downstream actions through the full shipped app.
 export async function assertWorkspaceScope(browser, origin, evidence) {
   for (const workspaceCount of [1, 2]) {
@@ -10,7 +26,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     let reliabilityEvidence = null;
     try {
       await page.goto(`${origin}/#diagnostics/incidents/events?role=operator`);
-      await page.evaluate(async workspaceCount => {
+      await page.evaluate(async ([workspaceCount, names]) => {
         const task = { id: 'SCOPE-1', title: 'Workspace scope fixture', status: 'review', priority: 'medium' };
         const claim = {
           claim_id: 'scope-claim', task_id: task.id, phase: 'handed_off', unsettled: true,
@@ -88,14 +104,14 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
               resolve(status === 200 ? respond(reliabilityReport(host, label)) : respond({ error: `${host} reliability unavailable` }, status)) }));
           }
           if (pathname === '/api/workspaces') return respond(['one', 'two'].slice(0, workspaceCount)
-            .map(id => ({ id, name: id, status: 'active', is_default: id === 'one' })));
+            .map(id => ({ id, name: names[id], status: 'active', is_default: id === 'one' })));
           if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task, { id: 'PROPOSAL-1', title: 'Approve the proposed dashboard task', status: 'proposed', priority: 'medium' }], total: 2 });
           if (pathname === `/api/tasks/${task.id}`) return respond(task);
           if (pathname === '/api/audit') return respond([]);
           if (pathname === '/api/crews') return respond({ crews: [] });
           if (pathname === '/api/routines') return respond({
             machine_name: 'fixture', capabilities: { routine_toggle: allowed }, clock: {},
-            routines: [{ name: 'scope-routine', source: 'one', target: 'job:fixture', enabled: routineEnabled }],
+            routines: [{ name: 'scope-routine', source: names.one, target: 'job:fixture', enabled: routineEnabled }],
           });
           if (pathname === '/api/fleet/drains') return respond({ items: [{
             workspace_id: 'one', workspace_name: 'Fixture workspace', phase: drainRunId ? 'draining' : 'idle',
@@ -132,7 +148,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           return respond({ items: [], total: 0 });
         };
         await import('/app.js');
-      }, workspaceCount);
+      }, [workspaceCount, WORKSPACE_NAMES]);
       const chip = page.locator('#audit-scope-chips [data-chip="workspace"]');
       await chip.waitFor({ state: 'visible' });
       if (workspaceCount === 1) {
@@ -155,6 +171,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events?role=operator'));
         await chip.waitFor({ state: 'visible' });
       }
+      await assertWorkspaceChipName(page, WORKSPACE_NAMES.one);
       await page.locator('#audit-scope-chips [data-chip="actor"]').click();
       await page.locator('#audit-scope-chips [data-chip="actor"]').waitFor({ state: 'detached' });
       if (!(await chip.isVisible())) throw new Error('Removing an Events filter must retain the workspace chip');
