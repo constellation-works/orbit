@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining"
-last_validated: 2026-10-18
+last_validated: 2026-10-19
 tags: [delivery, review, throughput, scheduling, philosophy]
 related_features: [review-gate, auto-tasks, routines, activity-job, distributed-drain]
 ---
