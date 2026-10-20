@@ -188,7 +188,8 @@ jobs:
     # job with the same runners, targets and bundle command, unsigned and
     # unpublished, so a tag never runs them for the first time. Keep the legs,
     # dependencies, command and packaging check in step with release.yml.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: pr-state
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
     name: Release bundle (${{ matrix.slug }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60

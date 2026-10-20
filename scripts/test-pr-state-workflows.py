@@ -65,6 +65,15 @@ def scope_admits(name, job, mode):
     return mode not in ("docs", "skip")
 
 
+DISPATCH_ONLY = "github.event_name == 'workflow_dispatch'"
+
+
+def event_admits(job, event):
+    """A dispatch-only job, such as desktop.yml's release bundles, runs only on
+    a manual run; every other job runs on each event its workflow handles."""
+    return DISPATCH_ONLY not in job["if"] or event == "workflow_dispatch"
+
+
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
 class PrStateWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -181,7 +190,7 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                 self.assertEqual(evaluate(job["if"], event, state, cancelled=cancelled,
                                           dependency_skipped=event != "pull_request",
                                           bindings={SCOPE: mode}),
-                                 expected and scope_admits(name, job, mode))
+                                 expected and scope_admits(name, job, mode) and event_admits(job, event))
 
     def test_live_states_admit_open_and_skip_merged_or_closed_jobs(self):
         for name, document in self.workflows.items():
