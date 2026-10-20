@@ -27,10 +27,11 @@ spec:
     timed-out or interrupted delivery leaf at its completion step with
     `auto_fix` granted, so the auto-fix crew takes the task's footprint
     locks, pushes to the same branch and the leaf completes the existing pull
-    request under its own `completion` grant. An operator hold, a
-    `no-auto-approve` tag, a missing `completion` grant, a pull request not
-    opened by a delivery identity on the task's branch and a spent per-pull
-    request auto-fix budget are never repaired. Its result is reported under
+    request under its own `completion` grant. An operator hold or
+    `no-auto-approve` tag, or a leaf started with `--complete` under a drain
+    without `--complete`, is never repaired. Pull requests not opened by a
+    delivery identity on the task's branch and spent per-pull request auto-fix
+    budgets are also never repaired. Its result is reported under
     `auto_fix` (`started`, `skipped`, and `pass_error`).
   input_schema_json:
     type: object

@@ -3,10 +3,10 @@
 //! task's newest stopped delivery leaf at its completion step, with
 //! `auto_fix` and deferred footprint locks granted, under the leaf's own
 //! `completion`, and restores the task to `review` so that step completes the
-//! existing pull request. Operator holds, `no-auto-approve`, a missing
-//! `--complete` grant, pull requests not opened by Orbit and drains without
-//! `--auto-fix` are never repaired, and the pull request's auto-fix budget
-//! bounds the hand-backs.
+//! existing pull request. Operator holds, `no-auto-approve`, leaves started
+//! with `--complete` under a drain without `--complete`, pull requests not
+//! opened by Orbit and drains without `--auto-fix` are never repaired, and
+//! the pull request's auto-fix budget bounds the hand-backs.
 //!
 //! The pass runs as the drain's `adopt_orphaned_deliveries` step against the
 //! fake forge; a resumed leaf starts the fixture's substitute worker, so the
