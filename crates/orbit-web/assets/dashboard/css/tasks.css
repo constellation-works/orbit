@@ -426,11 +426,6 @@
   background: var(--dot, var(--fg-dim));
 }
 .status-cell > :not(.task-status-select) { grid-column: 1 / -1; }
-/* The status editor lives in the task detail's Details; the rows group by
-   status, so there is no preview chip to stand in for the select. */
-.property-row .status-cell { max-width: 220px; }
-.property-row .status-cell .task-select-chip { display: none; }
-.property-row .task-status-select { grid-column: 2; border-color: var(--border); background-color: var(--bg-well); }
 .crew-cell {
   display: grid;
   gap: 4px;
