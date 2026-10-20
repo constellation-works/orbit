@@ -182,10 +182,15 @@ lost evidence.
   plus a 375px phone width when the layout is responsive.
 - Add a before shot from the base revision when it is practical and it shows
   the change.
-- Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and attach it with
-  `orbit.task.artifact.put` at a stable path such as
-  `screenshots/<view>-<theme>-<width>.png`. Claimed leaves attach the same
-  way; the broker forwards the put to the owner.
+- Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and give it a stable
+  stored path such as `screenshots/<view>-<theme>-<width>.png`. Owner mode
+  attaches screenshots with `orbit.task.artifact.put`. A claimed implementer
+  returns each screenshot in `task_artifacts`, setting `path` to its stable
+  stored path and `source_path` to its file under `.orbit/tmp/`, for
+  deterministic attachment. Use this task-artifact channel for diff and
+  no-diff candidates, including `no-diff-expected` tasks; keep
+  `no_diff_artifacts` for a clean-tree report and its declared validation logs
+  only.
 - Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
   full-page one, or JPEG or WebP when a PNG is too large.
 - List the artifact paths in the execution summary.
