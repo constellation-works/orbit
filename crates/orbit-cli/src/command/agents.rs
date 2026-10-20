@@ -84,7 +84,7 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     }
     blocks.push(Block::table(table));
     blocks.push(Block::text(format!(
-        "\nUnits: {}. Score: each term per 100 units, weighted and summed, pulled toward the fleet average ({}).\nWeights: {}",
+        "\nUnits: {}. Score: each term per 100 units, weighted and summed; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
         text(&value["unit"]),
         number(&value["fleet_average"]),
         terms

@@ -1,9 +1,9 @@
 //! The one score every role uses. A role supplies its unit of work, its
 //! terms and their weights, and one [`RowInput`] per crew and model; this
 //! module turns each term's count into a rate per 100 units, sums the
-//! weighted rates into the raw score, pulls each row toward the fleet
-//! average in proportion to how little work backs it, and ranks the rows
-//! that meet the minimum support.
+//! weighted rates into the raw score, pulls each row above the fleet average
+//! down toward it in proportion to how little work backs it, and ranks the
+//! rows that meet the minimum support.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -14,9 +14,12 @@ use serde_json::{Value, json};
 use super::AgentRole;
 use super::facts::TaskFacts;
 
-/// Units of fleet-average evidence every row's score is blended with:
-/// `score = (units × raw + K × fleet_average) ÷ (units + K)`.
-pub(super) const SMOOTHING: f64 = 10.0;
+/// Units of fleet-average evidence a row's score is blended with:
+/// `score = min(raw, (units × raw + K × fleet_average) ÷ (units + K))`.
+/// Blending only ever lowers a score: a row above the average is pulled down
+/// toward it, and one below keeps its raw score, so a small row cannot rise
+/// on the fleet's evidence or outrank a larger row with the same raw score.
+pub(super) const SMOOTHING: f64 = 30.0;
 
 /// One weighted term of a role's score.
 pub(super) struct Term {
@@ -140,7 +143,8 @@ pub(super) fn score<'a>(
     if let Some(average) = fleet_average {
         for row in &mut scored {
             let units = row.input.units as f64;
-            row.score = (units * row.raw + SMOOTHING * average) / (units + SMOOTHING);
+            let blended = (units * row.raw + SMOOTHING * average) / (units + SMOOTHING);
+            row.score = row.raw.min(blended);
         }
     }
     scored.sort_by(|left, right| {

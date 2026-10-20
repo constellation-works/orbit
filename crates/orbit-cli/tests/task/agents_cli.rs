@@ -239,11 +239,14 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         .as_array()
         .unwrap()
         .iter()
-        .find(|term| term["key"] == "weighted_landed")
+        .find(|term| term["key"] == "landed")
         .unwrap()
         .clone();
     assert!(!dropped_term, "a dropped task earns no term: {detail}");
-    assert_eq!(landed_term["count"], 4, "hard weighs 4: {landed_term}");
+    assert_eq!(
+        landed_term["count"], 1,
+        "a landing counts once, whatever its complexity: {landed_term}"
+    );
     assert_eq!(landed_term["tasks"][0]["task_id"], landed.as_str());
 
     // An unknown role is refused by name on both surfaces.

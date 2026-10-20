@@ -123,10 +123,12 @@ Each term's count is converted to a rate per 100 units of the role's work (§5).
 The **fleet average** is the mean raw score over every row of the role in the window, weighted by each row's units. A row's **score** is:
 
 ```
-score = (units × raw + K × fleet_average) ÷ (units + K),   K = 10
+score = min(raw, (units × raw + K × fleet_average) ÷ (units + K)),   K = 30
 ```
 
-A row backed by little work is pulled toward the average, so three lucky tasks cannot top a ranking. A row's influence grows with its evidence.
+Smoothing only lowers a score. A row above the fleet average is pulled down toward it, the more the less work backs it, so three lucky tasks cannot top a ranking: a 40-unit row keeps 57% of its lead over the average and a 450-unit row 94%. A row at or below the average keeps its raw score. Pulling it up would let a small row rise on the rest of the fleet's evidence; under two-sided smoothing, two rows with the same raw score below the average ranked the smaller one first. Now a row never outranks a larger one with the same raw score: the larger one is pulled down less, or both keep their raw score and the tie goes to the row with more units.
+
+Shrinking toward the average narrows a small row's lead but cannot reverse it: when a 40-unit row's raw score is above a 450-unit row's, it still ranks first. A raw advantage from what a row is credited for, rather than how well its work turned out, has to be removed in the terms; §5.1 removes the orchestrators' complexity weighting for this reason.
 
 ### 4.3 Minimum support
 
@@ -152,18 +154,27 @@ Unit: **owned tasks**, meaning tasks whose `orchestrator` attribution names the 
 
 | Term | Weight | Definition |
 |---|---|---|
-| Weighted landed | +1 | Landed tasks weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1. |
-| Landed initiative | +1 | Landed tasks whose typed origin is `orchestrator_initiative`. |
+| Landed | +1 | Landed tasks, one each whatever their complexity. |
 | Spec defects | −1 | Description or criteria edited after the first run started, criteria blocks, criteria escalations, and regressions with escape `spec_ambiguous`. |
 | Spec-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues whose cause is `spec`. |
 
-Changes from today's composite:
+A row's raw score is the percent of its owned tasks that landed, less its spec problems per 100 owned tasks. A spec problem costs as much as a landing earns, so a task whose spec needed fixing earns nothing, and spec defects on a tenth of a row's tasks cost it 10 points on a scale where every row lands most of its work.
+
+Why the credit ignores complexity:
+
+- Complexity is assessed when a task is filed or piloted, so the orchestrator being ranked largely sets it. Weighting landed tasks 1/2/4/8 by complexity made the credit the mean complexity of a row's tasks × 100. On the 30-day `ws_orbit` data of 2026-10-20, that difference in task mix was the whole ranking, and rating more tasks `hard` raised a score with no better orchestration.
+- The spec penalties counted on the same per-100 scale against a credit of about 260, so a row could double its spec problems without changing rank.
+- Landed initiative was dropped. Origin is unknown on nearly every task (40 of 40 for one row), so the term was 0 for every row. Dropped initiative and unknown origin stay under **Shown, not scored**.
+
+Rework with no recorded cause and regressions with escape `unclassified` count against no one (§3). They are not scored here either, because no cause covers base conflicts, manual blocks and blockers on outside dependencies, which are not the orchestrator's, and scoring them would charge problems the attribution strip lists as Not scored. They are shown beside the score as its confidence instead: the `unclassified` stat counts both on the row's owned tasks, the ranking prints `N unclassified` under the score, and the detail gives the rate per 100 owned tasks. A row with many of them is scored on less evidence than it appears.
+
+Changes from the composite before the agent scorecards:
 
 - Crew-caused rework, review rejects and failed reviewer fixes leave this score; §3 gives their owners.
 - Spec regressions no longer count nature `incomplete` by itself.
 - No compatibility column keeps the old composite, because a dashboard score is not an external contract. The how-to page says once where crew rework went.
 
-The role panel shows each orchestrator's rework split into spec (counted), crew (moved to Implementers), infrastructure and no cause (both not scored). The payload's shown-not-scored `stats` carry those four rework counts, plus landed tasks, dropped initiative, unknown origin and active hours.
+The role panel shows each orchestrator's rework split into spec (counted), crew (moved to Implementers), infrastructure and no cause (both not scored). The payload's shown-not-scored `stats` carry `unclassified`, those four rework counts, unclassified regressions (`regressions_unclassified`), dropped initiative, unknown origin and active hours.
 
 ### 5.2 Implementers
 
@@ -171,7 +182,7 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 
 | Term | Weight | Definition |
 |---|---|---|
-| Weighted landed | +1 | Landed tasks whose final implementation run is the row's, weighted by complexity as above. |
+| Weighted landed | +1 | Landed tasks whose final implementation run is the row's, weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1. |
 | First-pass accepts | +1 | Reviewed tasks whose first review verdict on the row's candidate was `accept`. |
 | Review rejects | −1 | `reject` verdicts on the row's candidates. |
 | Reviewer repairs | −0.5 | `accept_with_fixes` verdicts on the row's candidates. |
@@ -356,7 +367,8 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 - **Core** (through the public runtime API, in the `orbit-web` HTTP fixture that also drives the routes): a seeded workspace with known tasks, runs, review reports, regressions and lock waits.
   - Each problem lands in exactly one owner or in Not scored.
   - A multi-crew task charges each crew for its own attempt.
-  - Smoothing pulls a small row toward the fleet average.
+  - Smoothing pulls a row above the fleet average down toward it and never raises one, and of two rows with the same raw score the larger ranks first.
+  - Orchestrator credit does not grow with assessed complexity, spec defects on a tenth of a row's tasks lower its rank, and unclassified regressions are shown, not scored.
   - Below-support rows sort last without a rank.
   - Regressions filed after the window still count.
   - Reviewer provisional counts follow the 30-day lookback.
@@ -393,6 +405,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 ## 11. Concerns & Honest Limitations
 
 - **Reviewer false alarms are proxies.** The review gate records no verdict on whether its own findings were right. `Disposed` findings and the false-reject rule (§5.3) stand in for that. The rule compares file contents, not intent: a cited file the next run changed for an unrelated reason, or that changed on the base between the two candidates, counts as addressed, and a finding fixed in a file it did not cite is not credited. A dedicated record of an implementer disputing a finding would be exact, but would change the review flow to serve a dashboard. It is deferred until the proxies prove noisy.
+- **Open tasks lower an orchestrator's land rate.** A task created in the window earns nothing until it lands, so an orchestrator that filed many tasks recently reads lower until they land. Every row is measured the same way, and a longer window reduces the effect.
+- **Orchestrator credit ignores how hard the work was.** One landing counts the same at every complexity, because the ranked orchestrator sets complexity. A complexity assessed independently of the orchestrator could weigh landings again.
 - **Orchestrator rows have no model.** Orchestrator sessions are not job runs, so orchestrators rank by attribution name with `model unknown` until the attribution records a model.
 - **The observed tier inherits cost differences between crews.** Work routed to a costlier crew looks harder. Ranking by cost within the window reduces this but does not remove it, so calibration should be read as a comparison between pilots on similar work.
 - **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be an orchestrator spec defect, but nothing records whether the file was in scope.
@@ -410,5 +424,6 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
 - ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
 - ORB-16957 — track G: CLI and MCP (planned).
+- ORB-17118 — Orchestrators credit one point per landed task instead of weighting by self-assessed complexity, drop landed initiative and show unclassified rework and regressions beside the score; smoothing only lowers a score, with K raised from 10 to 30.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

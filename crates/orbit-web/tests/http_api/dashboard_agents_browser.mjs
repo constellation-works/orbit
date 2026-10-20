@@ -24,8 +24,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const UNITS = { orchestrators: 'owned tasks', implementers: 'implemented tasks', reviewers: 'settled reviews', pilots: 'assessed tasks' };
 const TERMS = {
   orchestrators: [
-    ['weighted_landed', 'Weighted landed', 1, 'credit', 'Landed tasks weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1.'],
-    ['landed_initiative', 'Landed initiative', 1, 'credit', 'Landed tasks whose typed origin is orchestrator_initiative.'],
+    ['landed', 'Landed', 1, 'credit', 'Landed tasks, one each whatever their complexity, so per 100 owned tasks the percent that landed.'],
     ['spec_defects', 'Spec defects', -1, 'problem', 'Description or criteria edited after the first run started, agent blocks naming the criteria, final-recovery escalations citing them, and regressions with escape spec_ambiguous.'],
     ['spec_rework', 'Spec-caused rework', -1, 'problem', 'Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues whose cause is spec.'],
   ],
@@ -49,8 +48,8 @@ const TERMS = {
 };
 const terms = role => TERMS[role].map(([key, label, weight, group, definition]) => ({ key, label, weight, group, definition }));
 
-const stats = (landed, hours, rework) => [
-  { key: 'landed', label: 'Landed', value: landed },
+const stats = (hours, rework) => [
+  { key: 'unclassified', label: 'Unclassified rework and regressions (not scored)', value: rework[3] },
   { key: 'dropped_initiative', label: 'Dropped initiative', value: 1 },
   { key: 'unknown_origin', label: 'Unknown origin', value: 2 },
   { key: 'active_hours', label: 'Active hours', value: hours },
@@ -64,15 +63,15 @@ function orchestratorRow(crew, rank, units, counts, raw, score, extra) {
   return { crew, model: 'model unknown', units, below_support: rank == null, rank, counts, per_100: per100, raw, score, runs_without_model: 0, provisional: null, stats: stats(...extra) };
 }
 const ORCHESTRATOR_ROWS = [
-  orchestratorRow('claude-orchestrator', 1, 186, { weighted_landed: 402, landed_initiative: 31, spec_defects: 14, spec_rework: 6 }, 222.04, 218.66, [150, 6.5, [6, 19, 4, 3]]),
-  orchestratorRow('codex-orchestrator', 2, 74, { weighted_landed: 121, landed_initiative: 3, spec_defects: 11, spec_rework: 5 }, 145.95, 154.47, [61, 41.25, [5, 12, 2, 1]]),
-  orchestratorRow('operator', 3, 22, { weighted_landed: 30, landed_initiative: 0, spec_defects: 4, spec_rework: 3 }, 104.55, 135.62, [19, 12, [3, 2, 0, 4]]),
-  orchestratorRow('gemini-orchestrator', null, 4, { weighted_landed: 3, landed_initiative: 0, spec_defects: 2, spec_rework: 1 }, 0, 148.64, [2, 3.5, [1, 0, 0, 0]]),
+  orchestratorRow('claude-orchestrator', 1, 186, { landed: 180, spec_defects: 14, spec_rework: 6 }, 86.02, 85.05, [6.5, [6, 19, 4, 3]]),
+  orchestratorRow('codex-orchestrator', 2, 74, { landed: 70, spec_defects: 11, spec_rework: 5 }, 72.97, 72.97, [41.25, [5, 12, 2, 1]]),
+  orchestratorRow('operator', 3, 22, { landed: 19, spec_defects: 4, spec_rework: 3 }, 54.55, 54.55, [12, [3, 2, 0, 4]]),
+  orchestratorRow('gemini-orchestrator', null, 4, { landed: 3, spec_defects: 2, spec_rework: 1 }, 0, 0, [3.5, [1, 0, 0, 0]]),
 ];
 let orchestratorRows = ORCHESTRATOR_ROWS;
 
 // Reviewer rows scored as the server does: raw = Σ weight × rate per 100,
-// pulled toward the fleet average by K = 10.
+// pulled down toward the fleet average by K = 30 when above it.
 const OUTCOMES = ['outcome_held_up', 'outcome_caught', 'outcome_false_alarm', 'outcome_missed', 'outcome_unresolved'];
 function reviewerRow(crew, model, units, counts, provisional, [gate, jobs, accept, peers, often, minutes], outcomes) {
   const per100 = Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, Math.round((count * 10000) / units) / 100]));
@@ -96,7 +95,7 @@ const REVIEWER_ROWS = [
   reviewerRow('gemini-review', 'gemini-3-pro', 6, { findings_held: 6, fixes_held: 0, rejected_findings: 2, false_rejects: 1, failed_fixes: 0, missed_regressions: 0, incomplete_reviews: 0 }, 6, [6, 0, 33, 67, false, 14], [2, 1, 1, 0, 2]),
 ];
 const REVIEWER_FLEET = Math.round((REVIEWER_ROWS.reduce((sum, row) => sum + row.units * row.raw, 0) / REVIEWER_ROWS.reduce((sum, row) => sum + row.units, 0)) * 100) / 100;
-for (const row of REVIEWER_ROWS) row.score = Math.round(((row.units * row.raw + 10 * REVIEWER_FLEET) / (row.units + 10)) * 100) / 100;
+for (const row of REVIEWER_ROWS) row.score = Math.round(Math.min(row.raw, (row.units * row.raw + 30 * REVIEWER_FLEET) / (row.units + 30)) * 100) / 100;
 REVIEWER_ROWS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
 let computedAt = '2026-10-19T08:00:00.000Z';
 const requests = [];
@@ -119,7 +118,7 @@ function scorecard(role, url) {
   if (role === 'pilots') return { ...pilotCard(), computed_at: computedAt };
   if (role !== 'orchestrators') return { ...head, fleet_average: null, rows: [] };
   const rows = url.searchParams.get('window') === '1h' ? [] : orchestratorRows;
-  return { ...head, fleet_average: rows.length ? 192.13 : null, rows };
+  return { ...head, fleet_average: rows.length ? 79.02 : null, rows };
 }
 const task = (id, title, count, detail) => ({ task_id: id, title, status: 'done', count, occurrences: [{ at: '2026-10-12T14:03:00Z', detail, run_id: null }] });
 const REVIEWER_TASKS = {
@@ -268,7 +267,7 @@ try {
   // rebuilds the ranking and re-reads the detail.
   await body.locator('.agents-how > summary').click();
   assert.equal(await body.locator('.agents-how').evaluate(node => node.open), true);
-  assert.match(await body.locator('.agents-how').textContent(), /score = \(owned tasks × raw \+ 10 × fleet average\)/);
+  assert.match(await body.locator('.agents-how').textContent(), /score = min\(raw, \(owned tasks × raw \+ 30 × fleet average\)/);
   const detailReads = requests.filter(entry => entry === 'orchestrators/detail:codex-orchestrator').length;
   computedAt = '2026-10-19T08:05:00.000Z';
   await page.locator('#refresh-btn').click();
