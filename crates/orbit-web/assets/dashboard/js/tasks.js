@@ -365,12 +365,12 @@ function feedbackSignature(map, taskId) {
   return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
 }
 
-// The detail's own controls — the status and complexity selects and each field editor —
+// The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
-  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId)];
+  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId), feedbackSignature(crewFeedback, taskId)];
   for (const field of Object.keys(TASK_FIELD_EDITORS)) {
     parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
@@ -2609,9 +2609,7 @@ function goToLandingRetry(detail, claim) {
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });
 }
 
-// `crewInBox`: the caller shows the crew as its own control (a pinned task's
-// box), so the lever row does not repeat it as a chip.
-function buildTaskDetail(task, context, drain = null, { crewInBox = false } = {}) {
+function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
   detail.teardown = () => disconnectCommentCards(detail);
@@ -2755,7 +2753,7 @@ function buildTaskDetail(task, context, drain = null, { crewInBox = false } = {}
 
   // The side column holds what gates the task, then the graph around it; what
   // the task is and where it stands sits above the tabs.
-  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor, crewInBox });
+  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor });
 
   const readiness = readinessOf(task);
   if (readiness || drain) {
@@ -2846,14 +2844,24 @@ function buildTaskDetail(task, context, drain = null, { crewInBox = false } = {}
 // the delivery card gathers the pull request, the run and the hands that
 // carried the task. The pane head carries only the id and title, so nothing
 // here is repeated there, and the timestamps close the detail.
-function buildTaskMeta(task, context, { editor, showsEditor, crewInBox }) {
+function buildTaskMeta(task, context, { editor, showsEditor }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
   levers.appendChild(buildComplexityUpdateControl(task, context));
-  if (!crewInBox) {
+  if (canMutateTask(task) && !isAggregateView()) {
+    const control = buildCrewUpdateControl(task, context, { withChip: false });
+    control.classList.add("task-chip-crew");
+    const select = control.querySelector("select");
+    select.removeAttribute("aria-label");
+    select.id = `detail-${task.id}-crew`;
+    const label = el("label", { text: "Crew" });
+    label.htmlFor = select.id;
+    control.prepend(el("span", { class: "task-chip task-crew-control" }, [label, select]));
+    levers.appendChild(control);
+  } else {
     const crew = explicitCrewValue(task);
     levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
-      el("span", { class: "visually-hidden", text: "Crew: " }),
+      el("span", { text: "Crew: " }),
       ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
     ]));
   }
@@ -3401,8 +3409,8 @@ function buildStatusUpdateControl(task, context) {
   return cell;
 }
 
-// `withChip: false` drops the pill that echoes the select's value: it only reads
-// as one control in a list row, where the cell's grid lays it over the select.
+// The list row overlays a chip on its select; the detail styles the select
+// itself inside a visible field label and needs no duplicate value.
 function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   const cell = el("span", { class: "crew-cell" });
   if (isAggregateView()) {
@@ -3996,22 +4004,17 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   parent.removeChild(current);
 }
 
-// The pinned global-resolver result: a task outside the active filter, shown
-// in the pane with a note saying so. The list has no row for it, so its crew
-// control sits in the box beside that note, and the lever row leaves the crew
-// to the box. The full page hides the note and the box's highlight (tasks.css):
-// there is no list for the task to be outside of. The pane head closes it like
-// any other.
+// The pinned resolver result shares the normal detail's crew control. Only
+// the dock needs the outside-the-list note; full-page CSS hides that box.
 function buildPinnedTask(ptask, context) {
   const row = el("div", { class: "pinned-external" }, [
     el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
-    buildCrewUpdateControl(ptask, context, { withChip: false }),
   ]);
   stopRowInteraction(row);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const drain = taskDrainState(ptask, context);
-  const detail = buildTaskDetail(ptask, context, drain, { crewInBox: true });
+  const detail = buildTaskDetail(ptask, context, drain);
   const readiness = detail.querySelector(".readiness-list");
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
 
@@ -4664,7 +4667,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
