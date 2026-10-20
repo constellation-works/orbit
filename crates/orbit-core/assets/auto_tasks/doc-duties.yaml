@@ -17,7 +17,9 @@ template:
     1. List tracked Markdown files under `docs/` and tracked top-level
        `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
        dependencies, generated trees and indexes, archives, and files the
-       repository identifies as generated or historical records. Use repository
+       repository identifies as generated or historical records, including paths
+       in the repository's link-check or doc-index exclusion list, when it has
+       one. Check each candidate against that list before selecting it. Use repository
        guidance for any additional documentation scope; do not edit unrelated
        files. Keep the paths relative to the repository root.
     2. Build the carried attempt state. List the newest completed instances with

@@ -177,7 +177,10 @@ definition of the same name.
   (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
   landed since.
 - `doc-duties` — disabled-by-default daily validation of the
-  least-recently-attempted tracked documentation. Each run attaches a
+  least-recently-attempted tracked documentation. Candidates exclude generated
+  and historical records, including paths in the repository's link-check or
+  doc-index exclusion list, when present; each candidate is checked against
+  that list before selection. Each run attaches a
   `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
   `partial`, `skipped`) and attempt date per selected document. Each ledger
   also carries a cumulative `state` map holding every path's two latest
