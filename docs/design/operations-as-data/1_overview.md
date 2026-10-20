@@ -1,15 +1,15 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-18
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim, every task tool and the workflow-run tools are migrated onto kernel v2 and validate input at the tool entry, and a planned noun-by-noun migration is accepted and in progress.
+summary: One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 is in use for friction, auto-task, drain, workspace claim, task, workflow-run, search, and read-only codebase operations.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
@@ -21,8 +21,10 @@ the web dashboard (`orbit-web`), and the in-runtime tool host. Historically each
 surface restated every verb by hand — its name, its parameters, its help text, its
 field-to-JSON mapping — so a noun with seven verbs was written out four times and
 drifted four ways. **Operations as data** replaces that with one declaration per
-verb: a `const` spec that every surface derives its wiring from. This is bearing 1
-of [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry).
+verb: the CLI, MCP, and runtime adapters derive their wiring from a `const` spec;
+dashboard routes remain separately wired, though some handlers use registry
+field names. This is bearing 1 of
+[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry).
 
 **Status.** The friction noun was migrated end to end in [ORB-10358], and the
 auto-task noun followed in [ORB-15935] (phase 1). Drain and workspace claim
@@ -35,9 +37,11 @@ creation schema as a surface table. Task artifacts and locks followed in
 review, reject and delete tools in [ORB-15940] (phase 3d), adding CLI action
 subcommands; the task subcommands with no tool stay hand-wired. The five
 workflow-run tools followed in [ORB-15941] (phase 4) as a tool-only noun; the
-`orbit run` CLI stays hand-wired. Phase 5 migrated search in [ORB-15942]. The scoped migration is complete;
-routine control and the four host invocation/execution tools remain hand-wired
-with per-tool verdicts in [2_design.md §9](./2_design.md#9-migration-plan). A
+`orbit run` CLI stays hand-wired. Phase 5 migrated search in [ORB-15942]. The
+original phase 0–5 migration is complete. The read-only codebase noun was added
+separately with `analytics`, `show`, and `related` using the same registry
+pattern. Routine control and the four host invocation/execution tools remain
+hand-wired with per-tool verdicts in [2_design.md §9](./2_design.md#9-migration-plan). A
 2026-10-12 review found that the friction kernel declared a verb's *names* once
 but still restated its *behaviour* — read/write class, redaction, accepted
 aliases, cross-field rules — on several surfaces, and that it could not yet
@@ -87,8 +91,8 @@ and again in the tool handler.
 - **Registry** — a noun's `&'static [OperationSpec<V>]`, in declaration order,
   emitted with the verb enum by `operation_registry!`. Order is contract: it is
   `--help` order and MCP schema order.
-- **Effect** — whether a verb reads or writes. The one behavioural fact every
-  surface needs, so it lives in the spec.
+- **Effect** — whether a verb reads or writes. The shared read/write class used
+  by the derived runtime and MCP adapters, so it lives in the spec.
 - **Derived adapter** — a surface that reads the registry instead of restating
   it. Generic over `V`, so the next noun reuses it unchanged.
 - **Surface table** — a per-surface exhaustive `match` on `V` for facts only that
@@ -113,7 +117,7 @@ and again in the tool handler.
 | Task review and lifecycle operations (`reconcile_review` and its CLI actions, `review_reset`, inactive `reject` and `delete`) | [crates/orbit-common/src/governance/task/lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs) | [ORB-15940] |
 | The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow.auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
 | The search registry (root CLI query and tool-only friction listing) | [crates/orbit-common/src/governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] |
-| The codebase registry (read-only `analytics` and `show`, on the CLI and MCP) | [crates/orbit-common/src/governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs) | [ORB-16787] |
+| The codebase registry (read-only `analytics`, `show`, and `related`, on the CLI and MCP) | [crates/orbit-common/src/governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs) | [ORB-16787] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | Task guarded modes (bounded `show`/`list`, versioned `show` snapshot), keyed on `TaskVerb` | [crates/orbit-tools/src/builtin/orbit/task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs) | [ORB-15937] |
