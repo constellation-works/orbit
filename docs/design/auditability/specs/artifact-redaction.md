@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
-last_validated: 2026-10-18
+last_validated: 2026-10-20
 ---
 
 # Spec: Artifact Write Redaction
