@@ -52,8 +52,7 @@ impl OrbitRuntime {
         let run_id = blocking_run_id(entry)
             .map(str::to_string)
             .or_else(|| task.job_run_id.clone())?;
-        let resumable = !is_escalation(entry)
-            && self.task_run_is_local(task)
+        let resumable = self.task_run_is_local(task)
             && self
                 .show_job_run_observed(&run_id)
                 .is_ok_and(|run| is_resumable(run.state));

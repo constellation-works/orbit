@@ -339,7 +339,7 @@ fn guidance_lines(id: &str, run_id: &str, at: &str) -> (String, String) {
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     (
         format!(
-            "Next: run {run_id} cannot be resumed; move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
+            "Next: move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
         ),
         format!("Final Recovery: escalate (escalated) by run {run_id} at {formatted}"),
     )

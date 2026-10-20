@@ -563,8 +563,7 @@ pub(crate) fn next_step_text(next: &Value) -> String {
             part("requeue_command")
         ),
         None => format!(
-            "run {} cannot be resumed; move the task back to backlog with `{}` to run it again",
-            part("run_id"),
+            "move the task back to backlog with `{}` to run it again",
             part("requeue_command")
         ),
     }
