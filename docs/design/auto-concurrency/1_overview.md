@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Overview
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Draft
 feature: auto-concurrency
@@ -54,7 +54,7 @@ number:
    from admission to completion.
 2. It averages those records into **resource profiles** per workspace,
    **work class** and complexity. Work class distinguishes code changes,
-   which build and test, from no-diff reviews, which don't, and from
+   which build and test, from no-diff reviews, and from
    recurring auto-task templates.
 3. Before admitting a task, the drain **forecasts** the host's load over the
    coming minutes. The forecast is the profiles of the tasks already running,
@@ -97,8 +97,10 @@ admission look ahead.
 - **Resource sample** — one task's CPU and memory for one minute of its life,
   read from its Linux worker scope or its macOS worker process tree.
 - **Work class** — what kind of work a task does: `change`, `no-diff`
-  (tagged `no-diff-expected`, which must never compile or run tests), or one
-  recurring `auto-task:` template.
+  (tagged `no-diff-expected`), or one recurring `auto-task:` template.
+  No-diff tasks run only commands their brief requires; QA sweeps may build
+  and run the product. The profile's build-like-work diagnostic exempts the
+  declared `qa-sweep` and `qa-full-sweep` templates.
 - **Resource profile** — expected CPU and memory at each minute since
   admission, for one workspace, work class and complexity on one host, with
   the chance that a task is still running at that minute.

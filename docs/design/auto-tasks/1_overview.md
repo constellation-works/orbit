@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -42,9 +42,11 @@ becomes just the first definition.
 - **Definition** — a `.orbit/auto_tasks/<name>.yaml` record; `name` is identity.
   Modeled on the file-backed routine convention (directory scan, fail-closed
   parse, `deny_unknown_fields`), not the SQLite-indexed artifact convention.
-- **Schedule (cadence)** — a 5-field `cron` or an `every_minutes` interval, in
-  the definition's `schedule` field. Catch-up always collapses: a downtime gap
-  mints one make-up task, not one per slot. Cadence is per-definition data, not
+- **Schedule (cadence)** — a 5-field `cron`, an `every_minutes` interval, or a
+  `deliveries_landed` trigger in the definition's `schedule` field. Time-based
+  catch-up always collapses: a downtime gap mints one make-up task, not one per
+  slot. Delivery triggers use verified landings and coverage checkpoints.
+  Cadence is per-definition data, not
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
 - **Time cursor** — per-definition last-fired state for cron and interval
@@ -233,7 +235,7 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 encode this repository's branches and gates. Re-init preserves them:
 
 - `model-price-audit`, `release-prep`, `skill-validation`, and
-  this repository's enabled copies of catalog names such as `code-review` and
+  this repository's configured copies of catalog names such as `code-review` and
   `security-review`.
 - `qa-full-sweep`, this repository's Orbit-specific pre-release sign-off
   ([runbook](../../runbooks/qa-full-sweep.md)). It predates the generic
