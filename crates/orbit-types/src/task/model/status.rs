@@ -308,8 +308,8 @@ pub enum TaskComplexity {
     Medium,
     Hard,
     /// Reserved top tier for the most capable (and most expensive) crews.
-    /// Spelled `xhard` everywhere, so neither serde's snake_case rename nor
-    /// clap's kebab-case value naming may split it into `x_hard`/`x-hard`.
+    // Keep this spelling aligned across serde and clap; their default naming
+    // conventions would otherwise split it into `x_hard` and `x-hard`.
     #[serde(rename = "xhard")]
     #[cfg_attr(feature = "clap", value(name = "xhard"))]
     XHard,

@@ -159,7 +159,7 @@ pub const TASK_COMPLEXITY_VALUES: &[EnumValue] = &[
     EnumValue::plain("hard"),
     EnumValue::helped(
         "xhard",
-        "Reserved top tier for the most capable (and most expensive) crews. Spelled `xhard` everywhere, so neither serde's snake_case rename nor clap's kebab-case value naming may split it into `x_hard`/`x-hard`",
+        "Reserved top tier for the most capable (and most expensive) crews",
     ),
 ];
 
