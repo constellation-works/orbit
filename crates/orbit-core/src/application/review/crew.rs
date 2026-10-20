@@ -9,9 +9,10 @@
 //! Each setting is one crew or a pool written like the complexity pools
 //! (`name` or `name:weight`). Each review chooses one member:
 //!
-//! 0. for an after-landing review task, a member whose executor declares a
-//!    `host_os` that shares no OS with the task's `os:` tags drops out: no
-//!    host could run that task. This is a hard filter. With no member left,
+//! 0. for an after-landing review task, members holding no ticket drop out,
+//!    then a member whose executor declares a `host_os` that shares no OS
+//!    with the task's `os:` tags drops out: no host could run that task.
+//!    This is a hard filter. With no member left,
 //!    the consumer holds the batch and reports which crews were excluded;
 //!    a single crew is never replaced by another;
 //! 1. a member holding no ticket, or one this host cannot run (undefined or
@@ -111,9 +112,10 @@ impl OrbitRuntime {
         weighted_draw(&candidates, REVIEW_CREW_KEY, random).map(|chosen| chosen.crew.clone())
     }
 
-    /// Step 0: split `pool` into the members whose executor can satisfy the
-    /// `os:` tags in `tags`, and the excluded rest with the `host_os` each
-    /// executor declares. Without `os:` tags nothing is excluded.
+    /// Step 0: discard parked members (weight 0), then split the positive-ticket
+    /// members into those whose executor can satisfy the `os:` tags in `tags`
+    /// and the excluded rest with the `host_os` each executor declares. Without
+    /// `os:` tags no positive-ticket member is excluded.
     pub(crate) fn review_pool_by_os(
         &self,
         pool: Vec<ReviewCrewPoolMember>,
@@ -122,7 +124,7 @@ impl OrbitRuntime {
         let limits = self.executor_host_os_limits()?;
         let mut eligible = Vec::new();
         let mut excluded = Vec::new();
-        for member in pool {
+        for member in pool.into_iter().filter(|member| member.weight > 0) {
             if TaskOsRequirement::for_crew(tags, Some(&member.name), &limits).is_ok() {
                 eligible.push(member);
                 continue;
