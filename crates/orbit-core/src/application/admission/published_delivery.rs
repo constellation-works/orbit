@@ -18,11 +18,17 @@
 //!   and waits while other tasks hold it
 //!   ([`OrbitRuntime::acquire_deferred_footprint`]).
 //!
+//! Two resumed runs that deferred behind the same holder both hold their
+//! context by status while neither holds a file, so neither counts the other as
+//! a holder: whichever reserves first takes the files, and the store refuses
+//! the other for as long as that reservation lives.
+//!
 //! Re-applying the published patch unchanged onto the current base is not an
 //! edit: it changes no file the patch did not already change. Once its run
 //! starts, the task is `in-progress` and holds its own surface by status, so
 //! no new overlapping work is admitted beside it.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
@@ -31,9 +37,10 @@ use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::JobRunListParams;
 use crate::runtime::task::locks::{
     EmptyTaskSurfacePolicy, TaskLockIndex, parse_task_ids, reserve_deferred_footprint,
-    reserve_with_index, run_holds_file_reservation,
+    reserve_with_index, runs_holding_file_reservations,
 };
 
 /// The run input key the gate sets when it deferred the leaf's footprint.
@@ -106,6 +113,10 @@ impl OrbitRuntime {
     /// `footprint_poll_seconds` for at most `footprint_wait_seconds` of the
     /// run input, and ends early when the run stops; running out refuses the
     /// dispatch naming the holders, so the activity never edits beside them.
+    /// Another resumed run still waiting for its own footprint is no holder:
+    /// it edits nothing and holds no file, and counting it would leave two
+    /// such runs refusing each other until both time out. Once it takes its
+    /// files, its reservation holds them against this run.
     pub(crate) fn acquire_deferred_footprint(
         &self,
         run_id: &str,
@@ -124,7 +135,7 @@ impl OrbitRuntime {
         else {
             return Ok(());
         };
-        if run_holds_file_reservation(self, run_id)? {
+        if runs_holding_file_reservations(self)?.contains(run_id) {
             return Ok(());
         }
         let task_ids = parse_task_ids(input)?;
@@ -145,7 +156,8 @@ impl OrbitRuntime {
         };
         let started = Instant::now();
         loop {
-            let index = TaskLockIndex::load(self, &task_ids)?;
+            let index = TaskLockIndex::load(self, &task_ids)?
+                .without_status_holders(&self.unacquired_deferred_waiters(run_id)?, &task_ids);
             let output = reserve_with_index(
                 self,
                 json!({"task_ids": task_ids, "ttl_seconds": FOOTPRINT_TTL_SECONDS}),
@@ -179,6 +191,32 @@ impl OrbitRuntime {
             }
             std::thread::sleep(poll.min(wait - elapsed));
         }
+    }
+}
+
+impl OrbitRuntime {
+    /// The tasks of the other running runs that deferred their footprint and
+    /// have taken no file of it yet.
+    fn unacquired_deferred_waiters(&self, run_id: &str) -> Result<BTreeSet<String>, OrbitError> {
+        let acquired = runs_holding_file_reservations(self)?;
+        let running = self.list_job_runs_observed(JobRunListParams {
+            states: vec![JobRunState::Running],
+            ..Default::default()
+        })?;
+        let mut waiters = BTreeSet::new();
+        for run in running {
+            let Some(input) = run
+                .input
+                .as_ref()
+                .filter(|input| input[FOOTPRINT_DEFERRED] == true)
+            else {
+                continue;
+            };
+            if run.run_id != run_id && !acquired.contains(&run.run_id) {
+                waiters.extend(parse_task_ids(input)?);
+            }
+        }
+        Ok(waiters)
     }
 }
 

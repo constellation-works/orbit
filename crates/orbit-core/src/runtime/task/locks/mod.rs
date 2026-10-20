@@ -9,7 +9,7 @@ mod unlocked;
 pub(crate) use audit::{emit_expired_reservation_events, emit_task_lock_release_event};
 pub(crate) use commands::{
     EmptyTaskSurfacePolicy, list, parse_task_ids, release, reserve, reserve_deferred_footprint,
-    reserve_with_index, run_holds_file_reservation, workspace_orbit_dir,
+    reserve_with_index, runs_holding_file_reservations, workspace_orbit_dir,
     workspace_task_reservation_id,
 };
 pub(crate) use index::{
