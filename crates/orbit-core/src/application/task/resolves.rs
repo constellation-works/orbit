@@ -276,17 +276,24 @@ fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution>
             pr_number: resolution.get("pr_number").and_then(Value::as_u64),
         });
     }
-    // The ordinary owner PR completion path already retains this verified
-    // provider evidence in its durable authorization note.
+    let (pr_number, commit) = pull_request_delivery(note)?;
+    Some(LandingResolution {
+        commit: commit.to_string(),
+        pr_number: Some(pr_number),
+    })
+}
+
+/// The pull request and full merge commit a done transition's note records
+/// as `; delivered by pull request #N merged as <sha>`. The ordinary owner PR
+/// completion path retains this verified provider evidence in its durable
+/// authorization note; `None` for any other note or an abbreviated commit.
+pub(crate) fn pull_request_delivery(note: &str) -> Option<(u64, &str)> {
     let (_, delivery) = note.rsplit_once("; delivered by pull request #")?;
     let (pr, commit) = delivery.split_once(" merged as ")?;
     if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    Some(LandingResolution {
-        commit: commit.to_string(),
-        pr_number: Some(pr.parse().ok()?),
-    })
+    Some((pr.parse().ok()?, commit))
 }
 
 /// Targets whose latest side-effect history entry records unfinished work.

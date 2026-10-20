@@ -699,6 +699,26 @@ pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 9, rows: [] })
 await settle();
 assert.match(related.querySelector('p.codebase-note').textContent, /9 landed tasks changed this file/);
 
+// A file changed in fewer landed tasks than the minimum says why no partner
+// can qualify and reruns at its own support; done tasks without a recorded
+// landing are explained, and a file with no landed change offers no rerun.
+const belowPayload = { ...refreshedPayload, computed_at: '2026-10-10T12:06:00.000Z' };
+await serve(belowPayload);
+pending.at(-1).resolve(response({ path: 'CHANGELOG.md', path_support: 4, min_support: 10, unavailable_landed_tasks: 3, large_footprint_cap: 20, rows: [], empty_reason: { kind: 'path_below_minimum', path_support: 4, min_support: 10 } }));
+await settle();
+assert.equal(related.querySelector('p.codebase-empty').textContent, 'CHANGELOG.md changed in 4 landed tasks in this window, fewer than the minimum of 10 shared tasks, so no partner can qualify.');
+assert.match(related.textContent, /finished by hand or before Orbit recorded landings/, 'the unavailable count says what it covers');
+click(button(related, 'Rerun with minimum 4'));
+assert.equal(codebase.getCodebaseQuery().min_support, 4);
+const rerunRequest = await serve(belowPayload);
+assert.equal(rerunRequest.pathname, '/api/codebase/related');
+assert.equal(rerunRequest.searchParams.get('min_support'), '4', 'the rerun fetches at the path support');
+pending.at(-1).resolve(response({ path: 'CHANGELOG.md', path_support: 0, min_support: 4, unavailable_landed_tasks: 0, rows: [], empty_reason: { kind: 'no_landed_change' } }));
+await settle();
+assert.match(related.querySelector('p.codebase-empty').textContent, /No landed task .* changed CHANGELOG.md/);
+assert.equal(related.querySelectorAll('button').length, 0, 'no rerun can help a file with no landed change');
+assert.doesNotMatch(related.textContent, /finished by hand/, 'no explanation without unavailable tasks');
+
 // An explicit path change fetches, and a failed related request is retried on
 // the next analytics poll even when its payload has not changed.
 search.value = 'broken.rs';

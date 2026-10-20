@@ -666,6 +666,15 @@ fn landing_note(landing: &MergedPullRequest) -> (String, String) {
     (landed, note)
 }
 
+/// The full merge commit a settlement note from [`landing_note`] records;
+/// `None` for any other note or an abbreviated commit.
+pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
+    let landed = note.strip_prefix("settled from pull request #")?;
+    let (_, merged) = landed.split_once(", merged into ")?;
+    let (_, commit) = merged.strip_suffix(" outside Orbit")?.rsplit_once(" as ")?;
+    (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(commit)
+}
+
 /// Why a revoked handoff's task did not settle: its candidate PR, as the
 /// forge returned it (`None` when it is not merged), is not merged, names
 /// another task, or merged into another branch.

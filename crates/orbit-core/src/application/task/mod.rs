@@ -103,6 +103,7 @@ pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub use external_merge::ExternalMergeSettlement;
+pub(crate) use external_merge::settled_merge_commit;
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::{
     EXTERNAL_MERGE_SETTLED_EVENT, task_status_transition_allowed,
@@ -113,6 +114,7 @@ pub(crate) use lifecycle::{
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
 pub(crate) use paths::context_workspace_root;
+pub(crate) use resolves::pull_request_delivery;
 pub(crate) use update::admit_agent_artifact;
 
 #[cfg(test)]
