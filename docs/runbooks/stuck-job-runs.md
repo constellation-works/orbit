@@ -1087,7 +1087,8 @@ A task settles only when all of these hold:
 
 - it is `blocked`, `in-progress` or `review`;
 - no run or unsettled execution claim of its own is live, and no live `run auto`
-  leaf carries it. That run lands or fails the task itself;
+  leaf carries it. That run lands or fails the task itself. A handed-off claim
+  whose completion authority an operator revoked is the one exception (see below);
 - one of its delivery pull requests is merged into the task's target branch. A
   delivery pull request has an `orbit/<task-id>-…` head branch and a body naming the
   task. Its author is a delivery identity (`pr.delivery_authors`, else the forge
@@ -1108,6 +1109,30 @@ settlement starts no work, so another task's execution claim on the same files d
 not refuse it. The task's other open Orbit pull requests close as on any landing.
 `orbit task settle-merged <task-id>` names the reason a task does not settle, such
 as its own live claim or no merge into its target branch.
+
+### After revoking a claimed handoff
+
+Revoking a claimed handoff's completion authority (the dashboard's **Revoke
+authority**) cannot be undone, and nothing lands that handoff afterwards. Its
+claim stays `handed_off` and keeps the task in `review`, so **Approve** and a plain
+status write are both refused. The owner console's authority line names the way
+out:
+
+- If the handoff's pull request merged outside Orbit, `orbit task settle-merged
+  <task-id>` (or the next `orbit run auto` pass) settles the task. It must be
+  exactly the handoff's own pull request, merged into the handoff's landing
+  branch and naming the task. One owner store write ends the claim as `revoked`
+  and moves the task `review → done` with the usual landing note. The write grants
+  no completion authority, records no merge intent or landing attempt, and leaves
+  the revoked request revoked.
+- Otherwise, recover the claim to `blocked` or `backlog` from the dashboard's
+  claim panel.
+
+Settlement is refused, with the reason, while an owner landing job still carries
+the handoff (its attempt is `dispatched`) or a merge intent is unresolved. It is
+also refused when the handoff's pull request is unmerged or merged into another
+branch, or when only some other pull request merged. A handoff whose authority was
+never revoked is refused too: approval or the owner's landing job completes it.
 
 ## Replay from the beginning
 

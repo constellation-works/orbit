@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contracts::{ClaimInspection, JobRunQuery};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus,
@@ -264,6 +264,16 @@ impl OrbitRuntime {
     /// `job_run_id` only onto the checkpoint batch id, which already matches
     /// the terminal source, so the retry stays invisible to that binding.
     pub(super) fn live_task_delivery(&self, task: &Task) -> Option<String> {
+        self.live_task_run(task)
+            .or_else(|| match self.unsettled_task_claim(task) {
+                Ok(claim) => claim.as_ref().map(unsettled_claim_reason),
+                Err(unreadable) => Some(unreadable),
+            })
+    }
+
+    /// Why a run of `task` may still be delivering one of its pull requests,
+    /// or `None` when none is live. The task's claims are not consulted.
+    pub(super) fn live_task_run(&self, task: &Task) -> Option<String> {
         if self.task_run_is_local(task)
             && let Some(run_id) = task.job_run_id.as_deref()
         {
@@ -299,21 +309,23 @@ impl OrbitRuntime {
             }
             Err(_) => return Some("its task_pr_pipeline runs cannot be read".to_string()),
         }
-        match self.stores().tasks().inspect_execution_claims() {
-            Ok(claims) => claims
-                .iter()
-                .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled())
-                .map(|claim| {
-                    let run_id = claim
-                        .bound_run
-                        .as_ref()
-                        .map_or(claim.claim.run_context.run_id.as_str(), |run| {
-                            run.run_id.as_str()
-                        });
-                    format!("its execution claim for run {run_id} is unsettled")
-                }),
-            Err(_) => Some("its execution claims cannot be read".to_string()),
-        }
+        None
+    }
+
+    /// The task's unsettled execution claim, if it has one, or why its claims
+    /// cannot be read.
+    pub(super) fn unsettled_task_claim(
+        &self,
+        task: &Task,
+    ) -> Result<Option<ClaimInspection>, String> {
+        let claims = self
+            .stores()
+            .tasks()
+            .inspect_execution_claims()
+            .map_err(|_| "its execution claims cannot be read".to_string())?;
+        Ok(claims
+            .into_iter()
+            .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled()))
     }
 
     /// Whether the task's next run resumes the candidate its shelving kept:
@@ -417,6 +429,18 @@ impl OrbitRuntime {
     fn record_session_event(&self, event: OrbitEvent) {
         self.event_log.append(event);
     }
+}
+
+/// An unsettled claim as a reason the task's delivery is still live, naming
+/// its bound run, else the run that admitted it.
+pub(super) fn unsettled_claim_reason(claim: &ClaimInspection) -> String {
+    let run_id = claim
+        .bound_run
+        .as_ref()
+        .map_or(claim.claim.run_context.run_id.as_str(), |run| {
+            run.run_id.as_str()
+        });
+    format!("its execution claim for run {run_id} is unsettled")
 }
 
 /// PRs a done transition must keep open: those its landing note names. When

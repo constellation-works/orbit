@@ -623,7 +623,9 @@ fn phase_summary(phase: ExecutionClaimPhase) -> &'static str {
             "landing stopped on its base; awaiting the one automatic repair"
         }
         ExecutionClaimPhase::Failed => "settled as failed; the task is blocked with its evidence",
-        ExecutionClaimPhase::Revoked => "revoked by deliberate recovery",
+        ExecutionClaimPhase::Revoked => {
+            "revoked by deliberate recovery, or settled from its pull request merged outside Orbit"
+        }
         ExecutionClaimPhase::Landed => "merged and completed against verified evidence",
     }
 }
@@ -726,26 +728,47 @@ fn handoff_json(
         candidate.delivery,
         orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }
     );
+    let revoked = request.is_some_and(|request| request.state == LandingStartState::Revoked);
+    // Nothing lands a revoked handoff and the revocation is final, so the
+    // console names the way out: a pull request merged outside Orbit settles
+    // the task through `settle-merged`; otherwise the claim is recovered.
+    let settle_command = matches!(
+        candidate.delivery,
+        orbit_types::workflow::handoff::HandoffDelivery::PullRequest { .. }
+    )
+    .then(|| format!("orbit task settle-merged {}", accepted.handoff.task_id))
+    .filter(|_| revoked);
     let (authority_state, authority_summary) = match request.map(|request| request.state) {
         None => (
             "not_authorized",
-            "no completion authority is recorded; this handoff waits for explicit owner approval",
+            "no completion authority is recorded; this handoff waits for explicit owner approval"
+                .to_string(),
         ),
         Some(LandingStartState::Pending) => (
             "authorized",
-            "completion authority recorded; the owner landing job carries it from here",
+            "completion authority recorded; the owner landing job carries it from here".to_string(),
         ),
         Some(LandingStartState::Revoked) => (
             "revoked",
-            "completion authority was withdrawn; the task stays in review",
+            match &settle_command {
+                Some(command) => format!(
+                    "completion authority was withdrawn; the task stays in review. If its pull \
+                     request merged outside Orbit, `{command}` completes the task; otherwise \
+                     recover the claim to blocked or backlog"
+                ),
+                None => "completion authority was withdrawn; the task stays in review. Recover \
+                         the claim to blocked or backlog"
+                    .to_string(),
+            },
         ),
         Some(LandingStartState::Completed) if no_diff => (
             "completed",
-            "authority was consumed by verified no-diff completion",
+            "authority was consumed by verified no-diff completion".to_string(),
         ),
-        Some(LandingStartState::Completed) => {
-            ("completed", "authority was consumed by a verified merge")
-        }
+        Some(LandingStartState::Completed) => (
+            "completed",
+            "authority was consumed by a verified merge".to_string(),
+        ),
     };
     let (landing_state, landing_summary) = match attempt.map(|attempt| attempt.state) {
         None => ("none", "no landing attempt has been reserved"),
@@ -807,6 +830,9 @@ fn handoff_json(
             "summary": authority_summary,
             "authorization_id": request.map(|request| request.authorization_id.clone()),
             "recorded_at": request.map(|request| request.created_at.to_rfc3339()),
+            // The command that completes a revoked handoff's task once its
+            // pull request merged outside Orbit; null in every other state.
+            "settle_command": settle_command,
         },
         "landing": {
             "state": landing_state,

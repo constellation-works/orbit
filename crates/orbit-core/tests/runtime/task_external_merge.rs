@@ -5,6 +5,10 @@
 //! most recent ones its listing returns, and older ones only a lookup by
 //! number reaches. Execution claims are coordination rows written the way
 //! the claim allocator writes them, so the store's own guards decide.
+//!
+//! A claimed delivery's handoff is accepted, authorized, dispatched, stopped
+//! and revoked through the owner's own claim mutations and operator console,
+//! so the claim journal decides whether a revoked handoff settles.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_core::application::review::{DistributedClaimState, ExpectedCandidate};
 use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
@@ -20,15 +25,47 @@ use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionRunContext,
     AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::ExternalRef;
+use orbit_types::workflow::ReviewTiming;
+use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::handoff::{
+    HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
+    LandingAttemptState, LandingStartState, TaskHandoff,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
 const BOT: &str = "orbit-bot";
 const MERGE_COMMIT: &str = "03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9";
+/// The owner policy a `done` claim contract names, which acceptance matches
+/// against the owner's observed completion authority.
+const COMPLETION_POLICY: &str = "workspace-config:workflow.distributed_completion";
+/// The branch a claimed handoff lands on, unlike the workspace base branch.
+const LANDING: &str = "release-landing";
+
+/// How far a claimed handoff's completion authority got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Authority {
+    /// Accepted under a `review` contract: it awaits operator approval.
+    Unapproved,
+    /// Accepted under a `done` contract: the owner's landing job carries it.
+    Authorized,
+    /// Authorized, its landing attempt stopped, then revoked by an operator:
+    /// the observed release-prep case.
+    Revoked,
+    /// Authorized and revoked while its landing attempt is still dispatched.
+    RevokedWhileDispatched,
+}
+
+/// A claimed delivery the owner accepted as a typed handoff.
+struct Handoff {
+    task: String,
+    claim_id: String,
+    handoff_id: String,
+}
 
 #[derive(Default)]
 struct ForgeState {
@@ -233,24 +270,35 @@ impl Fixture {
         self.runtime.get_task(task_id).unwrap().status
     }
 
-    /// Admit and bind a real claim, then release its held PR or fail with a
-    /// kept candidate. Neither path accepts a handoff or adds a task PR ref.
-    fn released_pr(&self, number: u64, held: bool, landing: &str) -> String {
-        let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
-        let boundary = TaskCommitBoundary::new(
+    fn boundary(&self) -> TaskCommitBoundary {
+        TaskCommitBoundary::new(
             self.runtime.sqlite_store().unwrap(),
             TaskRegistryStore::open(&task_registry_path(&self.runtime.global_root())).unwrap(),
             self.runtime.workspace_id().unwrap(),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    /// Admit a real claim of a new task for a follower's leaf `leaf-<number>`
+    /// under a `pr` contract landing on `landing`, completing as `done` under
+    /// the owner's policy or waiting in `review`, and bind the leaf. Returns
+    /// the task, its claim and the bound leaf's invocation.
+    fn bound_claim(
+        &self,
+        number: u64,
+        landing: &str,
+        done: bool,
+    ) -> (String, String, ClaimInvocation) {
+        let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
+        let boundary = self.boundary();
         let ship = AdmissionShipContract {
             mode: "pr".into(),
             base_branch: self.base.clone(),
             landing_branch: landing.into(),
             before_pr: false,
             before_landing: false,
-            completion: "review".into(),
-            authorization_reference: None,
+            completion: if done { "done" } else { "review" }.into(),
+            authorization_reference: done.then(|| COMPLETION_POLICY.to_string()),
             review: None,
         };
         let request = AdmissionRequest {
@@ -322,6 +370,13 @@ impl Fixture {
             "follower".into(),
             Some(run),
         );
+        (task, claim.claim_id, worker)
+    }
+
+    /// Admit and bind a real claim, then release its held PR or fail with a
+    /// kept candidate. Neither path accepts a handoff or adds a task PR ref.
+    fn released_pr(&self, number: u64, held: bool, landing: &str) -> String {
+        let (task, claim_id, worker) = self.bound_claim(number, landing, false);
         let head = format!("orbit/{task}-claimed");
         let mut evidence = ClaimEvidence {
             summary: Some("Leaf stopped after opening its PR".into()),
@@ -372,12 +427,149 @@ impl Fixture {
                 .is_empty()
         );
         assert!(
-            boundary
-                .find_accepted_handoff(&claim.claim_id)
+            self.boundary()
+                .find_accepted_handoff(&claim_id)
                 .unwrap()
                 .is_none()
         );
         task
+    }
+
+    /// A follower's leaf hands off pull request `number`, landing on
+    /// [`LANDING`], and the owner accepts it; its completion authority then
+    /// goes as far as `authority` says, through the owner's own landing
+    /// mutations and operator console.
+    fn handed_off(&self, number: u64, authority: Authority) -> Handoff {
+        let authorized = authority != Authority::Unapproved;
+        let (task, claim_id, worker) = self.bound_claim(number, LANDING, authorized);
+        let handoff = TaskHandoff {
+            schema_version: 1,
+            workspace_id: self.runtime.workspace_id().unwrap(),
+            task_id: task.clone(),
+            claim_id: claim_id.clone(),
+            machine_id: "follower".into(),
+            run_id: format!("leaf-{number}"),
+            candidate: HandoffCandidate {
+                repository: "owner/repository".into(),
+                source_branch: format!("orbit/{task}-47642870"),
+                base_branch: self.base.clone(),
+                landing_branch: LANDING.into(),
+                candidate: SourceRevision {
+                    commit: "a".repeat(40),
+                    tree: "b".repeat(40),
+                },
+                base: SourceRevision {
+                    commit: "c".repeat(40),
+                    tree: "d".repeat(40),
+                },
+                delivery: HandoffDelivery::PullRequest { number },
+            },
+            review: HandoffReview {
+                policy: ReviewTiming::None,
+                disposition: HandoffReviewDisposition::NotRequired,
+            },
+            execution_summary: "Outcome: success".into(),
+            validation: vec![],
+            footprint_widening: vec![],
+            owed_criteria: vec![],
+            regression_from: vec![],
+        };
+        let observation = HandoffObservation {
+            footprint_widening: vec![],
+            candidate: handoff.candidate.clone(),
+            required_commands: vec![],
+            owner_completion_authority: authorized.then(|| COMPLETION_POLICY.to_string()),
+            review: None,
+            known_red: vec![],
+            light_delivery: vec![],
+        };
+        self.runtime
+            .mutate_execution_claim(
+                Some(&worker.with_handoff_observation(observation)),
+                "handoff",
+                &ClaimMutation::AcceptHandoff(handoff),
+            )
+            .expect("the owner accepts the handoff");
+        assert_eq!(self.status(&task), TaskStatus::Review);
+        let handoff_id = self
+            .runtime
+            .accepted_task_handoff(&claim_id)
+            .unwrap()
+            .handoff_id;
+
+        let operator =
+            ClaimInvocation::trusted_operator(task.clone(), claim_id.clone(), "operator".into());
+        let landing = |mutation_id: &str, mutation: ClaimMutation| {
+            self.runtime
+                .mutate_execution_claim(Some(&operator), mutation_id, &mutation)
+                .unwrap_or_else(|error| panic!("{mutation_id}: {error}"));
+        };
+        if matches!(
+            authority,
+            Authority::Revoked | Authority::RevokedWhileDispatched
+        ) {
+            landing(
+                "dispatch",
+                ClaimMutation::DispatchLanding {
+                    handoff_id: handoff_id.clone(),
+                    job_run_id: None,
+                },
+            );
+        }
+        if authority == Authority::Revoked {
+            landing(
+                "stop",
+                ClaimMutation::StopLanding {
+                    handoff_id: handoff_id.clone(),
+                    reason: "the pull request's required checks are not green".into(),
+                    repairable: false,
+                    requeue: false,
+                },
+            );
+        }
+        if matches!(
+            authority,
+            Authority::Revoked | Authority::RevokedWhileDispatched
+        ) {
+            self.runtime
+                .revoke_handoff_as_operator(
+                    &handoff_id,
+                    &ExpectedCandidate {
+                        candidate_commit: "a".repeat(40),
+                        base_commit: "c".repeat(40),
+                    },
+                    "operator",
+                    "the release PR will be merged by hand",
+                    "revoke",
+                )
+                .expect("the operator revokes completion authority");
+        }
+        Handoff {
+            task,
+            claim_id,
+            handoff_id,
+        }
+    }
+
+    /// The phase of `claim_id` on the owner.
+    fn claim_phase(&self, claim_id: &str) -> ExecutionClaimPhase {
+        self.runtime
+            .inspect_execution_claims()
+            .unwrap()
+            .into_iter()
+            .find(|state| state.claim.claim_id == claim_id)
+            .unwrap_or_else(|| panic!("no claim {claim_id}"))
+            .claim
+            .phase
+    }
+
+    /// The owner console's completion authority for `task`'s handoff.
+    fn console_authority(&self, task: &str) -> serde_json::Value {
+        let console = self
+            .runtime
+            .distributed_claim_console_filtered(Some(task), DistributedClaimState::All, true)
+            .unwrap();
+        console["claims"][0]["handoff"]["authority"].clone()
     }
 }
 
@@ -740,4 +932,237 @@ fn the_operator_settles_one_task_from_a_merge_older_than_the_listing() {
         .settle_externally_merged_task(&reviewed)
         .expect_err("a done task does not settle again");
     assert!(refused.to_string().contains("'done'"), "{refused}");
+}
+
+#[test]
+fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit() {
+    for owner_pass in [false, true] {
+        let fx = Fixture::new();
+        let handoff = fx.handed_off(4930, Authority::Revoked);
+        let task = handoff.task.as_str();
+        assert_eq!(
+            fx.claim_phase(&handoff.claim_id),
+            ExecutionClaimPhase::HandedOff
+        );
+
+        // The owner console names the way out while the task is stuck.
+        let authority = fx.console_authority(task);
+        assert_eq!(authority["state"], "revoked");
+        let command = authority["settle_command"]
+            .as_str()
+            .expect("a revoked pull-request handoff names its settle command");
+        assert_eq!(command, format!("orbit task settle-merged {task}"));
+        assert!(
+            authority["summary"].as_str().unwrap().contains(command),
+            "the summary the dashboard shows carries the command: {authority}"
+        );
+
+        // A human merged the handoff's own PR into its landing branch.
+        fx.forge.merge_recent(4930, task, "alice", LANDING);
+        let requests = fx.runtime.landing_start_requests().unwrap();
+        let attempts = fx.runtime.landing_attempts().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].state, LandingStartState::Revoked);
+        assert_eq!(attempts[0].state, LandingAttemptState::Stopped);
+
+        let settlement = if owner_pass {
+            let mut settled = fx
+                .runtime
+                .settle_externally_merged_tasks()
+                .expect("owner pass");
+            assert_eq!(settled.len(), 1, "{settled:?}");
+            settled.pop().unwrap()
+        } else {
+            fx.runtime
+                .settle_externally_merged_task(task)
+                .expect("the operator settles the revoked handoff's task")
+        };
+        assert_eq!(settlement.task_id, task);
+        assert_eq!(settlement.pr_number, 4930);
+        assert_eq!(settlement.previous_status, TaskStatus::Review);
+        assert_eq!(settlement.base_branch, LANDING);
+        assert_eq!(settlement.merge_commit, MERGE_COMMIT);
+
+        let settled = fx.runtime.get_task(task).unwrap();
+        assert_eq!(settled.status, TaskStatus::Done);
+        assert!(
+            settled
+                .external_refs
+                .contains(&ExternalRef::github_pr("4930".to_string()).unwrap()),
+            "the landing PR is recorded on the task: {:?}",
+            settled.external_refs
+        );
+        let history = fx.runtime.get_task_history(task).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+            .expect("the settlement is recorded in history");
+        assert_eq!(entry.from_status, Some(TaskStatus::Review));
+        assert_eq!(entry.to_status, Some(TaskStatus::Done));
+        let note = entry.note.as_deref().unwrap_or_default();
+        assert!(
+            note.contains("#4930") && note.contains(MERGE_COMMIT) && note.contains(LANDING),
+            "the landing note names the PR, branch and merge commit: {note}"
+        );
+
+        // The claim settled in the same write and protects nothing.
+        let claims = fx.runtime.inspect_execution_claims().unwrap();
+        for state in claims.iter().filter(|state| state.claim.task_id == task) {
+            assert!(!state.claim.phase.is_unsettled(), "{state:?}");
+            assert!(!state.claim.phase.protects_footprint(), "{state:?}");
+            assert_eq!(state.unresolved_merge_intent, None);
+        }
+        // No authorization, landing request or attempt was added or reopened.
+        assert_eq!(fx.runtime.landing_start_requests().unwrap(), requests);
+        assert_eq!(fx.runtime.landing_attempts().unwrap(), attempts);
+
+        assert!(
+            fx.runtime
+                .settle_externally_merged_tasks()
+                .unwrap()
+                .is_empty(),
+            "a settled task does not settle twice"
+        );
+    }
+}
+
+#[test]
+fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged() {
+    for (case, authority, reason) in [
+        (
+            "unapproved",
+            Authority::Unapproved,
+            "awaits completion approval",
+        ),
+        (
+            "authorized",
+            Authority::Authorized,
+            "holds completion authority",
+        ),
+        (
+            "dispatched",
+            Authority::RevokedWhileDispatched,
+            "an owner landing job still carries",
+        ),
+        ("other-pr", Authority::Revoked, "recover the claim"),
+        ("other-branch", Authority::Revoked, "not its landing branch"),
+        ("unmerged", Authority::Revoked, "recover the claim"),
+    ] {
+        let fx = Fixture::new();
+        let handoff = fx.handed_off(4931, authority);
+        let task = handoff.task.as_str();
+        match case {
+            // Another PR naming the task, by the delivery identity, merged
+            // into the landing branch: only the handoff's own PR counts.
+            "other-pr" => fx.forge.merge_recent(4932, task, BOT, LANDING),
+            "other-branch" => fx.forge.merge_recent(4931, task, BOT, &fx.base),
+            "unmerged" => {
+                fx.forge.0.lock().unwrap().unmerged.insert(4931, "open");
+            }
+            _ => fx.forge.merge_recent(4931, task, BOT, LANDING),
+        }
+        let refused = fx
+            .runtime
+            .settle_externally_merged_task(task)
+            .expect_err(case)
+            .to_string();
+        assert!(refused.contains(reason), "{case}: {refused}");
+        assert!(
+            fx.runtime
+                .settle_externally_merged_tasks()
+                .unwrap()
+                .is_empty(),
+            "{case}"
+        );
+        assert_eq!(fx.status(task), TaskStatus::Review, "{case}");
+        assert_eq!(
+            fx.claim_phase(&handoff.claim_id),
+            ExecutionClaimPhase::HandedOff,
+            "{case}"
+        );
+        if authority == Authority::Authorized {
+            assert!(
+                fx.console_authority(task)["settle_command"].is_null(),
+                "only a revoked handoff names settle-merged"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither() {
+    fn settle(
+        fx: &Fixture,
+        handoff: &Handoff,
+        number: u64,
+        branch: &str,
+        mutation_id: &str,
+    ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
+        let operator = ClaimInvocation::trusted_operator(
+            handoff.task.clone(),
+            handoff.claim_id.clone(),
+            "operator".into(),
+        );
+        fx.runtime.mutate_execution_claim(
+            Some(&operator),
+            mutation_id,
+            &ClaimMutation::SettleExternalMerge {
+                handoff_id: handoff.handoff_id.clone(),
+                pull_request: number,
+                base_branch: branch.into(),
+                merge_commit: MERGE_COMMIT.into(),
+                note: format!("settled from pull request #{number}"),
+            },
+        )
+    }
+
+    // Each claim holds the fixture's one file, so each needs its own owner.
+    let authorized_fx = Fixture::new();
+    let authorized = authorized_fx.handed_off(4933, Authority::Authorized);
+    let fx = Fixture::new();
+    let revoked = fx.handed_off(4934, Authority::Revoked);
+    for (owner, handoff, number, branch, why) in [
+        (
+            &authorized_fx,
+            &authorized,
+            4933,
+            LANDING,
+            "its authority is not revoked",
+        ),
+        (
+            &fx,
+            &revoked,
+            4933,
+            LANDING,
+            "another handoff's pull request",
+        ),
+        (&fx, &revoked, 4934, "main", "a merge into another branch"),
+    ] {
+        assert!(
+            settle(
+                owner,
+                handoff,
+                number,
+                branch,
+                &format!("refused-{number}-{branch}")
+            )
+            .is_err(),
+            "{why}"
+        );
+        assert_eq!(owner.status(&handoff.task), TaskStatus::Review, "{why}");
+        assert_eq!(
+            owner.claim_phase(&handoff.claim_id),
+            ExecutionClaimPhase::HandedOff,
+            "a refused write leaves the claim handed off: {why}"
+        );
+    }
+
+    let result = settle(&fx, &revoked, 4934, LANDING, "settle").expect("the exact settlement");
+    assert_eq!(result.phase, ExecutionClaimPhase::Revoked);
+    assert_eq!(result.status, TaskStatus::Done);
+    assert_eq!(fx.status(&revoked.task), TaskStatus::Done);
+    assert_eq!(
+        fx.claim_phase(&revoked.claim_id),
+        ExecutionClaimPhase::Revoked
+    );
 }

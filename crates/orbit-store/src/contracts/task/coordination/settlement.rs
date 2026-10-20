@@ -390,6 +390,21 @@ pub enum ClaimMutation {
         handoff_id: String,
         evidence: String,
     },
+    /// Settle a handed-off claim whose completion authority an operator
+    /// revoked and whose candidate pull request then merged outside Orbit.
+    /// The claim ends `revoked` and the task moves `review -> done` with
+    /// `note` in this one commit. It grants no completion authorization,
+    /// records no merge intent or landing attempt and leaves the revoked
+    /// landing request revoked. Refused for any other pull request or branch,
+    /// an unrevoked handoff, a dispatched landing attempt or an unresolved
+    /// merge intent.
+    SettleExternalMerge {
+        handoff_id: String,
+        pull_request: u64,
+        base_branch: String,
+        merge_commit: String,
+        note: String,
+    },
     /// Stop the live attempt with durable evidence, leaving the task in review.
     /// A `repairable` stop — the candidate conflicts with, or is stale
     /// against, its base — instead moves an original claim to

@@ -318,6 +318,14 @@ pub const LANDING_REPAIR_BUDGET: usize = 2;
 /// task to the backlog, keeping its candidate for the next run's repair.
 pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
 
+/// Status event recorded when Orbit settles a task to `done` from its
+/// delivery pull request merged outside Orbit. Like the delivery pipeline's
+/// own completion, the settlement is not an edge of the status table: the
+/// forge's merge, not a caller's claim, is its evidence. The owner's claim
+/// journal records it too, when it settles a revoked handoff's claim in the
+/// same commit.
+pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
 /// History event of the landing stop that found the task's landing repair
 /// budget spent and blocked it. Requeues before it no longer count.
 pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";
