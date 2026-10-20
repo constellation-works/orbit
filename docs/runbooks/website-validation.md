@@ -324,7 +324,9 @@ The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
 1440px in both site themes with web fonts loaded. It also checks
 `/reference/config/` at 320, 1152 and 1920px in both themes, including
 code clipping, delimiter-only line breaks, single-line desktop keys, and table
-and page width. It opens disclosures, selects each provider panel, measures
+and page width. On `/reference/cli/`, it checks every table for code clipping,
+preserved copy text, and first-line alignment between the command/option and
+its description. It opens disclosures, selects each provider panel, measures
 glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
 `)` after a code stays on the code's last line, checks that links containing
 only code keep their underline (painted, for four known links at 1280px),
@@ -343,6 +345,11 @@ code examples, preserves their selectable text, and leaves `pre` blocks alone.
 It wraps each inline code in a `nowrap` box so punctuation after it cannot start
 a line, and the stylesheet leaves room for that punctuation and repeats the link
 underline on code inside links.
+
+CLI reference tables instead keep code fully visible in both columns, with
+additional breaks after `_`, `|`, `:` and internal hyphens for long identifiers
+and flags. The leading `--` stays attached to its flag name. This exception is
+scoped to the CLI reference; other pages retain the shared wrapping policy.
 
 ## Site content and generated assets
 

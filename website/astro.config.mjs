@@ -30,35 +30,37 @@ function addClasses(node, ctx, ...classNames) {
   ctx.setProperty(node, 'className', list);
 }
 
-function wrapConfigCodeTokens(node, ctx) {
+function wrapTableCodeTokens(node, ctx, kind) {
   if (node.tagName === 'pre' || node.tagName === 'wbr') return;
 
   const children = (node.children || []).flatMap((child) => {
     if (child.type === 'text') {
-      return child.value.split(/(_)/).filter(Boolean).flatMap((part) => {
+      const delimiters = kind === 'cli' ? /([_|:]|(?<=\w)-)/ : /(_)/;
+      return child.value.split(delimiters).filter(Boolean).flatMap((part) => {
         // Explicit wbr nodes provide allowed breaks; tokens themselves stay atomic,
-        // including hyphenated Purpose values that browsers normally split.
+        // including hyphenated config Purpose values. CLI tables also break long
+        // flags and environment names at delimiters, keeping the leading -- intact.
         const token = {
           type: 'element',
           tagName: 'span',
-          properties: { className: ['orbit-config-token'] },
+          properties: { className: [`orbit-${kind}-token`] },
           children: [{ type: 'text', value: part }],
         };
-        return part === '_'
+        return (kind === 'cli' ? /^[_|:-]$/.test(part) : part === '_')
           ? [token, { type: 'element', tagName: 'wbr', properties: {}, children: [] }]
           : [token];
       });
     }
-    if (child.type === 'element') wrapConfigCodeTokens(child, ctx);
+    if (child.type === 'element') wrapTableCodeTokens(child, ctx, kind);
     return [child];
   });
   ctx.setProperty(node, 'children', children);
 }
 
-function wrapConfigTableCodeTokens(table, ctx) {
+function wrapTableCode(table, ctx, kind) {
   function visit(node) {
     if (node.tagName === 'code') {
-      wrapConfigCodeTokens(node, ctx);
+      wrapTableCodeTokens(node, ctx, kind);
       return;
     }
     if (node.tagName === 'pre') return;
@@ -80,6 +82,10 @@ const tablePlugin = defineHastPlugin({
         if (firstTh && /^(options?|flags?)$/i.test(ctx.textContent(firstTh).trim())) {
           addClasses(node, ctx, 'sl-table-options', 'orbit-table-options');
         }
+        if (ctx.fileURL?.pathname.endsWith('/reference/cli.md')) {
+          addClasses(node, ctx, 'orbit-cli-commands');
+          wrapTableCode(node, ctx, 'cli');
+        }
 
         const headerRow = node.children
           ?.find((child) => child.tagName === 'thead')
@@ -91,7 +97,7 @@ const tablePlugin = defineHastPlugin({
           ctx.textContent(headers[1]).trim() === 'Type, default and purpose'
         ) {
           addClasses(node, ctx, 'orbit-config-keys');
-          wrapConfigTableCodeTokens(node, ctx);
+          wrapTableCode(node, ctx, 'config');
         }
       }
     },
