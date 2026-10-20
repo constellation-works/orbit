@@ -61,6 +61,7 @@ pub use pr::PullRequestStatus;
 pub(crate) use pr::recovery_published_head;
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
+pub(crate) use remote_probe::fixed_wait;
 #[cfg(feature = "test-support")]
 pub use remote_probe::{with_remote_probe_backoff, with_vcs_retry_wait};
 pub(crate) use resume::reconcile_resumed_failure_handoff;

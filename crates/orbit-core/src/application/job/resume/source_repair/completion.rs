@@ -156,33 +156,33 @@ impl OrbitRuntime {
             }
             Ok(result.stdout.trim().to_string())
         };
+        // [ORB-17140] A base that advanced after publication is not drift.
+        // The receipts and review below stay bound to the base they judged,
+        // and the resumed `pr_complete` applies its own base-freshness and
+        // required-check gates to the published head before any merge.
         if git(&["rev-parse", "HEAD"])? != binding.head_sha
             || git(&["branch", "--show-current"])? != binding.branch
             || !git(&["status", "--porcelain"])?.is_empty()
-            || git(&[
-                "ls-remote",
-                "--exit-code",
-                "origin",
-                &format!("refs/heads/{}", binding.base_branch),
-            ])?
-            .split_whitespace()
-            .next()
-                != Some(binding.base_sha.as_str())
         {
-            return Err(refuse(
-                "completion candidate, checkout or remote base changed",
-            ));
+            return Err(refuse("completion candidate or checkout changed"));
         }
         let validation = checkpoint("validate", "candidate_validate")?;
         let commands = self.required_validation_commands();
         let policy = self
             .published_completion_policy(run_id, &[task_id.into()])?
             .ok_or_else(|| refuse("completion policy unavailable"))?;
-        if commands.is_empty()
-            || validation["decision"] != "passed"
-            || validation["tested_head"] != binding.head_sha
-            || validation["base_sha"] != binding.base_sha
-            || validation["branch"] != binding.branch
+        // A workspace that requires no command has no receipt to check, but
+        // its capture still binds the effective completion policy.
+        let validated = if commands.is_empty() {
+            validation["decision"] == "skipped_no_required_commands"
+                && validation["validation"] == json!([])
+        } else {
+            validation["decision"] == "passed"
+                && validation["tested_head"] == binding.head_sha
+                && validation["base_sha"] == binding.base_sha
+                && validation["branch"] == binding.branch
+        };
+        if !validated
             || validation["commands"] != json!(commands)
             || validation["completion_policy"] != policy
         {

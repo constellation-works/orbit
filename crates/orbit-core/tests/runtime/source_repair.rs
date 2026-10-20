@@ -46,7 +46,10 @@ use completion::{
     changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
     concurrent_and_lost_admission_keep_one_completion_budget,
     configured_review_requires_unchanged_host_certificate,
+    empty_requirements_still_bind_completion_policy,
+    moved_base_and_empty_requirements_retry_unchanged_completion,
     refused_receipts_stop_before_agent_or_republication,
+    repeated_observation_failure_escalates_after_one_retry,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
 };
@@ -843,6 +846,9 @@ crate::scenario_table!(
 crate::scenario_table!(
     published_completion_scenarios,
     unchanged_publication_retries_only_completion,
+    moved_base_and_empty_requirements_retry_unchanged_completion,
+    empty_requirements_still_bind_completion_policy,
+    repeated_observation_failure_escalates_after_one_retry,
     completion_reuse_refuses_drift,
     changed_base_gets_fresh_native_validation,
     concurrent_and_lost_admission_keep_one_completion_budget,

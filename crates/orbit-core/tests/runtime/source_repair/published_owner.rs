@@ -137,7 +137,12 @@ fn publication_inner(
     f.head = git(&checkout, &["rev-parse", "HEAD"]);
     if validated || successful {
         let validation = f.action("candidate_validate", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":f.base}));
-        assert_eq!(validation["decision"], "passed");
+        let expected = if f.runtime.workflow_required_validation_commands().is_empty() {
+            "skipped_no_required_commands"
+        } else {
+            "passed"
+        };
+        assert_eq!(validation["decision"], expected);
         if validated {
             checkpoint(f, &run.run_id, 4, "validate", validation);
             let settled = f.action("review_gate_settle", json!({"admission":{"applies":false}}));

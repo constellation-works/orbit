@@ -510,19 +510,25 @@ failed read never counts as passing required checks; the resumed completion
 reads them again.
 
 The host first authenticates the successful commit, preparation, synchronization,
-push and PR chain, exact clean checkout, current task ownership, remote branch
-lease and unchanged remote base. Native validation must have captured the same
-task meaning, command list, resolved job, effective validation environment and
-review policy. Every command needs its complete successful host-written log and
-matching artifact hash. A missing capture, empty command list, deferred result,
-known-red result or damaged receipt grants no reuse. A configured review must
-have an unchanged successful settlement and matching host certificate.
+push and PR chain, exact clean checkout on the published head and branch,
+current task ownership and remote branch lease. A base that advanced after
+publication does not refuse reuse: the receipts stay bound to the base they
+judged, and the resumed completion applies its own base-freshness and
+required-check handling to the published head. Native validation must have
+captured the same task meaning, command list, resolved job, effective
+validation environment and review policy. Every command needs its complete
+successful host-written log and matching artifact hash. A workspace with no
+`workflow.required_validation_commands` has no log to check; its
+`skipped_no_required_commands` capture must still carry the same effective
+policy. A missing capture, deferred result, known-red result or damaged receipt
+grants no reuse. A configured review must have an unchanged successful
+settlement and matching host certificate.
 
 This continuation is limited to a failed observation before any merge, automatic
 merge, post-publication rebase or repair mutation. A `delivery_preparation`
 checkpoint from a `pr_prepare` step before the first push does not exclude reuse:
-the published head, remote base and validation receipts must still match the
-completion binding. Enabling automatic source repair does not exclude an
+the published head and validation receipts must still match the completion
+binding. Enabling automatic source repair does not exclude an
 otherwise unchanged original publication. The host checks the existing
 repair admissions/publications, source-repair, infrastructure and base-update
 reservations, including pending or unreadable records. Any such task history
@@ -534,14 +540,19 @@ Refusals identify mutation provenance, the checkpoint step, the failure-activity
 checkpoint or the reviewer repair that prevented reuse. Native policy captures
 from before this provenance contract cannot authorize reuse.
 
-Current hosted checks, merge policy, PR identity and merge state are read again
-by ordinary completion. Unknown mutation replies retain the existing reconciliation path;
-they are not classified as read-only failures. The original completion deadline
-and final-recovery charge survive retries and checkpoint resumes.
+The retry waits 10 seconds before completion reads the PR again. Current hosted
+checks, merge policy, PR identity and merge state are read again by ordinary
+completion, which merges only the published head. Unknown mutation replies
+retain the existing reconciliation path; they are not classified as read-only
+failures. The original completion deadline and final-recovery charge survive
+retries and checkpoint resumes, so a run retries once. A second failed
+observation runs the failure handoff, which keeps the PR and the task in review
+and records the failure on the task.
 
-Changed task meaning, policy, base, candidate, review repairs, publication,
-ownership or lease refuses reuse and preserves the publication for explicit
-governed source repair. The agent cannot override that refusal by requesting the
+Changed task meaning, policy, candidate, review repairs, publication, ownership,
+lease or a dirty checkout refuses reuse, blocks the task with the refusal as
+its diagnosis and preserves the publication for explicit governed source
+repair. The agent cannot override that refusal by requesting the
 same stale prefix. A stopped or foreign execution cannot acquire an active
 worker's continuation
 through this check. No successful receipt is rewritten and no replacement PR is
