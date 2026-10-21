@@ -7,9 +7,10 @@
 //! `context_files_after`; the filer's are the oldest receipt's
 //! `context_files_before`, what the task declared before any pilot ran. The
 //! receipt names its pilot job run (`pilot_run_id`), whose record holds the
-//! crew and model the run resolved. A receipt written before that field is
-//! matched to the one task-pilot run active when it was written, or among
-//! several, the one whose step outputs carry its operation id.
+//! frozen activity crew draw; invocation evidence holds the pilot model. A
+//! receipt written before that field is matched to the one task-pilot run
+//! active when it was written, or among several, the one whose step outputs
+//! carry its operation id.
 
 use std::collections::BTreeSet;
 
@@ -30,7 +31,7 @@ const PILOT_ACTOR: &str = "task-pilot";
 /// The job every task-pilot run (scheduled, drain or CI sweep) belongs to.
 const PILOT_JOB: &str = "task_pilot_pipeline";
 /// The pilot run behind an assessment: its id, the crew and model its
-/// record resolved (either `None` when it recorded none) and how long it ran.
+/// activity recorded (either `None` when it recorded none) and how long it ran.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(in crate::application) struct PilotRun {
     pub(in crate::application) run_id: String,
@@ -64,15 +65,32 @@ impl PilotRuns {
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "pilot scorecard: task-pilot runs unreadable");
                 Vec::new()
-            })
+            });
+        let crews = runtime
+            .recorded_run_crews(runs.iter())
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "pilot scorecard: recorded crews unreadable");
+                Default::default()
+            });
+        let ids = runs
+            .iter()
+            .map(|run| run.run_id.to_string())
+            .collect::<Vec<_>>();
+        let mut models = runtime
+            .recorded_activity_models("task_pilot", &ids)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "pilot scorecard: invocation models unreadable");
+                Default::default()
+            });
+        let runs = runs
             .into_iter()
             .map(|run| RunRecord {
                 started_at: run.started_at,
                 finished_at: run.finished_at,
                 run: PilotRun {
                     run_id: run.run_id.to_string(),
-                    crew: run.resolved_crew,
-                    model: run.crew_model,
+                    crew: crews.crews(&run, None).into_iter().next(),
+                    model: models.remove(run.run_id.as_str()).flatten(),
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
                         (end - start).num_milliseconds().max(0) as f64 / 1000.0
                     }),

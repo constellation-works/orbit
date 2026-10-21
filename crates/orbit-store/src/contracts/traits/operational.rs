@@ -208,6 +208,16 @@ pub trait InvocationStoreBackend: Send + Sync {
         &self,
         filter: &InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError>;
+    /// Latest recorded model per run for one activity in one workspace.
+    /// Reads only invocation identity/model columns, without task/tool hydration.
+    /// A latest invocation with no model stays unknown, even if an older one
+    /// recorded a model. Runs with no invocation are absent.
+    fn latest_activity_models(
+        &self,
+        workspace_id: &str,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Option<String>>, OrbitError>;
     fn list_invocation_accounting_facts(
         &self,
         query: &InvocationAccountingQuery,
