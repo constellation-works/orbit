@@ -31,6 +31,19 @@ use super::paths::{
     canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
 };
 
+/// Admit only review decisions understood by the merge gate. Keep the caller's
+/// case and alias, trimming only the surrounding whitespace; empty clears.
+fn validate_pr_status(value: &str) -> Result<Option<String>, OrbitError> {
+    let value = value.trim();
+    match orbit_engine::normalize_review_decision(value).as_str() {
+        "" => Ok(None),
+        "APPROVED" | "CHANGES_REQUESTED" => Ok(Some(value.to_string())),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
+        ))),
+    }
+}
+
 /// Canonicalize an artifact a caller other than the review gate's system
 /// writer supplies, and refuse it in the reserved review namespace. Gate
 /// records are certificates and authority, not agent claims, so every
@@ -784,6 +797,9 @@ impl OrbitRuntime {
             for criterion in criteria {
                 *criterion = redact_all(criterion);
             }
+        }
+        if let Some(Some(value)) = &params.pr_status {
+            params.pr_status = Some(validate_pr_status(value)?);
         }
         let context_root = context_workspace_root(&self.paths().repo_root, None);
         if let Some(candidates) = params.context_files.take() {

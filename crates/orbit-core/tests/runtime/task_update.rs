@@ -296,11 +296,152 @@ fn automation_persists_returned_summary_crew_and_run_history_without_status_chan
     );
 }
 
+fn pr_status_updates_share_admission_and_trim_before_storage() {
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Review decision admission".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = runtime.get_task(&task.id).unwrap();
+    let history = runtime.get_task_history(&task.id).unwrap();
+    let comments = runtime.get_task_comments(&task.id).unwrap();
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id, "pr_status": "aproved", "title": "must not persist",
+                "comment": "must not persist", "model": "codex"
+            }),
+            None,
+            Some("codex".into()),
+        )
+        .expect_err("MCP typo must be refused atomically");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    assert!(
+        error.to_string().contains("unknown PR status 'aproved'"),
+        "{error}"
+    );
+    assert_eq!(runtime.get_task(&task.id).unwrap(), before);
+    assert_eq!(runtime.get_task_history(&task.id).unwrap(), history);
+    assert_eq!(runtime.get_task_comments(&task.id).unwrap(), comments);
+
+    for (value, normalized) in [
+        ("approve", "APPROVED"),
+        ("approved", "APPROVED"),
+        ("request-changes", "CHANGES_REQUESTED"),
+        ("request_changes", "CHANGES_REQUESTED"),
+        ("changes-requested", "CHANGES_REQUESTED"),
+        ("changes_requested", "CHANGES_REQUESTED"),
+        (" APPROVED ", "APPROVED"),
+        (" ApPrOvEd ", "APPROVED"),
+        (" ReQuEsT-ChAnGeS ", "CHANGES_REQUESTED"),
+        ("", ""),
+        ("   ", ""),
+    ] {
+        assert_eq!(
+            orbit_engine::normalize_review_decision(value),
+            normalized,
+            "{value:?}"
+        );
+        if value.trim().is_empty() {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        pr_status: Some(Some("approve".into())),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        runtime
+            .execute_tool_command(
+                "orbit.task.update",
+                json!({
+                    "id": task.id, "pr_status": value, "model": "codex"
+                }),
+                None,
+                Some("codex".into()),
+            )
+            .unwrap();
+        let expected = (!value.trim().is_empty()).then(|| value.trim().to_string());
+        assert_eq!(
+            runtime.get_task(&task.id).unwrap().pr_status,
+            expected,
+            "MCP {value:?}"
+        );
+        // The direct runtime boundary must not depend on adapter parsing.
+        if value.trim().is_empty() {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        pr_status: Some(Some("approve".into())),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    pr_status: Some(Some(value.into())),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.get_task(&task.id).unwrap().pr_status,
+            expected,
+            "runtime {value:?}"
+        );
+    }
+    runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id, "pr_status": "approve", "model": "codex"
+            }),
+            None,
+            Some("codex".into()),
+        )
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                pr_status: Some(None),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(runtime.get_task(&task.id).unwrap().pr_status, None);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
     activity_updates_refuse_replica_writes_and_preserve_owner_updates,
     guarded_start_and_activity_notes_redact_before_persistence,
     rejected_artifacts_leave_status_document_and_history_unchanged,
-    automation_persists_returned_summary_crew_and_run_history_without_status_change
+    automation_persists_returned_summary_crew_and_run_history_without_status_change,
+    pr_status_updates_share_admission_and_trim_before_storage
 );

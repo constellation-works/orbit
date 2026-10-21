@@ -611,27 +611,42 @@ fn task_update_refuses_empty_updates_and_unknown_pr_statuses() {
         .args(["task", "update", &id, "--pr-status", "aproved"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("approve"));
+        .stderr(predicate::str::contains("unknown PR status 'aproved'"));
     let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
     assert!(
         shown["pr_status"].is_null(),
         "a rejected value must not be persisted: {shown}"
     );
 
-    fixture
-        .orbit()
-        .args(["task", "update", &id, "--pr-status", "approve"])
-        .assert()
-        .success();
-    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
-    assert_eq!(shown["pr_status"], "approve");
-    fixture
-        .orbit()
-        .args(["task", "update", &id, "--pr-status", ""])
-        .assert()
-        .success();
-    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
-    assert!(shown["pr_status"].is_null(), "empty clears: {shown}");
+    for value in [
+        "approve",
+        "approved",
+        "request-changes",
+        "request_changes",
+        "changes-requested",
+        "changes_requested",
+        " APPROVED ",
+        " ApPrOvEd ",
+        " ReQuEsT-ChAnGeS ",
+        "",
+        "   ",
+    ] {
+        if value.trim().is_empty() {
+            fixture
+                .orbit()
+                .args(["task", "update", &id, "--pr-status", "approve"])
+                .assert()
+                .success();
+        }
+        fixture
+            .orbit()
+            .args(["task", "update", &id, "--pr-status", value])
+            .assert()
+            .success();
+        let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
+        let expected = (!value.trim().is_empty()).then_some(value.trim());
+        assert_eq!(shown["pr_status"], serde_json::json!(expected), "{value:?}");
+    }
 }
 
 #[test]

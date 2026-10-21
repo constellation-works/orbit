@@ -191,6 +191,9 @@ pub struct TaskUpdateParams {
     pub source_task_id: Option<Option<String>>,
     pub planned_by: Option<Option<String>>,
     pub implemented_by: Option<Option<String>>,
+    /// Review decision understood by the merge gate, matched without case.
+    /// Surrounding whitespace is trimmed; case and alias spelling are preserved.
+    /// `Some(None)` or an empty string clears; `None` leaves it unchanged.
     pub pr_status: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
     pub crew: Option<Option<String>>,

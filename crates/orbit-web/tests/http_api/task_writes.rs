@@ -400,3 +400,62 @@ fn assert_approval_refused(server: &Server, id: &str, run_id: &str) {
     assert_eq!(after["comments"], before["comments"], "{after}");
     assert_eq!(after["history"], before["history"], "{after}");
 }
+
+/// PATCH rejects an unknown decision atomically and shares the core storage contract.
+#[test]
+fn dashboard_pr_status_admission() {
+    isolated("task_writes::dashboard_pr_status_admission", || {
+        let fixture = Fixture::new();
+        let id = seed(&fixture, "Review decision admission", TaskStatus::Proposed);
+        let server = fixture.server(true);
+        let uri = format!("/api/tasks/{id}{WORKSPACE}");
+        let before = json_ok(server.get(&uri));
+        let refused = server.send(
+            "PATCH",
+            &uri,
+            json!({
+                "pr_status": "aproved", "title": "must not persist", "comment": "must not persist"
+            }),
+        );
+        assert_eq!(refused.status().as_u16(), 400);
+        let body: Value = refused.json().unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("unknown PR status 'aproved'"),
+            "{body}"
+        );
+        let after = json_ok(server.get(&uri));
+        for field in ["title", "pr_status", "comments", "history"] {
+            assert_eq!(after[field], before[field], "{field}");
+        }
+        for value in [
+            "approve",
+            "approved",
+            "request-changes",
+            "request_changes",
+            "changes-requested",
+            "changes_requested",
+            " APPROVED ",
+            " ApPrOvEd ",
+            " ReQuEsT-ChAnGeS ",
+            "",
+            "   ",
+        ] {
+            if value.trim().is_empty() {
+                json_ok(server.send("PATCH", &uri, json!({"pr_status": "approve"})));
+            }
+            json_ok(server.send("PATCH", &uri, json!({"pr_status": value})));
+            let expected = (!value.trim().is_empty()).then_some(value.trim());
+            assert_eq!(
+                json_ok(server.get(&uri))["pr_status"],
+                json!(expected),
+                "{value:?}"
+            );
+        }
+        json_ok(server.send("PATCH", &uri, json!({"pr_status": "approve"})));
+        json_ok(server.send("PATCH", &uri, json!({"pr_status": null})));
+        assert!(json_ok(server.get(&uri))["pr_status"].is_null());
+    });
+}

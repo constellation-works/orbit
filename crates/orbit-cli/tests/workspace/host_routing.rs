@@ -741,6 +741,75 @@ fn hinted_commands(message: &str) -> Vec<String> {
 fn routed_task_update_refusals_offer_a_command_that_works() {
     let routed = Routed::new();
     let id = routed.remote_task.as_str();
+    let selector = routed.bravo_selector();
+    let before = routed.remote_runtime.get_task(id).unwrap();
+    for route in [
+        vec!["--workspace", selector.as_str()],
+        vec!["--host", "bravo", "--workspace", "bravo-ws"],
+    ] {
+        routed.take_remote_argv();
+        let mut args = vec!["task", "update", id, "--pr-status", "aproved", "--json"];
+        args.extend(route);
+        let (code, message) = routed.refused(&args);
+        assert_eq!(code, "invalid_input", "{message}");
+        assert!(message.contains("unknown PR status 'aproved'"), "{message}");
+        assert_eq!(routed.remote_runtime.get_task(id).unwrap(), before);
+        // The qualified selector needs no discovery call. Starting an MCP
+        // session here proves the CLI did not refuse the typo before routing.
+        assert!(
+            routed
+                .take_remote_argv()
+                .iter()
+                .any(|arg| arg.contains("mcp")),
+            "unknown statuses must reach the destination's core validation"
+        );
+    }
+    for value in [
+        "approve",
+        "approved",
+        "request-changes",
+        "request_changes",
+        "changes-requested",
+        "changes_requested",
+        " APPROVED ",
+        " ApPrOvEd ",
+        " ReQuEsT-ChAnGeS ",
+        "",
+        "   ",
+    ] {
+        if value.trim().is_empty() {
+            routed.json(&[
+                "task",
+                "update",
+                id,
+                "--host",
+                "bravo",
+                "--workspace",
+                "bravo-ws",
+                "--pr-status",
+                "approve",
+                "--json",
+            ]);
+        }
+        routed.json(&[
+            "task",
+            "update",
+            id,
+            "--host",
+            "bravo",
+            "--workspace",
+            "bravo-ws",
+            "--pr-status",
+            value,
+            "--json",
+        ]);
+        let expected = (!value.trim().is_empty()).then(|| value.trim().to_string());
+        assert_eq!(
+            routed.remote_runtime.get_task(id).unwrap().pr_status,
+            expected,
+            "{value:?}"
+        );
+    }
     let bravo_before = routed.comments_on_bravo(id);
     routed.take_remote_argv();
     let ssh_argv = |hint: &str| {
