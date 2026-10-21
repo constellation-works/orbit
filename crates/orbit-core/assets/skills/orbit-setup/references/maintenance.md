@@ -57,9 +57,12 @@ orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=72
 orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=0   # everything not in use
 ```
 
-Set the default for a workspace by editing `scratch_older_than_hours` in the
-seeded job under `~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`. A run
-scoped to one run id (`target_run_id`) leaves scratch alone.
+Set a workspace-specific default by editing `scratch_older_than_hours` in the
+workspace copy at `.orbit/resources/jobs/worktree_gc_pipeline.yaml`. To set a
+host-wide default, edit the shipped job at
+`~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`; local edits there are
+preserved instead of refreshed from upstream. A run scoped to one run id
+(`target_run_id`) leaves scratch alone.
 
 Symlinks are removed as links and never followed out of `.orbit/tmp`. GC skips,
 and reports with a reason, any entry that a live process holds open, uses as its
