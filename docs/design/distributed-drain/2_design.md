@@ -48,7 +48,11 @@ its tasks. The federated mux cannot detect the collision; this is a runbook step
 The **ready queue** is a logical owner-side query over `backlog` tasks whose dependencies are all
 `done`, ordered by the automatic-dispatch comparator (corrective tags, task-ID tie-breaker). No
 materialized table is required; any projection is advisory until admission revalidates it.
-Followers never compute readiness or priority.
+Followers never compute readiness or priority. Pull admission adds owner-relative OS affinity
+inside a priority ([ORB-14938]). The planned
+[scarcity-aware order](./specs/task-pull.md#scarcity-aware-order-planned) ([ORB-17304]) widens
+this: work only the requesting executor can run leads its band, judged against the live
+executor census.
 
 `orbit.task.pull` is an owner-only `control_plane` tool; its contract is
 [specs/task-pull.md](./specs/task-pull.md). Candidate selection, readiness and footprint
@@ -1444,6 +1448,10 @@ Acceptance criteria, not reported as passing.
   demoted host's drains and coordination routines must be quiesced before replica pull.
 - **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial
   landing and per-host compiler caches.
+- **Placement is first-fit and capacity-blind.** Admission takes the first eligible task in the
+  owner's order for the requesting executor. Until [ORB-17304] lands, a scarce host (the only
+  one running a crew or OS) takes fungible work while work only it can run waits. Even after
+  that, the census tracks liveness, not free slots.
 - **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References
@@ -1482,5 +1490,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-16322] — handed an inherited check that still fails after the one branch update, on a base tip where the same job passes, to that same one automatic repair.
 - [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
 - [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
+- [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
+- [ORB-17304] — plans the scarcity-aware admission order against the live executor census (§2, §9).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

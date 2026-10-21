@@ -8,7 +8,7 @@ status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149, ORB-14192]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149, ORB-14192, ORB-14938, ORB-17304]
 ---
 
 # Spec: `orbit.task.pull`
@@ -45,6 +45,8 @@ The queue is a logical owner-side query, not a required maintained table:
   same expiring frozen-batch set as local dispatch. Before age, it prefers work whose OS
   requirement the executor satisfies but the owner does not. This affinity never crosses a
   band, priority or expiry boost; owner-local admission retains local dispatch order.
+  [ORB-14938] added this affinity. [ORB-17304] (planned) replaces it with the
+  [scarcity-aware order](#scarcity-aware-order-planned) below.
 - **Validation:** selection, dependency checks, current status, canonicalized own `context_files`,
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
@@ -65,6 +67,48 @@ executor can run (`crews`, below) [ORB-13941], and the owner skips a ready candi
 cannot run — its own `task.crew`, or the executor's `default_crew` for a task naming none. The
 skipped task keeps its place in the owner's order for the owner or another follower. The owner
 still orders every admission; the declaration only narrows what this executor is offered.
+
+### Scarcity-aware order (planned)
+
+Status: planned in [ORB-17304]. Nothing below is live until that task lands. The reasoning is
+[Admission prefers work only the requesting executor can run](../4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run).
+
+Admission is first-fit over the canonical order, and executor capability is only a pass/fail
+filter. So a scarce executor takes fungible work while work only it can run waits. Observed
+2026-10-20: the Mac was the only host running the `opus` crew, and it still took the first
+fungible task while opus-assigned and `os:macos` tasks queued.
+
+- **Executor census.** At each admission the owner lists the workspace's live executors:
+  - each follower whose latest admission request, read from its stored receipt, falls inside
+    a bounded liveness window and whose drain run is still open;
+  - the owner itself, while an owner-local drain is live.
+
+  Each entry carries the capability its request already declares: `os`, `crews` and
+  `browser_kit`. It leaves out `admissible`, the per-pass load-forecast fit. The census adds no
+  wire field and changes neither the request fingerprint nor the protocol schema.
+- **Eligible set.** For a candidate, the eligible set is the live executors that pass the same
+  capability predicates the screen applies. Those are the effective OS requirement (`os:` tags
+  intersected with the crew executor's `host_os`), the browser kit, and crew runnability. One
+  shared predicate serves both eligibility and affinity, so they cannot disagree.
+- **Order.** `band → exclusive to the requester → priority → expiry → fewer eligible executors
+  → age → task ID`.
+  - A task is *exclusive* when the requester is its only eligible live executor. Exclusivity
+    crosses priority but never band: critical and corrective work still leads.
+  - The eligible-executor count replaces the owner-relative OS affinity as a within-priority
+    tiebreak.
+- **Degenerate cases.** If the census holds only the requester, every candidate ties on both
+  new keys, and the order is the canonical one. If the census cannot be read, admission falls
+  back to the canonical order; that is not an error.
+- **Owner-local admission** uses the same comparator with the owner as the requester, so local
+  and pull dispatch cannot disagree for the same census.
+- **Policy.** A workspace setting chooses how far exclusivity reaches:
+  - `band` (default): the order above;
+  - `priority`: exclusivity counts only within the same priority;
+  - `off`: no affinity at all, the canonical order alone.
+- **Explainability.** The receipt records, for the admitted task, its affinity class and the
+  census machine ids it was ordered against.
+- **Limitation.** There is no capacity awareness. A fungible high-priority task can wait while
+  the only other executor that could run it is saturated. `priority` mode bounds this.
 
 ## Class and routing
 
@@ -493,7 +537,9 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
 - The owner alone orders work; invalid, conflicting, in-flight, OS-incompatible, crew-incompatible,
   and owner-held candidates are deferred or excluded with diagnostics. Follower capability
-  declarations may narrow eligibility but never reorder the owner's work.
+  declarations may narrow eligibility but never reorder the owner's work. Under the planned
+  [scarcity-aware order](#scarcity-aware-order-planned) the owner itself derives affinity from the
+  declarations of live executors. A follower still cannot ask for an order.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.
 - Trusted invocation context fences execution machine and bound run; host labels confer no rights.
 - Reassignment invalidates former attempt writes and landing authority before a new admission.

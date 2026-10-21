@@ -1,17 +1,17 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-06
+last_updated: 2026-10-20
 last_validated: 2026-10-12
 status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, non-pruning footprints, and scarcity-aware admission order.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks/"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247]
+related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247, ORB-14938, ORB-17304]
 ---
 
 # Distributed Drain — Decisions
@@ -730,6 +730,50 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 - Cost: a tagged run that edits files can race an implementation task on the same paths. The race is visible at `sync_base`, not prevented by admission. A mistagged implementation task therefore no longer serializes its neighbours.
 - Cost: the empty reservation means `orbit task locks` does not show the tagged task's selectors as held. Operators inspecting locks will not see that review as a holder, which is the point of the exemption.
 
+## Admission prefers work only the requesting executor can run
+
+**Recorded:** 2026-10-20 · [ORB-17304] (planned; refines [ORB-14938])
+**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_for_host`, `crates/orbit-store/src/repository/task/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`
+
+### Context
+
+Admission is first-fit over one canonical order. Executor capability (OS, crews, browser kit)
+only filters candidates. [ORB-14938] added one preference: within the same band and priority,
+work the executor's OS satisfies and the owner's does not. That rule compares against the owner
+alone, reads `os:` tags but not crew-derived `host_os`, knows nothing of crews, and yields to any
+higher-priority fungible task. On 2026-10-20 the Mac was the only host running the `opus` crew.
+dk-server-1 and the owner could not run it. The Mac kept taking fungible work that the Linux
+hosts would have taken on their next pass, while opus-assigned and `os:macos` work waited.
+Throughput was lost on the scarce host, not the plentiful ones.
+
+### Decision
+
+The owner orders each admission against the workspace's *live executor census*: the recent
+admission requests of followers whose drains are still open, plus the owner while a local drain
+runs. A candidate that only the requester can run sorts first within its band, ahead of higher
+priorities. Among the rest, fewer eligible executors sorts first within a priority. Band stays
+the outer key. Owner-local admission uses the same comparator. A workspace setting
+(`band` | `priority` | `off`) bounds how far exclusivity reaches. The contract is the
+[scarcity-aware order](./specs/task-pull.md#scarcity-aware-order-planned).
+
+The owner still holds ordering authority. Followers declare capability, as before, and the owner
+derives the order from those declarations. Placement stays pull-based: the owner never pushes
+work at a host ([Followers pull; the owner never places](#followers-pull-the-owner-never-places)).
+
+### Consequences
+
+- A scarce host spends its slots on work no other live host can take. Fungible work stays for
+  the hosts that can run it.
+- A census of one executor reproduces the canonical order, so single-host workspaces see no change.
+- Order now depends on which executors are live. The same backlog can admit in a different order
+  as drains start and stop. Receipts record the census they were ordered against.
+- Cost: priority inversion inside a band. A medium task exclusive to the requester beats a high
+  fungible task, even when every other executor that could run the high task is saturated. The
+  census tracks liveness, not free capacity. `priority` mode is the escape hatch.
+- Cost: every admission reads the census and evaluates each candidate's capability predicates
+  against every live executor. That cost grows with backlog size × live executors, which is small
+  today.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
@@ -740,6 +784,8 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 - [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
 - [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
 - [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
+- [ORB-14938] — added owner-relative OS affinity to pull admission, refined by [Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run).
+- [ORB-17304] — planned scarcity-aware admission order ([Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run)).
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
