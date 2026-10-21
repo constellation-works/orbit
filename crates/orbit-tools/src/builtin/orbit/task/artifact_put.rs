@@ -88,10 +88,11 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
         normalized_source_path
     };
     let artifact_path = input.optional_string("path")?;
-    let resolved_source_path = confine_source_path(
-        ctx,
-        &resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path),
-    )?;
+    let resolved = resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path);
+    if let Some(error) = checkout_root_source_hint(ctx, &source_path, &resolved) {
+        return Err(error);
+    }
+    let resolved_source_path = confine_source_path(ctx, &resolved)?;
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
     validate_review_report(&artifact)?;
 
@@ -199,6 +200,32 @@ fn resolve_source_path(cwd: Option<&Path>, source_path: &str) -> PathBuf {
         return path;
     }
     cwd.map(|cwd| cwd.join(&path)).unwrap_or(path)
+}
+
+/// A relative `source_path` is read from the caller's current directory. An
+/// agent working in a scratch folder often repeats the checkout-relative
+/// prefix, which doubles the path and misses the file. When the same relative
+/// path names a confined regular file at the checkout root, refuse and name
+/// that file's absolute path. Nothing is attached, and filename semantics stay
+/// exact. Missing at both locations keeps the ordinary read error.
+fn checkout_root_source_hint(
+    ctx: &ToolContext,
+    source_path: &str,
+    resolved: &Path,
+) -> Option<OrbitError> {
+    if Path::new(source_path).is_absolute() || resolved.exists() {
+        return None;
+    }
+    let workspace_root = ctx.workspace_root.as_deref()?.canonicalize().ok()?;
+    let candidate = confine_source_path(ctx, &workspace_root.join(source_path)).ok()?;
+    if !candidate.is_file() {
+        return None;
+    }
+    Some(OrbitError::InvalidInput(format!(
+        "source_path '{source_path}' does not exist under the current directory '{}', but the same relative path names a file at the checkout root; pass the absolute source_path '{}' instead",
+        ctx.cwd.as_deref().unwrap_or("."),
+        candidate.display()
+    )))
 }
 
 /// Symlink-safe workspace containment for a caller-local artifact source.

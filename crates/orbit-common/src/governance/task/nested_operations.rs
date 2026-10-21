@@ -33,12 +33,13 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
                 "source_path",
                 ParamType::String,
                 "Source file to store as a task artifact. Resolved against the \
-                    caller cwd, then confined to the workspace checkout after symlink \
-                    resolution. Absolute paths and symlinks that escape the workspace are \
+                    caller cwd, not the checkout root, so a file that exists only at the \
+                    checkout root is refused with the absolute path to pass. Then confined \
+                    to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are \
                     rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
                     sources under `/tmp` are outside the workspace and are refused.",
                 CliArgKind::Positional,
-                "Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
+                "Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
             ),
             &["sourcePath", "source-path"],
         )),
