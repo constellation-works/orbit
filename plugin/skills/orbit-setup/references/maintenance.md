@@ -64,9 +64,12 @@ scoped to one run id (`target_run_id`) leaves scratch alone.
 Symlinks are removed as links and never followed out of `.orbit/tmp`. GC skips,
 and reports with a reason, any entry that a live process holds open, uses as its
 working directory or executes (read from `/proc` on Linux and `lsof` on macOS —
-best effort, so another user's processes are not visible), or whose path an
-active run's record or state names. When it cannot tell, it skips. A failure
-removing an entry skips that entry and the sweep continues.
+best effort, so another user's processes are not visible), or whose path a
+pending, running or retrying run's record or saved pipeline state names.
+Retrying runs keep their scratch while waiting for another attempt. If the
+run inventory or any required saved state cannot be read, the scratch sweep
+fails before deleting any entry. A failure removing an entry skips that entry
+and the sweep continues.
 
 `orbit run show <run> --json` carries the figures under the `reap` step's
 `scratch` object, beside the worktree figures: `bytes_reclaimed`,
