@@ -206,7 +206,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"./automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-2 schema has these required fields:
@@ -216,11 +216,11 @@ The version-2 schema has these required fields:
 | `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 2. |
 | `action_id`, `attempt`, `coverage` | This admitted action and examination class. |
 | `from_exclusive`, `through_inclusive` | Exact objects, each with `commit` and `tree`. |
-| `examined_commits`, `examined_deliveries` | Complete ordered lists from the input. |
+| `examined_commits`, `examined_deliveries` | Complete ordered arrays of commit-SHA and delivery-key strings from the input, not frozen objects. |
 | `examination_complete` | True only when all obligations were examined. |
 | `delivery_examinations` | One entry per frozen delivery, described below. |
-| `checks` | Nonempty array of nonempty `subject`, `method`, `observation` objects. |
-| `findings` | Array of finding references/descriptions; it may be empty. |
+| `checks` | Nonempty array of objects with nonempty string `subject`, `method` and `observation` fields. |
+| `findings` | Array of finding reference/description strings; it may be empty. |
 
 Each `delivery_examinations` entry names its `delivery` key and records what
 the reviewer read:
@@ -252,10 +252,30 @@ active attempt.
 
 `orbit.task.artifact.put` — and any task update attaching
 `automation-coverage.json` — refuses a file that does not parse as this schema
-and stores nothing, returning the exact parse error (for example `invalid type:
-map, expected a string at line 137 column 4`) so the executor can fix and re-put
-it inside its run. Parsing is the only check at put time; identity, membership,
-completeness and authority are validated when the action settles.
+and stores nothing, returning the field/index and parse error (for example
+`checks[0].observation: invalid type: map, expected a string at line 137 column 4`).
+Correct that field using the assigned task's evidence template, preserve its
+version and frozen identity, then re-put the corrected file inside its run.
+Parsing is the only check at put time; identity, membership, completeness and
+authority are validated when the action settles.
+
+For example, the following checks/findings fragment has the correct element
+shapes. Replace the examples with actual observations and finding references;
+use `"findings": []` when there are no findings. Batch/action IDs, `consumer`,
+`epoch`, `input_digest` and each `commit`, `tree`, delivery key, path and finding
+reference are strings, not copies of frozen objects. Verdict findings also contain task-ID strings:
+`{"findings":["<finding task ID>"]}`.
+
+```json
+{
+  "checks": [{
+    "subject": "src/lib.rs",
+    "method": "git diff <before> <after> -- src/lib.rs",
+    "observation": "The error branch drops the caller's retry token."
+  }],
+  "findings": ["<finding task ID>: retry token lost; introduced by <culprit task ID> at <commit SHA>"]
+}
+```
 
 Unknown fields, changed identities, partial membership, empty checks, unavailable
 source objects or false completion cannot advance coverage. Findings may remain
