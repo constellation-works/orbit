@@ -8,20 +8,31 @@ export async function assertRunTaskLabels(page, evidence) {
     const { setActiveTab } = await import('/js/router.js');
     setWorkspace('one');
     persistScopeToUrl();
+    const pilotTask = {
+      id: 'RUN-TASK-PILOT', title: 'Task held by pilot findings', status: 'proposed', priority: 'medium',
+      pilot_warnings: [{ kind: 'utility_warnings', text: 'Fixture warning that must appear on the task' }],
+    };
     globalThis.runTaskFixture = {
       previousFetch: globalThis.fetch,
       task: { id: 'RUN-TASK-1', title: 'A long delivered task title <b>shown as text</b> '.repeat(8), status: 'done', priority: 'medium' },
+      pilotTask,
+      taskListRequests: [],
     };
     globalThis.fetch = async (input, options) => {
       const url = new URL(input, window.location.href);
-      const { task, previousFetch } = globalThis.runTaskFixture;
+      const { task, pilotTask, previousFetch } = globalThis.runTaskFixture;
       const labels = [{ id: task.id, title: task.title }];
       const run = { run_id: 'jrun-task-label', job_id: 'task_pr_pipeline', state: 'success', task_ids: [task.id], tasks: labels,
         child_dispatches: [{ child_run_id: 'jrun-child-label', job_name: 'task_pr_pipeline', phase: 'submitted', task_ids: [task.id], tasks: labels }] };
       const response = payload => ({ ok: true, status: 200, json: async () => payload });
       if (url.pathname === '/api/job-runs') return response({ items: [run, { run_id: 'jrun-plain', job_id: 'maintenance', state: 'success', task_ids: null, tasks: null }], total: 2, limit: 25 });
-      if (url.pathname === '/api/tasks') return response({ items: [task], total: 1, limit: 50 });
+      if (url.pathname === '/api/tasks') {
+        globalThis.runTaskFixture.taskListRequests.push(url.search);
+        const items = url.searchParams.get('pilot') === 'warnings' ? [pilotTask] : [task];
+        return response({ items, total: items.length, limit: 50 });
+      }
       if (url.pathname === `/api/tasks/${task.id}`) return response(task);
+      if (url.pathname === `/api/tasks/${pilotTask.id}`) return response(pilotTask);
       if (url.pathname === '/api/runs/jrun-task-label') return response({ run, steps: [] });
       if (url.pathname.startsWith('/api/runs/jrun-task-label/')) return response([]);
       return previousFetch(input, options);
@@ -121,8 +132,35 @@ export async function assertRunTaskLabels(page, evidence) {
     await page.locator('#run-detail-meta .run-detail-actions .back-action').click();
     await page.waitForFunction(() => location.hash.startsWith('#jobs/history'));
     if (new URL(page.url()).search !== historyFilters) throw new Error('Back to Jobs History changed the run filters or scope');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?status=proposed&pilot=warnings'));
+    const pilotRow = page.locator('#tasks-body .row[data-key="task-RUN-TASK-PILOT"]');
+    await pilotRow.waitFor({ state: 'visible' });
+    const pilotFilterState = await page.evaluate(() => {
+      const filter = document.querySelector('#task-filter [data-role="pilot-warnings"]');
+      const requests = globalThis.runTaskFixture.taskListRequests.map(search => new URLSearchParams(search));
+      return {
+        active: filter?.getAttribute('aria-pressed') === 'true',
+        requested: requests.some(params => params.get('status') === 'proposed' && params.get('pilot') === 'warnings'),
+        route: location.hash,
+      };
+    });
+    if (!pilotFilterState.active || !pilotFilterState.requested || !pilotFilterState.route.includes('pilot=warnings')) {
+      throw new Error(`Pilot warnings filter must reach the proposed task query: ${JSON.stringify(pilotFilterState)}`);
+    }
+    const pilotBadge = pilotRow.locator('.pilot-warning-chip');
+    if (await pilotBadge.getAttribute('aria-label') !== 'Pilot warnings: 1 holding findings') {
+      throw new Error(`The task row must expose its holding-finding count: ${await pilotBadge.getAttribute('aria-label')}`);
+    }
+    await pilotRow.locator('.title').click();
+    const pilotDetail = page.locator('#task-detail-body .pilot-warnings');
+    await pilotDetail.waitFor({ state: 'visible' });
+    const pilotFinding = await pilotDetail.locator('.pilot-warning-findings').textContent();
+    if (!pilotFinding.includes('Utility: Fixture warning that must appear on the task')) {
+      throw new Error(`The task detail must show its pilot finding: ${pilotFinding}`);
+    }
     await page.evaluate(async () => (await import('/js/runs.js')).setRunFilter('all'));
-    fs.writeFileSync(path.join(evidence, 'run-task-result.json'), JSON.stringify({ column: true, truncatedTitle: true, taskNavigation: true, header: true, childLabels: true, mobile: true, jobsHistoryBackLink: true, preservedFilters: true }));
+    fs.writeFileSync(path.join(evidence, 'run-task-result.json'), JSON.stringify({ column: true, truncatedTitle: true, taskNavigation: true, header: true, childLabels: true, mobile: true, jobsHistoryBackLink: true, preservedFilters: true, pilotWarningsFilter: true, pilotWarningRowBadge: true, pilotWarningDetail: true }));
   } finally {
     await page.evaluate(() => {
       if (globalThis.runTaskFixture) globalThis.fetch = globalThis.runTaskFixture.previousFetch;
