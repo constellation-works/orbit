@@ -556,7 +556,22 @@ fn collect_failed_leaf_causes_from(
             Err(OrbitError::NotFound { .. }) => continue,
             Err(error) => return Err(error),
         };
-        let child_state = runtime.read_run_state(&child.run_id)?;
+        let child_state = match runtime.read_run_state(&child.run_id) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.cli.run",
+                    run_id = %child.run_id,
+                    %error,
+                    "pipeline checkpoint unreadable; run shown without it"
+                );
+                eprintln!(
+                    "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
+                    child.run_id
+                );
+                None
+            }
+        };
         collect_failed_leaf_causes_from(
             runtime,
             &child,
@@ -583,9 +598,11 @@ fn collect_failed_leaf_causes_from(
     // the one that failed, even when the stored step only wraps that failure.
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let audit_error = audit_steps.iter().rev().find(|step| {
-        step.error_message
-            .as_deref()
-            .is_some_and(|message| !message.is_empty())
+        step.state.as_deref() != Some("skipped")
+            && step
+                .error_message
+                .as_deref()
+                .is_some_and(|message| !message.is_empty())
     });
     let stored_error = run.steps.iter().rev().find(|step| {
         step.state != JobRunState::Skipped
