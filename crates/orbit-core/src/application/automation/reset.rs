@@ -40,11 +40,23 @@ pub fn reset_auto_task(
     let epoch = ownership::auto_task_epoch(definition, &trigger)?;
 
     // The baseline is read from the configured branch, not the executor's
-    // HEAD: it is the position the next evaluation will actually seed at.
+    // HEAD. Preserve remote-first resolution, but let operator reset and
+    // teardown proceed from the local ref when origin no longer serves it.
     let source = Source::new(&runtime.paths().repo_root);
-    let (_, baseline) = source
-        .head(&trigger.branch)
-        .map_err(automation_error_to_orbit)?;
+    let baseline = match source.head(&trigger.branch) {
+        Ok((_, baseline)) => baseline,
+        Err(error) => {
+            tracing::warn!(
+                branch = %trigger.branch,
+                %error,
+                "reset source fetch unavailable; using local branch head"
+            );
+            source
+                .local_head(&trigger.branch)
+                .map(|(_, baseline)| baseline)
+                .map_err(automation_error_to_orbit)?
+        }
+    };
 
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
