@@ -462,9 +462,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   };
   let hash;
   if (top === "drain") {
-    const mode = segments[1] === "log" ? "log" : "drain";
+    const mode = ["log", "start"].includes(segments[1]) ? segments[1] : "drain";
     if (ctx.setDrainView) ctx.setDrainView(mode);
-    hash = mode === "log" ? "#drain/log" : "#drain";
+    hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
   } else if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();

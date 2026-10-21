@@ -82,3 +82,72 @@ fn global_host_resources_work_without_a_selected_workspace_and_use_global_settin
         },
     );
 }
+
+/// The relative module specifiers `source` imports, statically or dynamically.
+fn relative_imports(source: &str) -> Vec<&str> {
+    let mut specs = Vec::new();
+    for opener in ["from '", "from \"", "import('", "import(\""] {
+        let quote = opener.chars().last().unwrap();
+        for (at, _) in source.match_indices(opener) {
+            let rest = &source[at + opener.len()..];
+            let Some(end) = rest.find(quote) else {
+                continue;
+            };
+            let spec = &rest[..end];
+            if spec.starts_with("./") || spec.starts_with("../") {
+                specs.push(spec);
+            }
+        }
+    }
+    specs
+}
+
+/// `spec` resolved against the module served at `base`.
+fn resolve_module(base: &str, spec: &str) -> String {
+    let mut parts: Vec<&str> = base.split('/').collect();
+    parts.pop();
+    for segment in spec.split('/') {
+        match segment {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            name => parts.push(name),
+        }
+    }
+    parts.join("/")
+}
+
+/// The browser harnesses serve dashboard assets from disk, so a module left
+/// out of the embedded file table passes them and breaks the page `orbit web
+/// serve` sends. Every module the page's import graph reaches is served.
+#[test]
+fn every_module_the_dashboard_imports_is_served() {
+    isolated("host::every_module_the_dashboard_imports_is_served", || {
+        let fixture = Fixture::new();
+        let server = fixture.server(false);
+        let mut pending = vec!["/static/app.js".to_string()];
+        let mut served = std::collections::BTreeSet::new();
+        while let Some(path) = pending.pop() {
+            if !served.insert(path.clone()) {
+                continue;
+            }
+            let response = server.get(&path);
+            assert!(
+                response.status().is_success(),
+                "{path} is imported by the dashboard but not served: {}",
+                response.status()
+            );
+            let source = response.text().unwrap();
+            pending.extend(
+                relative_imports(&source)
+                    .into_iter()
+                    .map(|spec| resolve_module(&path, spec)),
+            );
+        }
+        assert!(
+            served.contains("/static/js/drain-start.js"),
+            "the walk reaches the Drain start composer: {served:?}"
+        );
+    });
+}

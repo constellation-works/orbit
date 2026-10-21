@@ -279,6 +279,15 @@ impl crate::OrbitRuntime {
         Ok(submitted)
     }
 
+    /// Why this checkout cannot start a pull drain at all, before any owner is
+    /// contacted: an owner checkout drains with plain `orbit run auto`. `None`
+    /// on a replica. Surfaces that offer `--pull` show it before submission.
+    pub fn pull_drain_checkout_refusal(&self) -> Option<OrbitError> {
+        self.coordination_write_owner()
+            .is_none()
+            .then(pull_on_owner_refusal)
+    }
+
     /// [ORB-15622] How this replica's `workflow.required_validation_commands`
     /// and `review.baseline_commands` differ from the owner's, as the pull
     /// drain `run_id` recorded them from the owner's probe at submission.
@@ -324,13 +333,9 @@ impl crate::OrbitRuntime {
         selector: &str,
     ) -> Result<(PullDestination, Option<ValidationGates>), OrbitError> {
         let selector = selector.trim();
-        let owner_machine = self.coordination_write_owner().ok_or_else(|| {
-            OrbitError::CapabilityRefused(
-                "`--pull` runs on a replica checkout; this checkout is its workspace's owner, \
-                 whose drain is plain `orbit run auto`"
-                    .into(),
-            )
-        })?;
+        let owner_machine = self
+            .coordination_write_owner()
+            .ok_or_else(pull_on_owner_refusal)?;
         let (selector_machine, selector_workspace) = selector.split_once('/').ok_or_else(|| {
             OrbitError::UnknownSelector(format!(
                 "'{selector}' is not a host-qualified selector; copy `selector` from federated \
@@ -440,4 +445,12 @@ impl crate::OrbitRuntime {
             gates,
         ))
     }
+}
+
+fn pull_on_owner_refusal() -> OrbitError {
+    OrbitError::CapabilityRefused(
+        "`--pull` runs on a replica checkout; this checkout is its workspace's owner, whose \
+         drain is plain `orbit run auto`"
+            .into(),
+    )
 }

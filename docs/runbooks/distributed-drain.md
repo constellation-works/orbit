@@ -615,8 +615,16 @@ Owner and pull drains accept windows up to 24 hours. CLI `--for`, HTTP
 `POST /api/workflows/auto` (`for_duration`), and MCP `orbit.workflow.auto`
 (`for_seconds`) refuse a longer window before creating a run, with
 `for_seconds must be a whole number from 1 to 86400 (24 hours)`. The CLI
-keeps its one-pass shorthand when `--for` is omitted or zero; HTTP and MCP
-require a positive window.
+keeps its one-pass shorthand when `--for` is omitted or zero; HTTP asks for one
+pass explicitly with `one_pass: true`, and MCP requires a positive window.
+
+The dashboard's **Drain** › **Start a window** offers the pull on a replica:
+**Pull from the owner** posts `pull` (and `host`, resolved as `--host` is) with
+`for_duration` or `one_pass`, `concurrency` and `allow_crew` to
+`POST /api/workflows/auto`, and refuses the options `--pull` refuses in the
+command line's words. On a replica running a pull window, the Drain page's
+**Pulling from the owner** card shows the claim budget, the claims by stage and
+any refused settlement from the run's detail.
 
 `<selector>` is the owner's host-qualified selector from federated discovery
 (`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no host entry

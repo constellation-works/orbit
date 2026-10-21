@@ -311,7 +311,7 @@ await tall(1600, async () => {
 });
 
 // The Drain page's Overview: the throttle banner and summary tiles, the
-// Auto-drain card and why tasks wait, then Start a window and Locks held.
+// Auto-drain card and why tasks wait, then Fleet drains and Locks held.
 drainThrottled = true;
 await tall(1800, async () => {
   await open("drain", "#drain-summary:not([hidden])");

@@ -43,6 +43,9 @@ let failJobRunsWorkspace = null;
 let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
+// The page the harness reports; the Drain Overview reads run detail only on Drain.
+let harnessTab = 'operations';
+let runDetailFixture = null;
 let drainPhase = 'idle';
 let controlsAuthorized = true;
 let replicaWorkspace = false;
@@ -95,6 +98,28 @@ const readinessTasks = [
   { task_id: 'ORB-9', status: 'backlog', eligible: false, reason: 'unmet_dependency' },
 ];
 window.confirm = message => { confirmations.push(message); return true; };
+// What readiness reports the composer may start: the owner drains its own
+// backlog; a replica pulls from its owner, and the runtime's refusal for the
+// other source is shown as it words it.
+const LOCAL_REFUSAL = 'destination capability refused: this checkout is a replica of ws-one; its owner m-owner drains the backlog';
+const PULL_REFUSAL = "destination capability refused: `--pull` runs on a replica checkout; this checkout is its workspace's owner, whose drain is plain `orbit run auto`";
+const startOptions = () => ({
+  checkout: replicaWorkspace ? 'replica' : 'owner',
+  workspace_id: 'ws-one',
+  this_host: replicaWorkspace ? 'mac-mini' : 'server',
+  owner_machine_id: replicaWorkspace ? 'm-owner' : null,
+  owner_host: replicaWorkspace ? 'server' : null,
+  pull_selector: replicaWorkspace ? 'm-owner/ws-one' : null,
+  local_refusal: replicaWorkspace ? LOCAL_REFUSAL : null,
+  pull_refusal: replicaWorkspace ? null : PULL_REFUSAL,
+  crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }],
+  complexity_pools: {
+    low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
+    medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
+    hard: { crews: [{ name: 'opus', weight: 1 }], source: 'workflow.hard_complexity_crews' },
+    xhard: { crews: [], source: 'workflow.xhard_complexity_crews' },
+  },
+});
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
@@ -113,6 +138,7 @@ globalThis.fetch = async (path, options = {}) => {
     }
     if (url.pathname === '/api/workflows/auto' && loseAutoResponse) throw new TypeError('fixture lost response');
     if (url.pathname === '/api/workflows/auto' && refuseAutoFix) return response({ error: 'fixture repair authority refused', code: 'authorization_denied' }, 403);
+    if (url.pathname === '/api/workflows/auto' && body.pull) return response({ workflow: 'auto', source: 'pull', selector: 'm-owner/ws-one', job_id: 'auto', run_id: 'jrun-pull-1', state: 'submitted', submitted_at: new Date().toISOString(), allowed_crews: body.allow_crew || [] });
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', auto_concurrency: { mode: body.auto_concurrency || 'shadow', source: body.auto_concurrency ? 'explicit' : 'configured', configured_mode: 'shadow' }, approve_proposed: body.approve_proposed === true, auto_fix: body.auto_fix === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     const cancelledRun = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/)?.[1];
@@ -195,10 +221,13 @@ globalThis.fetch = async (path, options = {}) => {
     readinessPending = false;
   }
   if (url.pathname === '/api/workflows/auto/readiness' && failThisReadiness) return response({ error: 'readiness unavailable' }, thisReadinessFailureStatus);
+  const detailRun = url.pathname.match(/^\/api\/runs\/([^/]+)$/)?.[1];
+  if (detailRun && runDetailFixture) return response(runDetailFixture);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     auto_concurrency: { mode: 'enforce', source: 'explicit', configured_mode: 'shadow' },
     controls_authorized: controlsAuthorized,
     replica: replicaWorkspace,
+    start_options: startOptions(),
     approvals: approvalsFixture,
     snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
     capacity: {
@@ -223,7 +252,7 @@ globalThis.fetch = async (path, options = {}) => {
   return response({});
 };
 setWorkspace('one');
-initOperations({ selectFleetScope: () => setActiveTab('auto-drain'), getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
+initOperations({ getTab: () => harnessTab, selectFleetScope: () => setActiveTab('auto-drain'), getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
 // A slow selected readiness failure must not hold back the independently
 // completed fleet read, and the refresh still reports that selected failure.
@@ -296,8 +325,8 @@ const drainBanner = get('drain-banner');
 const drainText = () => `${drainBanner.textContent} ${get('auto-drain-body').textContent} ${get('auto-drain-start-body').textContent}`;
 const drainButton = label => button('auto-drain-body', label) || button('auto-drain-start-body', label);
 const startNode = id => descendants(get('auto-drain-start-body')).find(node => node.id === id);
-const durations = descendants(startBody).filter(node => node.type === 'button' && String(node.className || '').includes('drain-duration'));
-assert(durations.map(node => node.textContent).join(' ') === '15m 30m 1h 2h 4h 8h', `duration segments: ${durations.map(node => node.textContent)}`);
+const durations = descendants(startBody.querySelector('.drain-durations')).filter(node => node.type === 'button');
+assert(durations.map(node => node.textContent).join(' ') === 'One pass 30m 1h 2h 4h 8h 12h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const pools = ids => ids.map(id => drainReadinessFor(id)?.pool).join(' ');
@@ -476,6 +505,161 @@ assert(lastReadiness().concurrency === '3', 'a valid concurrency is sent with th
 typeConcurrency('');
 assert(!drainButton('Start 2h window').disabled, 'blank means the runtime default and is valid');
 typeConcurrency('2');
+
+// Start a window covers every `orbit run auto` start option, each beside its
+// flag, and the command it shows is the one Start submits. A claim token is
+// sent and never shown: not in the command, the confirm dialog or the receipt.
+const startCommand = () => startNode('auto-drain-command')?.textContent || '';
+const commandParts = () => startCommand().split(' \\\n    ');
+const startIssues = () => [...(startNode('auto-drain-issues')?.children || [])].map(node => node.textContent);
+const startFlags = [...startBody.querySelectorAll('.drain-flag')].map(node => node.textContent).join(' | ');
+for (const flag of ['--workspace ws-one', '--for', '--concurrency', '--auto-concurrency', '--complete', '--approve-proposed', '--auto-fix', '--review', '--allow-crew', '--<tier>-complexity-crews', '--strict-worker-containment', '--claim-token']) {
+  assert(startFlags.includes(flag), `the composer names ${flag}: ${startFlags}`);
+}
+assert(startCommand() === 'orbit run auto \\\n    --workspace ws-one \\\n    --for 2h \\\n    --concurrency 2', `the live command mirrors the choices: ${startCommand()}`);
+assert(![...startBody.querySelectorAll('[data-crew]')].some(chip => chip.dataset.crew === 'retired'), 'a disabled crew is not offered');
+const tierButton = (tier, label) => [...startBody.querySelectorAll(`[data-tier="${tier}"] button`)].find(node => node.textContent === label);
+startBody.querySelector('[data-crew="luna"]').click();
+assert(startBody.querySelector('[data-crew="luna"]').getAttribute('aria-pressed') === 'false' && commandParts().includes('--allow-crew opus,sol'), `excluding a crew lists the allowed ones: ${startCommand()}`);
+assert(startIssues().includes('Low pool has no allowed crew: unassigned low tasks will wait.'), `a tier with no allowed crew warns: ${startIssues()}`);
+tierButton('hard', 'Override').click();
+assert(startNode('auto-drain-pool-hard').value === 'opus', 'an override starts from the workspace pool');
+startNode('auto-drain-pool-hard').value = 'opus:3, sol:1';
+startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
+startNode('auto-drain-pool-hard').dispatchEvent(new Event('change'));
+tierButton('xhard', 'Off').click();
+setSwitch(startNode('auto-drain-strict'), true);
+const claimToken = startNode('auto-drain-claim-token');
+assert(claimToken.type === 'password', 'the claim token is a password field');
+claimToken.value = 'SECRET-CLAIM-7f3a';
+claimToken.dispatchEvent(new Event('input'));
+await fetchAndRenderOperations();
+assert(startNode('auto-drain-claim-token').value === 'SECRET-CLAIM-7f3a', 'a poll keeps the typed token in its field');
+assert(['--hard-complexity-crews opus:3,sol:1', '--xhard-complexity-crews', '--strict-worker-containment', '--claim-token <token>'].every(part => commandParts().includes(part)), `pools, containment and the token placeholder are in the command: ${startCommand()}`);
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+const fullStart = autoPosts().at(-1).body;
+assert(JSON.stringify(fullStart.allow_crew) === '["opus","sol"]' && JSON.stringify(fullStart.hard_complexity_crews) === '["opus:3","sol:1"]'
+  && JSON.stringify(fullStart.xhard_complexity_crews) === '[]' && !Object.hasOwn(fullStart, 'low_complexity_crews') && !Object.hasOwn(fullStart, 'medium_complexity_crews')
+  && fullStart.strict_worker_containment === true && fullStart.claim_token === 'SECRET-CLAIM-7f3a' && fullStart.for_duration === '2h', `Start submits what the command says: ${JSON.stringify(fullStart)}`);
+for (const [surface, text] of [['command', startCommand()], ['confirm dialog', confirmations.at(-1)], ['receipt', get('auto-drain-operation-feedback').textContent], ['page', document.body.innerHTML]]) {
+  assert(!text.includes('SECRET-CLAIM-7f3a'), `the claim token never appears in the ${surface}`);
+}
+assert(startNode('auto-drain-claim-token').value === '', 'a token is for one start and is cleared after it');
+startBody.querySelector('.drain-crews-bulk button').click();
+for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
+setSwitch(startNode('auto-drain-strict'), false);
+// One pass is a window with no --for.
+drainButton('One pass').click();
+assert(drainButton('Run one pass') && !commandParts().some(part => part.startsWith('--for')), `one pass drops --for: ${startCommand()}`);
+drainButton('Run one pass').click(); await tick(); await tick(); await tick();
+assert(autoPosts().at(-1).body.one_pass === true && !Object.hasOwn(autoPosts().at(-1).body, 'for_duration'), `one pass posts one_pass: ${JSON.stringify(autoPosts().at(-1).body)}`);
+drainButton('2h').click();
+
+// A replica pulls from its owner by host; the selector it resolves to is
+// shown, Local is blocked with the runtime's words, and Start submits the
+// same pull run `orbit run auto --pull <workspace> --host <owner>` does.
+replicaWorkspace = true;
+await fetchAndRenderOperations();
+assert(startNode('auto-drain-source-pull').getAttribute('aria-checked') === 'true', 'a replica starts on Pull');
+assert(startNode('auto-drain-pull-selector').textContent.includes('m-owner/ws-one') && startNode('auto-drain-source-local').textContent.includes(LOCAL_REFUSAL), 'the resolved selector and the local refusal are shown');
+assert(commandParts().slice(0, 3).join(' | ') === 'orbit run auto | --pull ws-one --host server | --for 2h', `the pull command names the owner host: ${startCommand()}`);
+startBody.querySelector('[data-crew="opus"]').click();
+drainButton('Start pulling for 2h').click(); await tick(); await tick(); await tick();
+const pullStart = autoPosts().at(-1).body;
+assert(JSON.stringify(Object.keys(pullStart).sort()) === '["allow_crew","concurrency","for_duration","host","pull"]' && pullStart.pull === 'ws-one' && pullStart.host === 'server' && JSON.stringify(pullStart.allow_crew) === '["sol","luna"]', `a pull start sends only what --pull takes: ${JSON.stringify(pullStart)}`);
+assert(get('auto-drain-operation-feedback').textContent.startsWith('Run jrun-pull-1 submitted: pulling from m-owner/ws-one.'), `the pull receipt names the owner: ${get('auto-drain-operation-feedback').textContent}`);
+startBody.querySelector('.drain-crews-bulk button').click();
+// Options --pull refuses are refused here in the CLI's words before dispatch,
+// and Local on a replica is refused as the runtime refuses it.
+startNode('auto-drain-source-local').click();
+assert(startIssues().includes(LOCAL_REFUSAL) && drainButton('Start 2h window').disabled, `local on a replica is blocked verbatim: ${startIssues()}`);
+setSwitch(approveSwitch(), true);
+modeInput().value = 'enforce'; modeInput().dispatchEvent(new Event('change'));
+startNode('auto-drain-review').value = 'before-pr'; startNode('auto-drain-review').dispatchEvent(new Event('change'));
+startNode('auto-drain-source-pull').click();
+for (const refusal of [
+  "the argument '--pull <SELECTOR>' cannot be used with '--auto-concurrency <MODE>'",
+  "the argument '--pull <SELECTOR>' cannot be used with '--approve-proposed'",
+  "--review does not apply to a pull drain: the owner decides the review of the claims it hands out, so request review on the owner's own run or in its workspace policy",
+]) assert(startIssues().includes(refusal), `pull refuses as the CLI does: ${refusal} in ${startIssues()}`);
+assert(drainButton('Start pulling for 2h').disabled, 'a refused option blocks Start');
+setSwitch(approveSwitch(), false);
+modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
+startNode('auto-drain-review').value = ''; startNode('auto-drain-review').dispatchEvent(new Event('change'));
+assert(!drainButton('Start pulling for 2h').disabled && startIssues().length === 0, `clearing the refused options unblocks Start: ${startIssues()}`);
+// Pull on the owner is refused with the runtime's words.
+replicaWorkspace = false;
+await fetchAndRenderOperations();
+assert(startIssues().includes(PULL_REFUSAL) && drainButton('Start pulling for 2h').disabled, `pull on the owner is blocked verbatim: ${startIssues()}`);
+startNode('auto-drain-source-local').click();
+assert(drainButton('Start 2h window') && !drainButton('Start 2h window').disabled, 'Local starts again on the owner');
+
+// Overview: how the live window was started, from the inputs its run
+// recorded, with each setting's flag or config key; the equivalent command;
+// and "Start a window like this", which loads those settings.
+harnessTab = 'drain';
+drainPhase = 'draining';
+drainRunId = 'jrun-20260923-0400-a1';
+runDetailFixture = { run: { run_id: drainRunId, input: {
+  for_seconds: 14400, max_active_leaf_runs: 3, allowed_crews: ['opus', 'sol'], auto_fix: true,
+  auto_concurrency: 'enforce', auto_concurrency_source: 'explicit',
+  auto_crew_pools: {
+    low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
+    medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
+    hard: { crews: [{ name: 'opus', weight: 3 }, { name: 'sol', weight: 1 }], source: 'run_input.hard_complexity_crews' },
+    xhard: { crews: [], source: 'run_input.xhard_complexity_crews' },
+  },
+} }, claimed_leaves: [] };
+await fetchAndRenderOperations();
+const startedCells = () => Object.fromEntries([...get('drain-started-body').querySelectorAll('.drain-started-cell')].map(cell => [cell.querySelector('dt').textContent, `${cell.querySelector('.drain-started-value').textContent} ← ${cell.querySelector('.drain-flag').textContent}`]));
+let cells = startedCells();
+assert(!get('drain-started-panel').hidden && get('drain-pull-panel').hidden, 'a local window shows how it started and no pull claims');
+for (const [label, value] of [
+  ['Source', 'Local backlog ← --workspace'], ['Concurrency', '3 ← --concurrency'], ['Admission control', 'enforce ← --auto-concurrency'],
+  ['Allowed crews', 'opus, sol ← --allow-crew'], ['Low pool', 'luna ← workflow.low_complexity_crews'], ['Hard pool', 'opus:3, sol:1 ← --hard-complexity-crews'],
+  ['Extra hard pool', 'Off ← --xhard-complexity-crews'], ['Authority', 'stops at review · auto-fix ← --auto-fix'],
+  ['Review', 'not recorded ← --review'], ['Workspace claim', 'not recorded ← --claim-token'],
+]) assert(cells[label] === value, `${label} reads ${value}: ${cells[label]}`);
+assert(cells.Window.startsWith('4h · admits until'), `the window shows its length and close: ${cells.Window}`);
+const startedCommand = get('drain-started-command').textContent;
+assert(startedCommand === 'orbit run auto \\\n    --workspace ws-one \\\n    --for 4h \\\n    --concurrency 3 \\\n    --auto-concurrency enforce \\\n    --allow-crew opus,sol \\\n    --hard-complexity-crews opus:3,sol:1 \\\n    --xhard-complexity-crews \\\n    --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
+get('drain-start-like').click();
+assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
+startBody.querySelector('.drain-crews-bulk button').click();
+for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
+modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
+autoFixInput().click();
+drainButton('2h').click();
+typeConcurrency('2');
+
+// A replica's pull drain: the owner selector, the claim budget written out as
+// `held − min(reviewing, N) < N` over 2N cells, claims by stage as `orbit run
+// show` counts them, and the owner's settings greyed.
+replicaWorkspace = true;
+drainPhase = 'idle';
+drainRunId = null;
+pullDrainRunId = 'jrun-pull-1';
+const leaf = (id, stage) => ({ leaf_run_id: `jrun-leaf-${id}`, job_id: 'task_pr_pipeline', task_id: `ORB-${id}`, owner: 'm-owner', leaf_state: 'running', stage });
+runDetailFixture = { run: { run_id: 'jrun-pull-1', input: {
+  for_seconds: 28800, max_active_leaf_runs: 3, allowed_crews: ['sol'],
+  destination: { owner_machine_id: 'm-owner', owner_workspace_id: 'ws-one', selector: 'm-owner/ws-one', execution_machine_id: 'm-mac' },
+} }, claimed_leaves: [leaf(1, 'implementing'), leaf(2, 'reviewing'), leaf(3, 'reviewing'), leaf(4, 'implementing')], refused_settlements: [] };
+await fetchAndRenderOperations();
+assert(!get('drain-pull-panel').hidden && get('drain-pull-body').textContent.includes('m-owner/ws-one'), 'the pull panel names the owner selector');
+const budgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
+assert(budgetCells === 'implementing implementing reviewing reviewing open later', `the budget draws 2N cells: ${budgetCells}`);
+assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 4 − min(2, 3) = 2 < 3 → claims up to 1 more', `the admission sum is written out: ${get('drain-claim-budget-sum').textContent}`);
+assert(get('drain-claims-summary').textContent === 'Claimed leaves: 4 running (2 implementing, 2 reviewing)', `claims by stage match orbit run show: ${get('drain-claims-summary').textContent}`);
+cells = startedCells();
+assert(cells.Source === 'Pull from m-owner/ws-one ← --pull --host server', `a pull window names its owner: ${cells.Source}`);
+const greyed = [...get('drain-started-body').querySelectorAll('.drain-started-cell.owner-decides dt')].map(node => node.textContent).join(', ');
+assert(greyed === 'Complexity pools, Authority, Review, Worker containment', `owner-decided settings are greyed: ${greyed}`);
+assert(get('drain-started-command').textContent === 'orbit run auto \\\n    --pull ws-one --host server \\\n    --for 8h \\\n    --concurrency 3 \\\n    --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
+replicaWorkspace = false;
+pullDrainRunId = null;
+runDetailFixture = null;
+harnessTab = 'operations';
+await fetchAndRenderOperations();
 
 // A payload without capacity figures reads as unknown, not as zero: `Number(null)`
 // is 0, which printed "0 free slots" and a placeholder of "null".
@@ -687,13 +871,14 @@ approvalsFixture = { enabled: true, drain_run_id: drainRunId, approved_total: 3,
 await fetchAndRenderOperations();
 const approvalsNode = get('auto-drain-live').querySelector('[data-stat="approved"]');
 assert(windowStat('approved')?.textContent === '3' && approvalsNode.querySelector('.drain-window-stat-detail').textContent === '2 held', `the live window shows approve-proposed with counts: ${approvalsNode?.textContent}`);
-assert(String(approvalsNode.title).includes('1 × missing complexity') && String(approvalsNode.title).includes('ORB-9: pilot held'), `hold reasons are in the tooltip: ${approvalsNode.title}`);
-assert(!get('auto-drain-body').querySelector('.drain-approval-findings'), 'a hold without findings shows only the count');
+const approvalSummary = () => get('auto-drain-body').querySelector('.drain-approval-summary');
+assert(approvalSummary()?.textContent === '1 missing complexity · 1 pilot held', `hold reasons are summarized by count: ${approvalSummary()?.textContent}`);
+assert(!approvalSummary().querySelector('a'), 'only a pilot-warnings hold links to the held tasks');
 approvalsFixture = { enabled: true, drain_run_id: drainRunId, approved_total: 3, approved: ['ORB-1'], awaiting_pilot: 1, held_total: 1, held_by_reason: { warnings: 1 }, held: [{ task_id: 'ORB-22', reason: 'warnings', findings: [{ kind: 'utility_warnings', text: 'Acceptance criterion 4 requires screenshots attached as task artifacts, but the supplied tool allowlist has no orbit.task.artifact.put and required_tools is empty' }] }] };
 await fetchAndRenderOperations();
-const findingList = get('auto-drain-body').querySelector('.drain-approval-findings');
-assert(findingList?.textContent.includes('ORB-22: utility_warnings: Acceptance criterion 4 requires screenshots'), `a warnings hold shows the finding kind and text: ${findingList?.textContent}`);
-assert(String(get('auto-drain-live').querySelector('[data-stat="approved"]').title).includes('utility_warnings'), 'the finding is also in the tooltip');
+const warningsLink = approvalSummary()?.querySelector('a');
+assert(warningsLink?.textContent === '1 held for pilot warnings' && new URL(warningsLink.href).hash === '#tasks?status=proposed&pilot=warnings', `a warnings hold links to the proposed tasks carrying the findings: ${approvalSummary()?.textContent}`);
+assert(!get('auto-drain-body').textContent.includes('utility_warnings'), 'finding text lives on each task, not on the card');
 approvalsFixture = { enabled: true, drain_run_id: drainRunId };
 await fetchAndRenderOperations();
 assert(windowStat('approved')?.textContent === '—' && String(get('auto-drain-live').querySelector('[data-stat="approved"]').title).startsWith('Approving proposed tasks'), 'a payload without counts shows only the flag');

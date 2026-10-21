@@ -204,11 +204,12 @@ try {
     await fullWidthView(`Analytics › Reliability › Tools at ${width}px`, ['#analytics-subtabs .subtab[data-subtab="reliability"]', '#reliability-views .subtab[data-view="tools"]'], 'analytics-tools-main', 'audit-summary-panel');
   }
 
-  // ORB-16962: a Start from the Tasks dock keeps its result beside the Start
-  // card, on Tasks and again on Drain. The router places the shipped dock, as
+  // ORB-16962: a Start from the Tasks dock keeps its result above the dock's
+  // views, on Tasks and again on Drain. The router places the shipped dock, as
   // app.js does, and the harness holds, refuses or loses the window's POST.
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.click('.tab[data-tab="tasks"]');
+  await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
   const dockStart = page.locator('#tasks-dock #auto-drain-start button.drain-start');
   const dockStatus = page.locator('#tasks-dock #auto-drain-operation-feedback');
   await dockStart.waitFor({ state: 'visible' });
@@ -227,7 +228,12 @@ try {
   if (await page.evaluate(() => globalThis.dockReview.posts()) !== postsBeforeSuccess + 1) {
     throw new Error('A Start from Tasks must send exactly one POST');
   }
+  // A started window opens the dock's first view, with the receipt above it.
+  if (await page.locator('#side-dock').getAttribute('data-mode') !== 'drain' || await page.evaluate(() => location.hash.startsWith('#drain'))) {
+    throw new Error('A Start from Tasks shows the Drain view in place');
+  }
   await page.screenshot({ path: path.join(evidence, 'tasks-dock-feedback-success-dark-1440.png') });
+  await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
   // An HTTP refusal and a lost response each name their remedy beside Start,
   // send one POST and keep the operator on Tasks.
   for (const [kind, expected] of [
@@ -245,7 +251,7 @@ try {
     if (await page.evaluate(() => location.hash.startsWith('#drain'))) throw new Error(`A ${kind} from Tasks navigated to Drain`);
     await page.screenshot({ path: path.join(evidence, `tasks-dock-feedback-${kind}-dark-1440.png`) });
   }
-  // Drain shows the same status line under its Start card, so the unknown
+  // Drain shows the same status line above its views, so the unknown
   // outcome and its remedy stay visible after the dock moves there.
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('auto-drain'));
   await page.waitForFunction(() => location.hash.startsWith('#drain'));
@@ -474,41 +480,63 @@ try {
     setActiveTab('auto-drain');
   });
   await page.waitForFunction(() => location.hash.startsWith('#drain'));
+  const setDock = (mode) => page.evaluate(async (mode) => (await import('/js/log-tail.js')).setDockMode(mode), mode);
+  const overflowOf = (box) => {
+    const bounds = box.getBoundingClientRect();
+    return Array.from(box.querySelectorAll('*'))
+      .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > bounds.right + 1)
+      .map((node) => node.className || node.tagName);
+  };
+  // Overview holds the live window and its context; Start a window is its own
+  // view. Each fits its width with nothing spilling sideways.
   const drainCheck = async (label, dockWidth) => {
-    const result = await page.evaluate((width) => {
-      const layout = document.querySelector('main.drain-layout');
-      // The Drain page always fills the available width.
+    const result = await page.evaluate(() => {
       const dock = document.getElementById('side-dock');
       const card = document.getElementById('auto-drain-panel');
-      const start = document.getElementById('auto-drain-start');
       const cardBox = card.getBoundingClientRect();
-      const overflowing = [card, start].flatMap((box) => {
-        const bounds = box.getBoundingClientRect();
-        return Array.from(box.querySelectorAll('*'))
-          .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > bounds.right + 1)
-          .map((node) => node.className || node.tagName);
-      });
       return {
         mode: dock.dataset.mode,
         dockWidth: Math.round(dock.getBoundingClientRect().width),
         cardVisible: cardBox.height > 0,
-        startVisible: start.getBoundingClientRect().height > 0,
         panels: [...dock.querySelectorAll('.dock-pane[data-pane="drain"] .panel')].map(panel => panel.id),
-        scroll: [card, start].some(box => box.scrollWidth > box.clientWidth + 1),
-        clipped: [card, start].some(box => box.scrollHeight > box.clientHeight + 1),
-        overflowing,
-        durations: start.querySelectorAll('.drain-duration[aria-pressed]').length,
+        scroll: card.scrollWidth > card.clientWidth + 1,
+        clipped: card.scrollHeight > card.clientHeight + 1,
+        pageScroll: document.scrollingElement.scrollWidth > window.innerWidth,
         bar: Boolean(card.querySelector('.drain-capacity-bar[aria-label]')),
       };
     });
-    if (result.mode !== 'drain' || !result.cardVisible || !result.startVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
-    // The main column (status, waits, fleet) comes before the side column
-    // (Start a window, then Locks held) in reading and tab order.
-    if (result.panels.join(' ') !== 'auto-drain-panel drain-waits-panel drain-fleet-panel auto-drain-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
-    if (result.scroll || result.clipped || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
-    if (result.durations !== 6 || !result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
+    result.overflowing = await page.locator('#auto-drain-panel').evaluate(overflowOf);
+    if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
+    // The main column (status, how it started, pull claims, waits) comes
+    // before the side column (fleet, locks) in reading and tab order.
+    if (result.panels.join(' ') !== 'auto-drain-panel drain-started-panel drain-pull-panel drain-waits-panel drain-fleet-panel locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
+    if (result.scroll || result.clipped || result.overflowing.length || result.pageScroll) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${JSON.stringify(result)}`);
+    if (!result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.waitForTimeout(350);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
+    await setDock('start');
+    const compose = await page.evaluate(() => {
+      const start = document.getElementById('auto-drain-start');
+      return {
+        mode: document.getElementById('side-dock').dataset.mode,
+        visible: start.getBoundingClientRect().height > 0,
+        scroll: start.scrollWidth > start.clientWidth + 1,
+        pageScroll: document.scrollingElement.scrollWidth > window.innerWidth,
+        durations: start.querySelectorAll('.drain-durations .drain-duration[aria-pressed]').length,
+        command: document.getElementById('auto-drain-command')?.textContent || '',
+        // The footer holds its parts only: an absent part leaves no text.
+        footText: [...start.querySelector('.drain-start-foot').childNodes]
+          .filter(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())
+          .map(node => node.textContent),
+      };
+    });
+    compose.overflowing = await page.locator('#auto-drain-start').evaluate(overflowOf);
+    if (compose.mode !== 'start' || !compose.visible || compose.scroll || compose.overflowing.length || compose.pageScroll) throw new Error(`Start a window does not fit at ${label}: ${JSON.stringify(compose)}`);
+    if (compose.footText.length) throw new Error(`Start a window footer renders stray text at ${label}: ${JSON.stringify(compose.footText)}`);
+    if (compose.durations !== 7 || !compose.command.startsWith('orbit run auto')) throw new Error(`Start a window incomplete at ${label}: ${JSON.stringify(compose)}`);
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(evidence, `drain-start-${label}.png`) });
+    await setDock('drain');
     return result.dockWidth;
   };
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -585,6 +613,7 @@ try {
 
   // ORB-14566: changing concurrency alters the readiness URL but must keep
   // the panel scope stable while that refresh is pending, then restore focus.
+  await setDock('start');
   await page.evaluate(() => {
     const input = document.getElementById('auto-drain-concurrency');
     input.focus();
@@ -621,6 +650,7 @@ try {
     || completedDrainRefresh.liveCount === '—') {
     throw new Error(`Concurrency refresh did not restore focus and updated state: ${JSON.stringify(completedDrainRefresh)}`);
   }
+  await setDock('drain');
 
   const timeLeft = async target => {
     await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
@@ -797,6 +827,7 @@ try {
   // The approve-proposed opt-in and the live window's approvals line fit the
   // card with no overflow, and the card is captured on its own for review.
   const approveCard = async (label) => {
+    await setDock('start');
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('idle');
       document.getElementById('auto-drain-approve').click();
@@ -813,7 +844,8 @@ try {
     });
     if (!form.selected || !form.reachable || form.overflowing.length) throw new Error(`Approve-proposed control at ${label}: ${JSON.stringify(form)}`);
     await page.waitForTimeout(400);
-    await page.locator('#auto-drain-start').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await page.locator('#auto-drain-start .drain-field-approve').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await setDock('drain');
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('draining');
       await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, warnings: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-22', reason: 'warnings', findings: [{ kind: 'utility_warnings', text: 'Screenshots cannot be attached because the allowlist has no orbit.task.artifact.put' }] }] });
@@ -824,11 +856,11 @@ try {
       return {
         approved: card.querySelector('[data-stat="approved"] dd')?.firstChild?.textContent,
         held: card.querySelector('[data-stat="approved"] .drain-window-stat-detail')?.textContent,
-        finding: card.querySelector('.drain-approval-findings')?.textContent || '',
+        summary: card.querySelector('.drain-approval-summary')?.textContent || '',
         overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
       };
     });
-    if (live.approved !== '3' || live.held !== '2 held' || !live.finding.includes('ORB-22: utility_warnings: Screenshots cannot be attached') || live.overflowing.length) throw new Error(`Live approvals at ${label}: ${JSON.stringify(live)}`);
+    if (live.approved !== '3' || live.held !== '2 held' || live.summary !== '1 missing complexity · 1 held for pilot warnings' || live.overflowing.length) throw new Error(`Live approvals at ${label}: ${JSON.stringify(live)}`);
     await page.waitForTimeout(400);
     await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
     await page.evaluate(async () => {

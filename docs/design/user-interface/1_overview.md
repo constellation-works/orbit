@@ -3,7 +3,7 @@ summary: "User Interface — Overview"
 type: design
 title: "User Interface — Overview"
 owner: gemini
-last_updated: 2026-10-13
+last_updated: 2026-10-20
 last_validated: 2026-10-19
 status: Draft
 feature: user-interface
@@ -40,11 +40,12 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   aggregate views without a selected workspace) is shown as unknown. Lock refreshes
   update open details without discarding unsaved editors.
 
-WORK › Drain (`#drain`) shows the auto-drain state, forecast, window controls,
-admission passes and waits, fleet drains and locked files. Its Log view is
-`#drain/log`. The same dock, with the Auto-drain status card, Start a window,
-Locks held and the Log view, sits beside the task list on Tasks and gives way
-to the task pane when a task opens.
+WORK › Drain (`#drain`) shows the auto-drain state, forecast, how the live
+window was started, admission passes and waits, fleet drains and locked files.
+Its **Start a window** view (`#drain/start`) composes any `orbit run auto`
+start, local or pull, and its Log view is `#drain/log`. The same dock, with the
+Auto-drain status card, Locks held and the Start a window and Log views, sits
+beside the task list on Tasks and gives way to the task pane when a task opens.
 The Drain page shows the fleet drains, including in **All workspaces** mode,
 grouped under one heading per host: one line per workspace with its drain
 phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most

@@ -74,7 +74,7 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         && let RunSubcommand::Auto(auto) = &mut run.command
     {
         if let Some(pull) = auto.pull.as_mut() {
-            *pull = pull_selector(&global_root, auto.host.as_deref(), pull)?;
+            *pull = hosts::pull_selector(&global_root, auto.host.as_deref(), pull)?;
         }
         return Ok(Preflight::Local);
     }
@@ -247,27 +247,6 @@ fn set_workspace_value(cli: &mut Cli, selector: String) -> Result<(), OrbitError
     }
     cli.workspace = Some(selector);
     Ok(())
-}
-
-/// `--pull` with or without `--host`. Orbit never picks the owner host itself.
-fn pull_selector(global_root: &Path, host: Option<&str>, pull: &str) -> Result<String, OrbitError> {
-    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
-        if pull.trim().parse::<MachineQualifiedSelector>().is_err() {
-            return Err(OrbitError::UnknownSelector(format!(
-                "'{pull}' is not a host-qualified selector; name the owner with `--host <host>` \
-                 (see `orbit host list`), or pass the full selector federated discovery lists \
-                 (`orbit_workspace_list`)"
-            )));
-        }
-        return Ok(pull.trim().to_string());
-    };
-    match hosts::resolve_host_workspace(global_root, host, pull)? {
-        HostWorkspaceRoute::Remote { selector, .. } => Ok(selector),
-        HostWorkspaceRoute::Local { .. } => Err(OrbitError::CapabilityRefused(format!(
-            "`--pull` pulls from another host's workspace, and '{host}' is this machine; run \
-             plain `orbit run auto` to drain a local backlog"
-        ))),
-    }
 }
 
 /// The authority a routed call asks for: an operator only when this process

@@ -137,6 +137,15 @@ impl OrbitRuntime {
             .collect()
     }
 
+    /// The complexity pools a drain submitted now without overrides would
+    /// capture, keyed by tier: each tier's weighted members and the
+    /// `workflow.<tier>_complexity_crews` key they come from. The dashboard's
+    /// window composer shows them as each tier's workspace choice.
+    pub fn workspace_complexity_crew_pools(&self) -> Result<Value, OrbitError> {
+        serde_json::to_value(self.capture_auto_crew_pools(&Value::Object(Default::default()))?)
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     /// Classifiers use the coordinator's frozen policy, including CLI overrides.
     /// A read-only call without a run uses the current configuration.
     pub(crate) fn auto_crew_pools_for_input(

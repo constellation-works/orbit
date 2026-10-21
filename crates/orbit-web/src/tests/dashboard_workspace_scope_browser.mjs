@@ -217,13 +217,21 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       await page.locator('#drain-waits-body').filter({ hasText: 'waits on deps' }).waitFor();
       await page.locator('#drain-fleet-body .fleet-drains').waitFor();
       await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
-      await page.locator('#dock-mode-toggle [data-mode="drain"]').click();
+      await page.locator('#dock-mode-toggle [data-mode="start"]').click();
+      await page.waitForFunction(() => location.hash === '#drain/start');
       const start = page.locator('#auto-drain-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
       await start.waitFor({ state: 'visible' });
       if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.screenshot({ path: path.join(evidence, `drain-controls-dark-${width}.png`), animations: 'disabled' });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
       await start.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+      // A started window returns the dock to the Overview that reports it.
+      await page.waitForFunction(() => location.hash === '#drain');
       await page.locator('#drain-pass-body').filter({ hasText: '3 queued · 1 deferred · 2 excluded' }).waitFor();
       if (await page.locator('#auto-drain-panel .drain-forecast-spark').count() !== 2) throw new Error('Drain must show both forecast sparklines');
       const passLink = new URL(await page.locator('#drain-pass-body a').getAttribute('href'), page.url());
@@ -234,10 +242,6 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.setViewportSize({ width, height: 1000 });
         await page.locator('#dock-pane-drain').evaluate(node => { node.scrollTop = 0; });
         await page.screenshot({ path: path.join(evidence, `drain-window-dark-${width}.png`), animations: 'disabled' });
-        if (width === 375) {
-          await page.locator('#auto-drain-start').scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(evidence, 'drain-controls-dark-375.png'), animations: 'disabled' });
-        }
       }
       const confirmations = await page.evaluate(() => globalThis.scopeConfirmations);
       if (!confirmations.some(message => message.includes('Start'))) throw new Error('Starting a window must confirm');
@@ -256,12 +260,15 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Tasks carries the dock beside the list: the Auto-drain status card,
-      // Start a window and the locks, not the Drain page's waits and fleet cards.
+      // Tasks carries the dock beside the list: the Auto-drain status card and
+      // the locks, not the Drain page's waits and fleet cards, plus the Start
+      // a window tab.
       await page.locator('#tasks-main #side-dock #auto-drain-panel').waitFor({ state: 'visible' });
-      await page.locator('#tasks-main #side-dock #auto-drain-start').waitFor({ state: 'visible' });
       await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
       if (await page.locator('#tasks-main #drain-waits-panel').isVisible() || await page.locator('#tasks-main #drain-fleet-panel').isVisible()) throw new Error('The Tasks dock must leave the waits and fleet cards on Drain');
+      await page.locator('#tasks-main #dock-mode-toggle [data-mode="start"]').click();
+      await page.locator('#tasks-main #side-dock #auto-drain-start').waitFor({ state: 'visible' });
+      await page.locator('#tasks-main #dock-mode-toggle [data-mode="drain"]').click();
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
       if (await page.locator('#tasks-main #side-dock').isVisible()) throw new Error('An open task takes the dock\'s place');
       await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
