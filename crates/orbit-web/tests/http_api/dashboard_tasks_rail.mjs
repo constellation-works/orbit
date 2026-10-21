@@ -473,6 +473,30 @@ assert.equal(
 assert.equal(selectorDraft.value, 'file:unsaved.rs', 'refresh preserves the context editor text');
 assert.equal(document.activeElement, selectorDraft, 'refresh preserves context editor focus');
 
+const cancelSelector = contextDraftDetail.querySelector('.field-editor .cancel');
+cancelSelector.dispatch('click');
+contextDraftTask.context_files = [
+  'file:crates/orbit-core/assets/skills/recovery.md',
+  'file:plugin/skills/recovery.md',
+  'file:crates/orbit-core/src/application/task/pilot/mod.rs',
+];
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+const contextRows = contextDraftDetail.querySelectorAll('.file-list li');
+assert.equal(contextRows.length, 3, 'renders 3 context files');
+const dups = contextDraftDetail.querySelectorAll('.context-duplicate-base');
+assert.equal(dups.length, 2, 'identifies duplicate basenames for recovery.md');
+const disambigAttrs = dups.map(li => li.querySelector('.selector-base').dataset.disambig);
+assert.deepEqual(disambigAttrs, ['crates', 'plugin'], 'disambiguates duplicate basenames with directory context');
+const firstDir = dups[0].querySelector('.selector-dim');
+assert.ok(firstDir.querySelector('wbr'), 'directory line includes wbr break opportunities after separators');
+assert.equal(firstDir.querySelector('.selector-root').textContent, 'crates/', 'directory line highlights the root segment');
+assert.equal(
+  dups[0].querySelector('.context-selector').textContent.replace(/[\n\r\t]+/g, '').trim(),
+  'file:crates/orbit-core/assets/skills/recovery.md',
+  'full selector text is preserved on duplicate item',
+);
+
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
 

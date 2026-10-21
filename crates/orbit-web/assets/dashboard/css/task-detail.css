@@ -847,6 +847,13 @@
 }
 .detail-disclosures > .field-block.collapsible.collapsed > h4::after { margin: 0 2px; }
 .detail-disclosures > .field-block > :not(h4) { padding: 2px 14px 16px 34px; }
+.detail-disclosures > .context-files-block > :not(h4) {
+  padding: 0;
+}
+.detail-disclosures > .context-files-block .field-editor:has(.field-editor-input) {
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--hair);
+}
 
 /* ORB-12235: an editable field block shows its value with an `edit`
    affordance, and swaps in a textarea with save/cancel while editing. The
@@ -1047,27 +1054,61 @@ input.field-editor-input {
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-  word-break: break-all;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
-  background: var(--bg-well);
+  border: 0;
+  border-top: 1px solid var(--hair);
+  border-radius: 0;
+  background: transparent;
 }
 .row-detail .file-list > li { padding: 9px 14px; }
 .row-detail .file-list > li + li { border-top: 1px solid var(--hair); }
 .row-detail .file-list .context-selector {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
+  row-gap: 2px;
 }
-.row-detail .file-list .selector-base { grid-row: 1; grid-column: 1 / -1; font-weight: 500; }
+.row-detail .file-list .selector-base {
+  grid-row: 1;
+  grid-column: 1 / -1;
+  font-weight: 500;
+  color: var(--fg-strong);
+}
 .row-detail .file-list .selector-kind,
-.row-detail .file-list .selector-dim { grid-row: 2; color: var(--fg-mute); }
+.row-detail .file-list .selector-dim {
+  grid-row: 2;
+  color: var(--fg-dim);
+  line-height: 1.45;
+}
+.row-detail .file-list .selector-kind {
+  padding-right: 5px;
+  font-weight: 500;
+}
 .row-detail .file-list .selector-kind[data-kind="file"] { display: none; }
+.row-detail .file-list .selector-root {
+  color: var(--fg);
+  font-weight: 600;
+}
+.row-detail .file-list .context-duplicate-base .selector-dim {
+  color: var(--fg-soft);
+  font-weight: 500;
+}
+.row-detail .file-list .context-duplicate-base .selector-root {
+  color: var(--accent);
+  font-weight: 600;
+}
+.row-detail .file-list .context-duplicate-base .selector-base[data-disambig]::after {
+  content: " (" attr(data-disambig) ")";
+  color: var(--fg-mute);
+  font-size: 11px;
+  font-weight: 400;
+}
 .row-detail .file-list .context-contended-backlog .context-selector,
-.row-detail .file-list .context-contended-backlog .selector-dim {
+.row-detail .file-list .context-contended-backlog .selector-dim,
+.row-detail .file-list .context-contended-backlog .selector-root {
   color: #fbbf24;
 }
 .row-detail .file-list .context-contended-active .context-selector,
-.row-detail .file-list .context-contended-active .selector-dim {
+.row-detail .file-list .context-contended-active .selector-dim,
+.row-detail .file-list .context-contended-active .selector-root {
   color: #fca5a5;
 }
 .row-detail .file-list .context-selector {
