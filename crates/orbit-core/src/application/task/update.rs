@@ -582,6 +582,11 @@ impl OrbitRuntime {
             if let Some(crew) = &params.crew {
                 preview.crew = crew.clone();
             }
+            // The write applies the provenance resolved with the crew, and the
+            // publication digest covers it, so the preview carries it too.
+            if let Some(source) = &crew_source {
+                preview.crew_source = source.clone();
+            }
             if let Some(complexity) = params.complexity {
                 preview.complexity = Some(complexity);
             }
