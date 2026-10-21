@@ -31,18 +31,24 @@ template:
 
 #[test]
 fn rejects_auto_tasks_directory_symlink() {
-    let root = tempdir().expect("temporary Orbit root");
     let outside = tempdir().expect("outside directory");
     let outside_definitions = outside.path().join("auto_tasks");
     fs::create_dir_all(&outside_definitions).expect("outside definitions directory");
     write_valid_definition(&outside_definitions, "escaped");
-    symlink(&outside_definitions, auto_tasks_dir(root.path())).expect("directory symlink");
+    for target in [outside_definitions, outside.path().join("missing")] {
+        let root = tempdir().expect("temporary Orbit root");
+        symlink(&target, auto_tasks_dir(root.path())).expect("directory symlink");
 
-    let collection = collect_auto_tasks(root.path());
+        let collection = collect_auto_tasks(root.path());
 
-    assert!(collection.definitions.is_empty());
-    assert_eq!(collection.errors.len(), 1);
-    assert!(collection.errors[0].message.contains("directly under"));
+        assert!(collection.definitions.is_empty());
+        assert_eq!(
+            collection.errors.len(),
+            1,
+            "a linked catalog must fail closed even when its target is missing"
+        );
+        assert!(collection.errors[0].message.contains("directly under"));
+    }
 }
 
 #[test]
