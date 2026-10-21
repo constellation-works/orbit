@@ -33,28 +33,16 @@ impl ProviderLimitStoreBackend for Store {
             .as_deref()
             .map(str::trim)
             .filter(|account| !account.is_empty());
-        let (table, account_column, account_value, key) = match account {
-            Some(_) => (
-                "provider_account_limit_observations",
-                "account, ",
-                "?14, ",
-                "provider, account, model_scope, window_label",
-            ),
-            None => (
-                "provider_limit_observations",
-                "",
-                "",
-                "provider, model_scope, window_label",
-            ),
-        };
-        let sql = format!(
+        // Keep SQL structure literal and observation data in bound parameters.
+        // The account is a crew name, never the credential that crew uses.
+        let sql = if account.is_some() {
             r#"
-            INSERT INTO {table} (
-                {account_column}provider, model_scope, window_label, exhausted, source,
+            INSERT INTO provider_account_limit_observations (
+                account, provider, model_scope, window_label, exhausted, source,
                 resets_at, observed_at, run_id, crew, detail,
                 used_percent, window_minutes, gating
-            ) VALUES ({account_value}?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            ON CONFLICT ({key}) DO UPDATE SET
+            ) VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT (provider, account, model_scope, window_label) DO UPDATE SET
                 exhausted = excluded.exhausted,
                 source = excluded.source,
                 resets_at = excluded.resets_at,
@@ -65,9 +53,29 @@ impl ProviderLimitStoreBackend for Store {
                 used_percent = excluded.used_percent,
                 window_minutes = excluded.window_minutes,
                 gating = excluded.gating
-            WHERE excluded.observed_at >= {table}.observed_at
+            WHERE excluded.observed_at >= provider_account_limit_observations.observed_at
             "#
-        );
+        } else {
+            r#"
+            INSERT INTO provider_limit_observations (
+                provider, model_scope, window_label, exhausted, source,
+                resets_at, observed_at, run_id, crew, detail,
+                used_percent, window_minutes, gating
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT (provider, model_scope, window_label) DO UPDATE SET
+                exhausted = excluded.exhausted,
+                source = excluded.source,
+                resets_at = excluded.resets_at,
+                observed_at = excluded.observed_at,
+                run_id = excluded.run_id,
+                crew = excluded.crew,
+                detail = excluded.detail,
+                used_percent = excluded.used_percent,
+                window_minutes = excluded.window_minutes,
+                gating = excluded.gating
+            WHERE excluded.observed_at >= provider_limit_observations.observed_at
+            "#
+        };
         let model = observation.model.as_deref().unwrap_or_default();
         let window = observation.window.as_deref().unwrap_or_default();
         let source = observation.source.as_str();
@@ -93,7 +101,7 @@ impl ProviderLimitStoreBackend for Store {
         }
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
-                .execute(&sql, bound.as_slice())
+                .execute(sql, bound.as_slice())
                 .map(|changed| changed > 0)
                 .map_err(sqlite_store_error)
         })
