@@ -1417,3 +1417,138 @@ fn run_detail_exposes_pull_request_holds() {
         }
     });
 }
+
+/// The HTTP budget must use the allocator's workspace occupancy, including
+/// claims with no running leaf, without adding a bound claim to its leaf twice.
+#[test]
+fn pull_budget_tracks_allocator_through_launch_review_and_settlement() {
+    isolated(
+        "runs::pull_budget_tracks_allocator_through_launch_review_and_settlement",
+        || {
+            use orbit_store::compose::workspace_job_run_store;
+            use orbit_store::contracts::{
+                AdmissionRequest, LocalPullMutation, LocalPullPhase, PullDestination,
+                SettlementRefusal,
+            };
+            use orbit_types::workflow::ReviewGateAdmissionOutput;
+
+            let fixture = Fixture::new();
+            let drain = fixture.seed_run(
+                "jrun-budget",
+                "workspace_pull_pipeline",
+                JobRunState::Running,
+            );
+            let state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+            write_state(&fixture, &drain, &state);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+            let destination = PullDestination {
+                owner_machine_id: "hm_owner".into(),
+                owner_workspace_id: "ws_owner".into(),
+                selector: "owner/workspace".into(),
+                execution_machine_id: "hm_follower".into(),
+            };
+            let request: AdmissionRequest = serde_json::from_value(json!({
+                "request_id": "budget-claim",
+                "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+                "run_context": { "run_id": drain.run_id, "job_name": drain.job_id, "machine_name": "follower" },
+                "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+            })).unwrap();
+            let server = fixture.server(false);
+            let probes = std::cell::Cell::new(0);
+            let check = |occupied: usize, reviewing: usize, running: usize| {
+                let detail = json_ok(server.get(&format!("/api/runs/{}", drain.run_id)));
+                assert_eq!(
+                    detail["pull_occupancy"],
+                    json!({"occupied": occupied, "reviewing": reviewing})
+                );
+                assert_eq!(detail["claimed_leaves"].as_array().unwrap().len(), running);
+                let authoritative = jobs.drain_leaf_occupancy().unwrap();
+                assert_eq!(
+                    (authoritative.occupied, authoritative.reviewing),
+                    (occupied, reviewing)
+                );
+                // Exercise actual allocation too: with N=1, exactly one review
+                // may earn a replacement. Release every successful probe.
+                let mut probe = request.clone();
+                probes.set(probes.get() + 1);
+                probe.request_id = format!("budget-probe-{}", probes.get());
+                let admitted = jobs.allocate_pull_request(&destination, &probe, 1).unwrap();
+                assert_eq!(
+                    admitted.is_some(),
+                    occupied.saturating_sub(reviewing.min(1)) < 1
+                );
+                if admitted.is_some() {
+                    jobs.mutate_local_pull(
+                        &destination,
+                        &probe.request_id,
+                        &LocalPullMutation::Refuse("fixture probe complete".into()),
+                    )
+                    .unwrap();
+                }
+            };
+            let mut admission = jobs
+                .allocate_pull_request(&destination, &request, 1)
+                .unwrap()
+                .unwrap();
+            let persist = |admission: &orbit_store::contracts::LocalPullAdmission| {
+                store.connection().lock().unwrap().execute(
+                    "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+                    (admission.leaf_run_id.as_deref(), serde_json::to_string(admission).unwrap(), &workspace, &request.request_id),
+                ).unwrap();
+            };
+            admission.phase = LocalPullPhase::Launching;
+            persist(&admission);
+            check(1, 0, 0);
+
+            let mut leaf = fixture.seed_run(
+                "jrun-budget-leaf",
+                "task_claimed_pr_pipeline",
+                JobRunState::Running,
+            );
+            admission.leaf_run_id = Some(leaf.run_id.clone());
+            admission.phase = LocalPullPhase::Launched;
+            persist(&admission);
+            check(1, 0, 1);
+
+            let mut leaf_state =
+                PipelineState::new(leaf.run_id.clone(), leaf.job_id.clone(), json!({}));
+            leaf_state.record_pipeline_output(
+                "landing_review_gate_admit",
+                serde_json::to_value(ReviewGateAdmissionOutput::PreflightPassed {
+                    lineage_key: "fixture".into(),
+                })
+                .unwrap(),
+            );
+            write_state(&fixture, &leaf, &leaf_state);
+            check(1, 1, 1);
+
+            leaf.state = JobRunState::Success;
+            leaf.finished_at = Some(Utc::now());
+            fixture.save_run(&leaf);
+            admission.phase = LocalPullPhase::Settling;
+            admission.settlement_refusal = Some(SettlementRefusal {
+                reason: "owner evidence missing".into(),
+                refusals: 1,
+                first_refused_at: at(8, 1),
+                last_refused_at: at(8, 1),
+                retry_after: at(8, 2),
+            });
+            persist(&admission);
+            check(1, 0, 0);
+
+            admission.phase = LocalPullPhase::Settled;
+            persist(&admission);
+            check(0, 0, 0);
+
+            // A leaf outside this drain still competes for the same capacity,
+            // while remaining absent from this drain's running claims table.
+            fixture.seed_run("jrun-other-leaf", "task_pr_pipeline", JobRunState::Running);
+            check(1, 0, 0);
+            let ordinary = fixture.seed_run("jrun-non-pull", "fixture", JobRunState::Success);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", ordinary.run_id)));
+            assert_eq!(detail["pull_occupancy"], Value::Null);
+        },
+    );
+}

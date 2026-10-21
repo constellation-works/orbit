@@ -117,6 +117,15 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "claimed leaves",
     );
+    // Unlike the running-leaf table, admission capacity includes launching
+    // and unsettled claims and other workspace leaves. An unreadable reading
+    // stays unknown rather than advertising an empty budget.
+    let pull_occupancy = or_warn(
+        runtime.pull_drain_occupancy(run_id),
+        run_id,
+        "pull occupancy",
+    )
+    .map(|occupancy| json!({ "occupied": occupancy.occupied, "reviewing": occupancy.reviewing }));
     let pull_breaker = state
         .as_ref()
         .and_then(|state| state.pull_drain.pull_breaker.as_ref());
@@ -148,6 +157,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "explore_invocations": explore_invocations,
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
+        "pull_occupancy": pull_occupancy,
         "pull_breaker": pull_breaker,
         "refused_settlements": refused_settlements,
         "crew_window": crew_window,

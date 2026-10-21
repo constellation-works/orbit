@@ -61,6 +61,23 @@ impl crate::OrbitRuntime {
         Ok(carried)
     }
 
+    /// The workspace capacity a pull drain competes for, from the same reading
+    /// as the allocator. Includes admissions without a live leaf and leaves
+    /// belonging to other drains; reviewing claims earn capped admission credit.
+    /// `None` for every other run. Reading capacity never writes state.
+    pub fn pull_drain_occupancy(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Option<orbit_store::contracts::DrainLeafOccupancy>, OrbitError> {
+        let jobs = self.stores().jobs();
+        match jobs.get_job_run(drain_run_id)? {
+            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {
+                jobs.drain_leaf_occupancy().map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// The claimed leaves a pull drain is still carrying: launched and not
     /// yet terminal. Empty for every other run.
     pub fn pull_drain_claimed_leaves(

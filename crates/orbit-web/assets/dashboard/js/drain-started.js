@@ -144,21 +144,22 @@ function claimCeiling(run, input, capacity) {
 }
 
 // `held − min(reviewing, N) < N`: a reviewing leaf frees its implementing
-// slot, up to N of them, so a replica holds at most 2N claims.
-function claimBudget(leaves, n) {
-  const held = leaves.length;
-  const reviewing = leaves.filter((leaf) => leaf.stage === "reviewing").length;
+// slot, up to N of them. The allocator reading includes every held slot in
+// the workspace, even when it has no live leaf in this drain's table.
+function claimBudget(occupancy, n) {
+  const held = occupancy.occupied;
+  const reviewing = occupancy.reviewing;
   const implementing = held - reviewing;
   const counted = held - Math.min(reviewing, n);
   const open = Math.max(0, n - counted);
-  const cells = el("div", { class: "drain-budget-cells", role: "img", "aria-label": `${implementing} implementing, ${reviewing} reviewing, ${open} open of ${2 * n} claim cells` });
+  const cells = el("div", { class: "drain-budget-cells", role: "img", "aria-label": `${implementing} held outside review, ${reviewing} reviewing, ${open} open of ${2 * n} claim cells` });
   const kinds = [];
   for (let i = 0; i < implementing; i += 1) kinds.push("implementing");
   for (let i = 0; i < reviewing; i += 1) kinds.push("reviewing");
   for (let i = 0; i < open; i += 1) kinds.push("open");
   while (kinds.length < 2 * n) kinds.push("later");
-  for (const kind of kinds.slice(0, Math.max(2 * n, held))) cells.appendChild(el("span", { class: `drain-budget-cell ${kind}`, title: kind }));
-  const legend = el("p", { class: "drain-budget-legend" }, ["implementing", "reviewing", "open", "later"].map((kind) => el("span", { class: `drain-budget-key ${kind}`, text: kind })));
+  for (const kind of kinds.slice(0, Math.max(2 * n, held))) cells.appendChild(el("span", { class: `drain-budget-cell ${kind}`, title: kind === "implementing" ? "held outside review" : kind }));
+  const legend = el("p", { class: "drain-budget-legend" }, ["implementing", "reviewing", "open", "later"].map((kind) => el("span", { class: `drain-budget-key ${kind}`, text: kind === "implementing" ? "held outside review" : kind })));
   const sum = el("p", { class: "drain-budget-sum mono", id: "drain-claim-budget-sum", text: `held − min(reviewing, N) < N: ${held} − min(${reviewing}, ${n}) = ${counted} ${counted < n ? "<" : "≥"} ${n}${counted < n ? ` → claims up to ${open} more` : " → no new claim"}` });
   return el("div", { class: "drain-budget" }, [cells, legend, sum]);
 }
@@ -167,7 +168,7 @@ function claimsTable(leaves) {
   const reviewing = leaves.filter((leaf) => leaf.stage === "reviewing").length;
   const head = el("p", { class: "drain-claims-head", id: "drain-claims-summary", text: leaves.length
     ? `Claimed leaves: ${leaves.length} running (${leaves.length - reviewing} implementing, ${reviewing} reviewing)`
-    : "No claims held." });
+    : "No running claimed leaves." });
   if (!leaves.length) return head;
   const rows = el("tbody");
   for (const leaf of leaves) {
@@ -241,10 +242,13 @@ export function renderDrainStarted(detail, payload) {
   }
   const leaves = Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : [];
   const n = claimCeiling(detail?.run, input, capacity);
+  const occupancy = detail.pull_occupancy;
+  const occupancyKnown = Number.isInteger(occupancy?.occupied) && occupancy.occupied >= 0
+    && Number.isInteger(occupancy?.reviewing) && occupancy.reviewing >= 0 && occupancy.reviewing <= occupancy.occupied;
   pullBody.replaceChildren(
     el("p", { class: "drain-pull-owner" }, ["Pulling from ", el("code", { class: "mono", text: settings.selector || "the owner" }), checkout.ownerHost ? ` on ${checkout.ownerHost}` : ""]),
-    el("h3", { class: "drain-compose-title", text: "Claim budget" }),
-    n ? claimBudget(leaves, n) : el("p", { class: "drain-field-hint", text: "The run recorded no concurrency and readiness reported none, so the budget is unknown." }),
+    el("h3", { class: "drain-compose-title", text: "Workspace claim budget" }),
+    !occupancyKnown ? el("p", { class: "drain-field-hint", text: "Workspace occupancy is unavailable, so the claim budget is unknown." }) : n ? claimBudget(occupancy, n) : el("p", { class: "drain-field-hint", text: "The run recorded no concurrency and readiness reported none, so the budget is unknown." }),
     el("h3", { class: "drain-compose-title", text: "Claims by stage" }),
     claimsTable(leaves),
     settlementsNote(detail),

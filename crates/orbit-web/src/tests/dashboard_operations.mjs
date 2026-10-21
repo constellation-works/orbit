@@ -669,7 +669,7 @@ const leaf = (id, stage) => ({ leaf_run_id: `jrun-leaf-${id}`, job_id: 'task_pr_
 runDetailFixture = { run: { run_id: 'jrun-pull-1', input: {
   for_seconds: 28800, max_active_leaf_runs: 3, allowed_crews: ['sol'],
   destination: { owner_machine_id: 'm-owner', owner_workspace_id: 'ws-one', selector: 'm-owner/ws-one', execution_machine_id: 'm-mac' },
-} }, claimed_leaves: [leaf(1, 'implementing'), leaf(2, 'reviewing'), leaf(3, 'reviewing'), leaf(4, 'implementing')], refused_settlements: [] };
+} }, pull_occupancy: { occupied: 4, reviewing: 2 }, claimed_leaves: [leaf(1, 'implementing'), leaf(2, 'reviewing'), leaf(3, 'reviewing'), leaf(4, 'implementing')], refused_settlements: [] };
 await fetchAndRenderOperations();
 assert(!get('drain-pull-panel').hidden && get('drain-pull-body').textContent.includes('m-owner/ws-one'), 'the pull panel names the owner selector');
 const budgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
@@ -689,6 +689,7 @@ runDetailFixture = {
     ...runDetailFixture.run,
     drain_worker_limit: { max_active_leaf_runs: 1 },
   },
+  pull_occupancy: { occupied: 1, reviewing: 0 },
   claimed_leaves: [leaf(5, 'implementing')],
   refused_settlements: [],
 };
@@ -713,6 +714,31 @@ assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N)
 typeConcurrency('2');
 drainCapacityOverride = {};
 assert(get('drain-started-command').textContent === 'orbit run auto \\\n    --pull ws-one --host server \\\n    --for 8h \\\n    --concurrency 3 \\\n    --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
+// Capacity comes from the allocator's workspace reading, independently of
+// this drain's running-leaf table or whether settlement has a refusal yet.
+runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
+for (const fixture of [
+  { name: 'launching admission', occupied: 1, reviewing: 0, leaves: [], open: false },
+  { name: 'running bound claim counted once', occupied: 1, reviewing: 0, leaves: [leaf(6, 'implementing')], open: false },
+  { name: 'review replacement', occupied: 1, reviewing: 1, leaves: [leaf(6, 'reviewing')], open: true },
+  { name: 'capped review credit', occupied: 2, reviewing: 2, leaves: [leaf(6, 'reviewing'), leaf(7, 'reviewing')], open: false },
+  { name: 'terminal leaf awaiting settlement', occupied: 1, reviewing: 0, leaves: [], open: false, refused: true },
+  { name: 'other workspace leaf', occupied: 1, reviewing: 0, leaves: [], open: false },
+  { name: 'settlement released capacity', occupied: 0, reviewing: 0, leaves: [], open: true },
+]) {
+  runDetailFixture.pull_occupancy = { occupied: fixture.occupied, reviewing: fixture.reviewing };
+  runDetailFixture.claimed_leaves = fixture.leaves;
+  runDetailFixture.refused_settlements = fixture.refused ? [{ owner: 'm-owner/ws-one', refusals: 1, reason: 'validation evidence missing' }] : [];
+  await fetchAndRenderOperations();
+  const sum = get('drain-claim-budget-sum').textContent;
+  const counted = fixture.occupied - Math.min(fixture.reviewing, 1);
+  assert(sum.includes(`${fixture.occupied} − min(${fixture.reviewing}, 1) = ${counted}`) && sum.endsWith(fixture.open ? 'claims up to 1 more' : 'no new claim'), `${fixture.name}: authoritative occupancy determines admission: ${sum}`);
+  assert(fixture.leaves.length ? get('drain-claims-summary').textContent.includes(`${fixture.leaves.length} running`) : get('drain-claims-summary').textContent === 'No running claimed leaves.', `${fixture.name}: stage table describes only live claimed leaves`);
+  if (fixture.refused) assert(get('drain-pull-body').textContent.includes('validation evidence missing'), 'settlement refusal stays visible beside held capacity');
+}
+runDetailFixture.pull_occupancy = null;
+await fetchAndRenderOperations();
+assert(!get('drain-claim-budget-sum') && get('drain-pull-body').textContent.includes('occupancy is unavailable'), 'an unavailable read never advertises free capacity');
 replicaWorkspace = false;
 pullDrainRunId = null;
 runDetailFixture = null;
