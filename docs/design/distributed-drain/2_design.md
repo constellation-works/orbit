@@ -394,7 +394,8 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
 leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
 given no owner transport of its own: the few claim-scoped owner calls it may make (the claimed
-task's record and artifacts, a follow-up task `spawned_from` it, or a review finding that is
+task's record and artifacts, search and task listing within the claimed workspace, a follow-up
+task `spawned_from` it, or a review finding that is
 also `regression_from` its culprit, and a friction) cross the run's
 plugin broker outside the sandbox ([ORB-14260]; plugins
 [2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3, "Claimed-owner calls").
@@ -1403,7 +1404,7 @@ Acceptance criteria, not reported as passing.
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
 | Owner's own drain admission pass times out on a task or database lock | The pass is deferred, not failed: it admits nothing, releases any `enforce` gap-fit reservations it wrote for its wave (any it cannot release expire with their TTL), records `lock_busy` and the lock error (naming the holder) as the drain's last pass, and the next pass retries after the poll interval. Ten consecutive deferred passes fail the drain with that error; a completed pass resets the count; any other admission error fails the drain as before |
 | Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
-| Claimed agent's owner call from inside the sandbox | Only the claim-scoped owner calls cross the run's broker; another call, task or relation is refused before the owner; a missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
+| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search and task listing read the claimed workspace; federated search, task show or artifacts for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
