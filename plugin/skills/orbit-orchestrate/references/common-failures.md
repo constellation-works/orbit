@@ -58,7 +58,7 @@ Confirm:
 orbit run show <run_id> --json
 orbit job show <job> --json
 orbit run events <run_id> --json | rg '<missing_field>|<activity_name>|<job_name>'
-diff -u .orbit/resources/jobs/job_<job>.yaml ~/.orbit/resources/jobs/job_<job>.yaml
+diff -u .orbit/resources/jobs/<job>.yaml ~/.orbit/resources/jobs/<job>.yaml
 find .orbit/resources/jobs ~/.orbit/resources/jobs -name '*<job>*' -print
 ```
 
