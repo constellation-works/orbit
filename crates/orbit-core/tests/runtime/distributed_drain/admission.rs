@@ -2111,46 +2111,125 @@ fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
             .with_automation_machine_identity(Some(OWNER.into())),
     );
     let gate_job = owner.show_job_catalog_entry("task_gate_pipeline").unwrap();
-    let gate = owner
-        .run_job_v2_from_yaml(
-            &gate_job.path,
-            json!({
-                "task_ids": [waiting],
-                "mode": "local",
-                "max_wait_seconds": 0,
-                "poll_interval_seconds": 0,
-            }),
+    let dependent = backlog_task(&owner, &pair.owner_repo, "src/dependent.rs", None);
+    owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": dependent, "dependencies": [claimed], "model": "codex"}),
         )
-        .expect("gate run");
+        .unwrap();
+    // Fake only the loop's monotonic clock and sleeper. Real shipped actions,
+    // reservation conflicts, deferral audit and child admission still execute.
+    for (budget, interval, iterations, sleeps) in [
+        (0, 30, 0, vec![]),
+        (1, 30, 1, vec![1]),
+        (3, 1, 3, vec![1, 1, 1]),
+        (3, 2, 2, vec![2, 1]),
+    ] {
+        for target in [&waiting, &dependent] {
+            let elapsed = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
+            let observed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let clock_elapsed = elapsed.clone();
+            let sleep_elapsed = elapsed.clone();
+            let sleep_observed = observed.clone();
+            let epoch = std::time::Instant::now();
+            let gate = orbit_engine::test_support::with_loop_clock(
+                move || epoch + clock_elapsed.get(),
+                move |delay| {
+                    sleep_observed.borrow_mut().push(delay);
+                    sleep_elapsed.set(sleep_elapsed.get() + delay);
+                },
+                || {
+                    owner
+                        .run_job_v2_from_yaml(
+                            &gate_job.path,
+                            json!({
+                                "task_ids": [target],
+                                "mode": "local",
+                                "max_wait_seconds": budget,
+                                "poll_interval_seconds": interval,
+                            }),
+                        )
+                        .expect("gate run")
+                },
+            );
+            assert_eq!(elapsed.get(), Duration::from_secs(budget));
+            assert_eq!(
+                *observed.borrow(),
+                sleeps
+                    .iter()
+                    .copied()
+                    .map(Duration::from_secs)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(gate.pipeline["wait_for_window"]["iterations"], iterations);
+            assert_eq!(gate.pipeline["wait_for_window"]["timed_out"], true);
+            if budget == 0 {
+                assert!(
+                    gate.pipeline.get("reserve").is_none(),
+                    "zero budget must never reserve"
+                );
+            }
+
+            assert!(
+                gate.success,
+                "a starved gate defers, never fails: {gate:#?}"
+            );
+            let deferral = &gate.pipeline["starvation_check"];
+            assert_eq!(deferral["deferred"], true, "{deferral}");
+            assert_eq!(deferral["max_wait_seconds"], budget as f64);
+            assert_eq!(
+                deferral["blocking_task_ids"],
+                json!([claimed]),
+                "{deferral}"
+            );
+            assert_eq!(
+                deferral["blocking_claims"][0]["claim_id"],
+                claim_id.as_str(),
+                "{deferral}"
+            );
+            let dispatch = &gate.pipeline["dispatch_child"];
+            assert_eq!(dispatch["skipped"], true, "{dispatch}");
+            assert_eq!(dispatch["status"], "success", "{dispatch}");
+            assert_eq!(dispatch["deferral"], *deferral, "{dispatch}");
+            assert!(
+                owner_jobs
+                    .list_job_runs("task_local_pipeline")
+                    .unwrap()
+                    .is_empty(),
+                "a deferred gate dispatches no delivery run"
+            );
+            assert_eq!(pair.owner_status(target), "backlog");
+            if target == &dependent {
+                assert_eq!(deferral["waiting_on_deps"], json!([claimed]));
+            }
+            assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
+        }
+    }
+    // Exercise late-grant cleanup through the real public action boundary.
+    let free = backlog_task(&owner, &pair.owner_repo, "src/late.rs", None);
+    let reservation = owner
+        .run_deterministic(
+            "reserve_locks",
+            &json!({}),
+            &json!({"task_ids": [free], "ttl_seconds": 60}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert_eq!(reservation["reserved"], true);
+    let deferred = owner.run_deterministic("gate_starvation_defer", &json!({}), &json!({"task_ids": [free], "max_wait_seconds": 1, "expired": true, "reservation": reservation}), ToolContext::default()).unwrap();
+    assert_eq!(deferred["deferred"], true);
+    assert_eq!(deferred["reservation"]["reserved"], false);
+    let locks = owner.run_tool("orbit.task.locks", json!({})).unwrap();
     assert!(
-        gate.success,
-        "a starved gate defers, never fails: {gate:#?}"
-    );
-    let deferral = &gate.pipeline["starvation_check"];
-    assert_eq!(deferral["deferred"], true, "{deferral}");
-    assert_eq!(
-        deferral["blocking_task_ids"],
-        json!([claimed]),
-        "{deferral}"
-    );
-    assert_eq!(
-        deferral["blocking_claims"][0]["claim_id"],
-        claim_id.as_str(),
-        "{deferral}"
-    );
-    let dispatch = &gate.pipeline["dispatch_child"];
-    assert_eq!(dispatch["skipped"], true, "{dispatch}");
-    assert_eq!(dispatch["status"], "success", "{dispatch}");
-    assert_eq!(dispatch["deferral"], *deferral, "{dispatch}");
-    assert!(
-        owner_jobs
-            .list_job_runs("task_local_pipeline")
+        locks["by_reservation"]
+            .as_array()
             .unwrap()
-            .is_empty(),
-        "a deferred gate dispatches no delivery run"
+            .iter()
+            .all(|held| held["reservation_id"] != reservation["reservation_id"]),
+        "a late grant must be released: {locks}"
     );
-    assert_eq!(pair.owner_status(&waiting), "backlog");
-    assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
+    assert_eq!(pair.owner_status(&free), "backlog");
 }
 
 /// A task that keeps an admissible status but is refused at dispatch (a pilot

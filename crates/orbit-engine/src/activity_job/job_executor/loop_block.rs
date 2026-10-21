@@ -5,6 +5,17 @@ pub(super) fn run_loop(
     block: &LoopBlock,
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
+    let timeout = render_duration(
+        block.timeout_seconds.as_deref(),
+        ctx,
+        "loop.timeout_seconds",
+    )?;
+    let interval = render_duration(
+        block.interval_seconds.as_deref(),
+        ctx,
+        "loop.interval_seconds",
+    )?;
+    let started = loop_clock::now();
     let loop_items = match &block.items {
         Some(expression) => Some(render_items_expression(
             expression,
@@ -25,11 +36,17 @@ pub(super) fn run_loop(
 
     let mut broke = false;
     let mut last_iter: u32 = 0;
+    let mut last_output = Value::Null;
     let planned_iterations = loop_items
         .as_ref()
         .map(|items| items.len() as u32)
         .unwrap_or(block.max_iterations);
     for iter in 1..=planned_iterations {
+        if timeout
+            .is_some_and(|budget| loop_clock::now().saturating_duration_since(started) >= budget)
+        {
+            break;
+        }
         let iteration_index = iter - 1;
         last_iter = iter;
         emit_job_event_lossy(
@@ -67,6 +84,7 @@ pub(super) fn run_loop(
                     message: outcome.message,
                 });
             }
+            last_output = outcome.output;
         }
 
         // Evaluate break_when after the body runs so the body can populate
@@ -93,6 +111,17 @@ pub(super) fn run_loop(
             broke = true;
             break;
         }
+        if iter < planned_iterations
+            && let Some(interval) = interval
+        {
+            let remaining = timeout.map(|budget| {
+                budget.saturating_sub(loop_clock::now().saturating_duration_since(started))
+            });
+            let delay = remaining.map_or(interval, |remaining| interval.min(remaining));
+            if !delay.is_zero() {
+                loop_clock::sleep(delay);
+            }
+        }
     }
 
     if !broke && block.break_when.is_some() {
@@ -109,6 +138,8 @@ pub(super) fn run_loop(
     let out = serde_json::json!({
         "iterations": last_iter,
         "broke": broke,
+        "timed_out": timeout.is_some_and(|budget| loop_clock::now().saturating_duration_since(started) >= budget),
+        "last_output": last_output,
     });
     record_pipeline(ctx, &step.id, out.clone());
 
@@ -117,4 +148,26 @@ pub(super) fn run_loop(
         output: out,
         message: None,
     })
+}
+
+fn render_duration(
+    expression: Option<&str>,
+    ctx: &ExecCtx<'_>,
+    label: &str,
+) -> Result<Option<Duration>, DispatchError> {
+    expression
+        .map(|expression| {
+            let rendered = template::render(expression, &ctx.template_ctx())
+                .map_err(|err| DispatchError::JobExecution(format!("{label}: {err}")))?;
+            rendered
+                .parse::<f64>()
+                .ok()
+                .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+                .ok_or_else(|| {
+                    DispatchError::JobExecution(format!(
+                        "{label} must be finite non-negative seconds"
+                    ))
+                })
+        })
+        .transpose()
 }

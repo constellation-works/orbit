@@ -16,6 +16,8 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 
+mod gate_deadline;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -423,6 +423,8 @@ fn validation_loop(
         when,
         JobV2StepBody::Loop {
             loop_: LoopBlock {
+                timeout_seconds: None,
+                interval_seconds: None,
                 items: None,
                 max_iterations: 1,
                 break_when: break_when.map(str::to_string),

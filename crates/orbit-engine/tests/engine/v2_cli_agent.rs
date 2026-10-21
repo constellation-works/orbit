@@ -1093,6 +1093,8 @@ fn synthetic_loop_session_job() -> JobV2 {
         resolved_recovery_activity: None,
         body: JobV2StepBody::Loop {
             loop_: LoopBlock {
+                timeout_seconds: None,
+                interval_seconds: None,
                 items: None,
                 max_iterations: 3,
                 break_when: None,
