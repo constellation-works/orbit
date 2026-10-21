@@ -266,14 +266,9 @@ pub(super) fn job_outcome(
     };
 
     let run = runtime.show_job_run(id)?;
-    let stopped = matches!(
-        run.state,
-        JobRunState::Failed
-            | JobRunState::Cancelled
-            | JobRunState::Interrupted
-            | JobRunState::Success
-    ) && crate::application::job::run_owner_liveness(&run)
-        == crate::application::job::RunOwnerLiveness::Stopped;
+    let stopped = run.state.is_terminal()
+        && crate::application::job::run_owner_liveness(&run)
+            == crate::application::job::RunOwnerLiveness::Stopped;
 
     // Only a canonical persisted step result can attest job-only examination.
     let input = run.input.as_ref();
@@ -317,6 +312,8 @@ pub(super) fn job_outcome(
 
     if stopped {
         return Ok(ActionOutcome::Failed {
+            // Only ordinary failures automatically retry. Held needs operator
+            // attention; Timeout, like cancellation, requires explicit recovery.
             retryable: run.state == JobRunState::Failed,
             reason: "job_stopped_without_accepted_evidence".into(),
         });

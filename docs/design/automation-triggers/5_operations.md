@@ -309,7 +309,13 @@ earlier task.
 
 For a job-only routine, the assigned job returns a `coverage_evidence` object in
 an existing persisted step result. It must match the immutable `input.automation`
-batch and the admitted run ID. No additional tool is needed.
+batch and the admitted run ID. No additional tool is needed. Once a terminal
+job's owner is confirmed stopped, missing coverage evidence settles the attempt
+as failed and leaves coverage owed. Only an ordinary `Failed` run can use the
+frozen automatic retry budget. `Held` and `Timeout`, like cancellation and
+interruption, require explicit operator recovery; they report `needs_attention`
+instead of remaining `batch_pending`. A terminal record whose owner is still
+alive or cannot be proved stopped continues waiting.
 
 ## Inspection and recovery
 
