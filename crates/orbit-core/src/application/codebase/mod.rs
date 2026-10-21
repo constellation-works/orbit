@@ -16,8 +16,8 @@
 //! scan by any process. Every scan path shares those rows; a missing or
 //! outdated row is recomputed and written back. [`codebase_analytics`] and
 //! [`codebase_path_detail`] only slice the facts by window, minimum support
-//! and rollup. Analytics uses verified landing receipts in task history,
-//! without observing delivery runs. Related queries use
+//! and rollup. Analytics and path detail use verified landing receipts in
+//! task history, without observing delivery runs. Related queries use
 //! [`OrbitRuntime::codebase_related_scan`] for window-scoped delivery
 //! fallback, which lists the workspace's runs and parses the job catalog once
 //! per scan; what delivery observation finds is never stored with a task. A
@@ -173,13 +173,14 @@ impl OrbitRuntime {
         ))
     }
 
-    /// Scan, then report one path's standing in every ranking.
+    /// Scan history-only facts, including landed receipts, then report one
+    /// path's standing in every ranking without observing delivery runs.
     pub fn codebase_path_detail(
         &self,
         query: &CodebaseQuery,
         path: &str,
     ) -> Result<Value, OrbitError> {
-        codebase_path_detail(&facts::scan(self, None, false)?, query, path)
+        codebase_path_detail(&self.codebase_scan()?, query, path)
     }
 }
 
