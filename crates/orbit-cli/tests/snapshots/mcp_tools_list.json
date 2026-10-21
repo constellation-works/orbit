@@ -793,6 +793,10 @@
           "type": "string",
           "description": "The orchestrator name a task's orchestrator attribution records: the row's crew."
         },
+        "row_model": {
+          "type": "string",
+          "description": "The row's model (`model unknown` for tasks that recorded none); optional when the crew has one row."
+        },
         "window": {
           "type": "string",
           "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d."

@@ -556,3 +556,155 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
     ]);
     assert_eq!(by_model["row"]["model"], MODELS[0], "{by_model}");
 }
+
+/// A crew whose tasks record two orchestrator models, one filed without a
+/// recorded model (`model unknown`), keeps the deprecated `orbit orchestrator
+/// show` and `orbit.orchestrator.show` aliases answering. Each model's row is
+/// selected by `--model` (CLI) or `row_model` (tool), as on `orbit agents
+/// show`, and the main Agents scorecard keeps one row per model.
+#[test]
+fn orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models",
+    ) {
+        return;
+    }
+
+    const CREW: &str = "opus";
+    const RECORDED: &str = "claude-opus-5-5";
+    const LEGACY: &str = "model unknown";
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        // A managed run exports worker authority that would bind the fixture
+        // runtime to the live store.
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        // Filed without an orchestrator and given one afterward, which records
+        // no model: the stored shape of a task filed before the field existed.
+        let legacy = runtime
+            .add_task(TaskAddParams {
+                title: "legacy".into(),
+                description: "orchestrator alias fixture".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &legacy,
+                TaskUpdateParams {
+                    orchestrator: Some(Some(CREW.into())),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        runtime
+            .add_task(TaskAddParams {
+                title: "recorded".into(),
+                description: "orchestrator alias fixture".into(),
+                orchestrator: Some(CREW.into()),
+                orchestrator_model: Some(RECORDED.into()),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    // Main Agents keeps one row per recorded model.
+    let scorecard = fixture.json(&["agents", "scorecard", "--role", "orchestrators", "--json"]);
+    let models: Vec<&str> = scorecard["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["crew"] == CREW)
+        .map(|row| row["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(models.len(), 2, "one row per model: {scorecard}");
+    assert!(
+        models.contains(&LEGACY) && models.contains(&RECORDED),
+        "{scorecard}"
+    );
+
+    // Without a selector the tool alias refuses rather than pick a row.
+    let refused = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.orchestrator.show",
+            "--input",
+            &json!({ "orchestrator": CREW }).to_string(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+
+    for model in [LEGACY, RECORDED] {
+        // The CLI alias takes `--model`, as `orbit agents show` does.
+        let mut alias = fixture.json(&["orchestrator", "show", CREW, "--model", model, "--json"]);
+        alias
+            .as_object_mut()
+            .unwrap()
+            .remove("deprecation")
+            .unwrap();
+        let detail = fixture.json(&[
+            "agents",
+            "show",
+            "--role",
+            "orchestrators",
+            "--crew",
+            CREW,
+            "--model",
+            model,
+            "--json",
+        ]);
+        assert_eq!(alias["row"]["model"], model, "{alias}");
+        assert_eq!(
+            scan_independent(alias),
+            scan_independent(detail),
+            "the CLI alias answers the {model} row as main Agents does"
+        );
+
+        // The tool takes `row_model`, as `orbit.agents.show` does.
+        let mut alias_tool = fixture.json(&[
+            "tool",
+            "run",
+            "orbit.orchestrator.show",
+            "--full",
+            "--input",
+            &json!({ "orchestrator": CREW, "row_model": model }).to_string(),
+        ]);
+        alias_tool
+            .as_object_mut()
+            .unwrap()
+            .remove("deprecation")
+            .unwrap();
+        let agents_tool = fixture.json(&[
+            "tool",
+            "run",
+            "orbit.agents.show",
+            "--full",
+            "--input",
+            &json!({ "role": "orchestrators", "crew": CREW, "row_model": model }).to_string(),
+        ]);
+        assert_eq!(alias_tool["row"]["model"], model, "{alias_tool}");
+        assert_eq!(
+            scan_independent(alias_tool),
+            scan_independent(agents_tool),
+            "the tool alias answers the {model} row as orbit.agents.show does"
+        );
+    }
+}

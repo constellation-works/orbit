@@ -342,7 +342,7 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
 
-`orbit orchestrator scorecard|show` and `orbit.orchestrator.scorecard|show` remain for one release as aliases of `--role orchestrators` (`show <name>` is `--crew <name>`). They answer the agents payload with a `deprecation` field naming the replacement, and the command prints that note to stderr, so `--json` stays parseable. They are hidden from `orbit --help` and are removed in the following release.
+`orbit orchestrator scorecard|show` and `orbit.orchestrator.scorecard|show` remain for one release as aliases of `--role orchestrators` (`show <name>` is `--crew <name>`, and `--model` or `row_model` names the row's model as on `orbit agents show`, so a crew with several recorded models stays selectable). They answer the agents payload with a `deprecation` field naming the replacement, and the command prints that note to stderr, so `--json` stays parseable. They are hidden from `orbit --help` and are removed in the following release.
 
 ## 8. Scan, Cache and Budget
 

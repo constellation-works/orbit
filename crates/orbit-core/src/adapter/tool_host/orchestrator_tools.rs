@@ -29,7 +29,7 @@ pub(super) fn dispatch(
                 AgentRole::Orchestrators,
                 &query,
                 &input.required_string("orchestrator")?,
-                None,
+                input.optional_string("row_model")?.as_deref(),
             )?,
             "`orbit agents show --role orchestrators --crew <name>` or the `orbit.agents.show` tool with role orchestrators and the name as crew",
         ),

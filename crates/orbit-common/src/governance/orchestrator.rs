@@ -66,6 +66,24 @@ const SELECTION: &[ParamSpec] = &[
     ),
 ];
 
+/// The row a detail names beside its orchestrator, as `orbit agents show`
+/// takes it: `--model` on the CLI, `row_model` over MCP. `model` stays the
+/// caller's provenance on every tool.
+const ROW_MODEL: &[ParamSpec] = &[both(
+    "row_model",
+    ParamType::String,
+    "The row's model (`model unknown` for tasks that recorded none); optional when the crew has one row.",
+    CliArgKind::Flag {
+        long: "model",
+        delimiter: None,
+        aliases: &[],
+        visible_aliases: &[],
+        value_name: Some("MODEL"),
+        multiple: false,
+    },
+    "The row's model; optional when the crew has one row",
+)];
+
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
@@ -103,7 +121,7 @@ const SHOW: OperationSpec<OrchestratorVerb> = OperationSpec {
     cli_about: "Deprecated: use `orbit agents show --role orchestrators --crew <name>`",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[NAME, SELECTION, MODEL],
+    params: &[NAME, ROW_MODEL, SELECTION, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
