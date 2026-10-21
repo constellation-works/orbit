@@ -36,6 +36,7 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
     "invalid api key",
     "invalid_api_key",
     "api key not valid",
+    "api key is not scoped to a workspace",
 ];
 
 /// Whether a provider's own failure text says it could not authenticate, so

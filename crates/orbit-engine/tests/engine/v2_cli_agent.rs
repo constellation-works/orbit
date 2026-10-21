@@ -78,6 +78,18 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
         (
             Provider::Claude,
             "claude",
+            r#"{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace."}"#,
+            true,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":true,"api_error_status":400,"result":"API Error: 400 tools.0.custom.input_schema: schema rejected"}"#,
+            false,
+        ),
+        (
+            Provider::Claude,
+            "claude",
             r#"{"type":"result","is_error":true,"result":"Failed to authenticate"}"#,
             true,
         ),
@@ -198,6 +210,24 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
                 unavailable,
                 "{binary} exit {exit_code}: {payload}: {outcome:?}"
             );
+            if payload.contains("not scoped to a workspace") {
+                assert!(
+                    outcome.message.as_deref().is_some_and(|message| {
+                        message.contains("API key is not scoped to a workspace")
+                    }),
+                    "provider-unavailable diagnostics must name the workspace-scoped credential rejection: {outcome:?}"
+                );
+            }
+            if payload.contains("input_schema") && exit_code != 0 {
+                assert!(
+                    outcome.message.as_deref().is_some_and(|message| {
+                        message.contains(
+                            "the provider rejected Orbit's response-envelope schema passed via",
+                        )
+                    }),
+                    "an unrelated input_schema rejection must retain its schema diagnostic: {outcome:?}"
+                );
+            }
             if unavailable {
                 assert!(
                     !outcome.success,
