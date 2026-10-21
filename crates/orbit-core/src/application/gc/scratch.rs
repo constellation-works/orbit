@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use orbit_common::fs::path::orbit_scratch_dir;
 use orbit_engine::ScratchGcReport;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::workflow::JobRunState;
 
 use crate::{OrbitError, OrbitRuntime};
 
@@ -68,15 +69,23 @@ impl OrbitRuntime {
         }
     }
 
-    /// Every pending or running run's record and pipeline state, as JSON, so
+    /// Every pending, running or retrying run's record and pipeline state, as JSON, so
     /// a path an active run was handed is found wherever it appears. Observed
     /// without reconciling: a stale owner still counts as active.
     fn active_run_documents(&self) -> Result<Vec<String>, OrbitError> {
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+        let jobs = self.stores().jobs();
+        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
             active_only: true,
             include_steps: false,
             ..JobRunQuery::default()
         })?;
+        // `active_only` covers pending/running. Retrying runs sleep between
+        // attempts and still need their input and saved-state scratch paths.
+        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Retrying),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?);
         let mut documents = Vec::with_capacity(runs.len() * 2);
         for run in runs {
             documents.push(serde_json::to_string(&run).map_err(encode_error)?);
