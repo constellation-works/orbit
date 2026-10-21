@@ -106,7 +106,9 @@ value, a call that omits it inherits the session's, and a session started
 without the flag attributes nothing at all. The name is resolved against the
 crews of whichever workspace the call lands in, so an unconfigured crew fails
 that call rather than being replaced by another one. The default applies only to
-tasks the session creates: existing tasks are never rewritten.
+tasks the session creates: existing tasks are never rewritten. Creation also
+records the crew's configured model as the task's `orchestrator_model`; pass
+`orchestrator_model` on the call only when your session runs a different model.
 
 ```bash
 orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>","model":"<agent-family>"}'

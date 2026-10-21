@@ -174,6 +174,10 @@ pub(super) struct CreateTaskBody {
     crew: Option<String>,
     #[serde(default)]
     orchestrator: Option<String>,
+    /// The orchestrator's model when it differs from the orchestrator crew's
+    /// configured model; omitted, creation records the crew's model.
+    #[serde(default)]
+    orchestrator_model: Option<String>,
     /// Why the task was filed; omitted, it stays unset.
     #[serde(default)]
     origin: Option<TaskOrigin>,
@@ -630,6 +634,7 @@ pub(super) async fn create_task_action(
         crew: body.crew,
         crew_source: None,
         orchestrator: body.orchestrator,
+        orchestrator_model: body.orchestrator_model,
         origin: body.origin,
         context_creation: Default::default(),
     };

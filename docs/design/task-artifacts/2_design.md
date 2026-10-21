@@ -3,7 +3,7 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-10
+last_updated: 2026-10-21
 last_validated: 2026-10-19
 status: Draft
 feature: task-artifacts
@@ -65,6 +65,8 @@ complexity: hard
 job_run_id: null
 crew: implementer-crew
 orchestrator: orchestration-crew
+orchestrator_model: claude-opus-5-5
+orchestrator_model_source: crew_config
 relations:
   - type: supersedes
     target: ORB-00000
@@ -80,7 +82,7 @@ created_at: 2026-05-11T00:00:00Z
 updated_at: 2026-05-11T00:00:00Z
 ```
 
-The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (valid task IDs under any configured prefix, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Task-only relation types target valid task IDs under any configured prefix (for example, `ORB-00000` or `DANI-00001`). `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
+The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `orchestrator_model` and `orchestrator_model_source` snapshot the orchestrator's model once, at creation: an explicit create input (`explicit`), else the orchestrator crew's configured model (`crew_config`). They are never updated, so a later crew-config change or orchestrator change leaves them as recorded, and a task created without an orchestrator has neither. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (valid task IDs under any configured prefix, `FYYYY-MM-NNN`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Task-only relation types target valid task IDs under any configured prefix (for example, `ORB-00000` or `DANI-00001`). `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
 
 ## 3. Prose Documents
 

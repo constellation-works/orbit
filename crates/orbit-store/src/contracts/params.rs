@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
-    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
+    ExternalRef, OrchestratorModelSource, TaskArtifact, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,12 @@ pub struct TaskCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_source: Option<String>,
     pub orchestrator: Option<String>,
+    /// The orchestrator's model resolved at creation; never updated later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<OrchestratorModelSource>,
     /// Why the task was filed; absent on legacy creation contracts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TaskOrigin>,

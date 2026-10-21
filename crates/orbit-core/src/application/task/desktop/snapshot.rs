@@ -73,6 +73,7 @@ fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
     for (name, value, max) in [
         ("task.crew", &mut task.crew, 128),
         ("task.orchestrator", &mut task.orchestrator, 128),
+        ("task.orchestrator_model", &mut task.orchestrator_model, 128),
         ("task.pr_status", &mut task.pr_status, 128),
         ("task.created_by", &mut task.created_by, 512),
         ("task.planned_by", &mut task.planned_by, 512),

@@ -844,13 +844,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             let (opus, sonnet) = (&rows[0], &rows[1]);
             assert_eq!(
                 (&opus["crew"], &opus["model"], &opus["units"], &opus["rank"]),
-                (
-                    &json!("opus"),
-                    &json!("model unknown"),
-                    &json!(4),
-                    &json!(1)
-                ),
-                "{opus}"
+                (&json!("opus"), &json!("opus"), &json!(4), &json!(1)),
+                "an orchestrator row carries the model its crew was configured with when the tasks were created: {opus}"
             );
             assert_eq!(
                 (&sonnet["crew"], &sonnet["below_support"], &sonnet["rank"]),

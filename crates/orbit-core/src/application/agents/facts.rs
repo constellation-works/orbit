@@ -284,6 +284,8 @@ pub(super) struct TaskFacts {
     pub(super) status: TaskStatus,
     /// The task's orchestrator attribution, when it names one.
     pub(super) orchestrator: Option<String>,
+    /// The orchestrator's model recorded when the task was created.
+    pub(super) orchestrator_model: Option<String>,
     pub(super) origin: Option<TaskOrigin>,
     pub(super) complexity: Option<TaskComplexity>,
     pub(super) created_at: DateTime<Utc>,
@@ -818,6 +820,12 @@ fn task_facts(
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty())
+            .map(str::to_string),
+        orchestrator_model: task
+            .orchestrator_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
             .map(str::to_string),
         origin: task.origin,
         complexity: task.complexity,

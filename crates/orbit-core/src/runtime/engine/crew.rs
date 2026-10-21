@@ -368,11 +368,17 @@ impl OrbitRuntime {
         &self,
         crew: Option<&str>,
     ) -> Result<Option<String>, OrbitError> {
+        Ok(self.canonical_crew(crew)?.map(|crew| crew.name))
+    }
+
+    /// Resolve a user-supplied crew name to its entry in the active
+    /// named-crew registry. Blank optional values remain unset.
+    pub(crate) fn canonical_crew(&self, crew: Option<&str>) -> Result<Option<Crew>, OrbitError> {
         let Some(crew) = crew.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
         resolve_crew(crew, self.context.settings().crews())
-            .map(|crew| Some(crew.name))
+            .map(Some)
             .map_err(Into::into)
     }
 

@@ -87,6 +87,9 @@ Options:
       --orchestrator <ORCHESTRATOR>
           Named crew responsible for orchestration attribution
 
+      --orchestrator-model <ORCHESTRATOR_MODEL>
+          Orchestrator's model when it differs from the orchestrator crew's configured model (default: that crew's model, recorded at creation)
+
       --origin <ORIGIN>
           Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset
 

@@ -33,7 +33,8 @@ use crate::OrbitRuntime;
 pub use attribution::{Charge, Credit, Owner};
 pub use facts::{AgentFacts, Problem};
 
-/// The model of a row whose runs recorded none, and of every orchestrator.
+/// The model of a row whose runs, or for orchestrators whose tasks, recorded
+/// none.
 pub(crate) const MODEL_UNKNOWN: &str = "model unknown";
 /// The crew of a row whose attempt no job run records.
 pub(crate) const CREW_UNKNOWN: &str = "crew unknown";

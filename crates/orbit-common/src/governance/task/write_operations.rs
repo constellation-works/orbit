@@ -170,6 +170,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "source_task",
             "crew",
             "orchestrator",
+            "orchestrator_model",
             "origin",
             "model",
         ],
@@ -278,6 +279,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution",
+            ),
+            both(
+                "orchestrator_model",
+                ParamType::String,
+                "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer",
+                CliArgKind::flag("orchestrator-model"),
+                "Orchestrator's model when it differs from the orchestrator crew's configured model (default: that crew's model, recorded at creation)",
             ),
             both(
                 "origin",

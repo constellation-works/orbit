@@ -180,6 +180,8 @@ impl TaskV2Store {
                 crew: params.crew,
                 crew_source: params.crew_source,
                 orchestrator: params.orchestrator,
+                orchestrator_model: params.orchestrator_model,
+                orchestrator_model_source: params.orchestrator_model_source,
                 origin: params.origin,
                 relations,
                 tags: normalize_task_tags(params.tags),

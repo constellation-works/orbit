@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
+use orbit_types::identity::Crew;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, validate_os_tags,
+    OrchestratorModelSource, Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
@@ -206,7 +207,8 @@ impl OrbitRuntime {
             // `os:` tags is refused here, before the task is stored.
             self.refuse_unsatisfiable_os_crew(&normalized_tags, crew)?;
         }
-        params.orchestrator = self.canonical_crew_name(params.orchestrator.as_deref())?;
+        let orchestrator = self.canonical_crew(params.orchestrator.as_deref())?;
+        params.orchestrator = orchestrator.as_ref().map(|crew| crew.name.clone());
         if params.orchestrator.is_some()
             && !matches!(initial_status, TaskStatus::Proposed | TaskStatus::Backlog)
         {
@@ -214,6 +216,11 @@ impl OrbitRuntime {
                 "initial status {initial_status} cannot carry an orchestrator; orchestrator can only be set while proposed or backlog"
             )));
         }
+        let (orchestrator_model, orchestrator_model_source) = creation_orchestrator_model(
+            orchestrator.as_ref(),
+            params.orchestrator_model.as_deref(),
+        )?
+        .unzip();
 
         // Context selectors are stored relative to the repository root. The
         // former `--workspace-path` hint changed validation roots without
@@ -263,6 +270,8 @@ impl OrbitRuntime {
                         .as_ref()
                         .map(|assignment| assignment.source.clone()),
                     orchestrator: params.orchestrator.clone(),
+                    orchestrator_model: orchestrator_model.clone(),
+                    orchestrator_model_source,
                     origin,
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
@@ -339,6 +348,42 @@ fn creation_crew_ticket(
         Some(ticket) => ticket(),
         None => random_crew_ticket(),
     }
+}
+
+/// Longest explicit `orchestrator_model` a create accepts.
+const MAX_ORCHESTRATOR_MODEL_LEN: usize = 128;
+
+/// The orchestrator model a new task records, and the rule that supplied
+/// it: an explicit `orchestrator_model` input, else the configured model of
+/// the resolved `orchestrator` crew, snapshotted now so a later crew-config
+/// edit never rewrites it. `None` without an orchestrator. The caller's
+/// `model` provenance input is never a source: it labels the writer, not
+/// the orchestrator.
+fn creation_orchestrator_model(
+    orchestrator: Option<&Crew>,
+    explicit: Option<&str>,
+) -> Result<Option<(String, OrchestratorModelSource)>, OrbitError> {
+    let explicit = explicit.map(str::trim).filter(|model| !model.is_empty());
+    let Some(crew) = orchestrator else {
+        return match explicit {
+            Some(_) => Err(OrbitError::InvalidInput(
+                "orchestrator_model requires an orchestrator; name the orchestrator crew too"
+                    .to_string(),
+            )),
+            None => Ok(None),
+        };
+    };
+    if let Some(model) = explicit {
+        if model.len() > MAX_ORCHESTRATOR_MODEL_LEN || model.chars().any(char::is_control) {
+            return Err(OrbitError::InvalidInput(format!(
+                "orchestrator_model must be a model id of at most {MAX_ORCHESTRATOR_MODEL_LEN} bytes without control characters"
+            )));
+        }
+        return Ok(Some((model.to_string(), OrchestratorModelSource::Explicit)));
+    }
+    let configured = crew.assignment.model.trim();
+    Ok((!configured.is_empty())
+        .then(|| (configured.to_string(), OrchestratorModelSource::CrewConfig)))
 }
 
 /// The visible provenance a task's tags name, applied at the shared

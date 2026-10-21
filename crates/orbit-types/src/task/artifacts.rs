@@ -104,6 +104,13 @@ pub struct TaskEnvelopeV2 {
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// Orchestrator's model, recorded once when the task was created with an
+    /// orchestrator; absent on legacy records and tasks without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<crate::task::OrchestratorModelSource>,
     /// Why the task was filed; absent on legacy and unstated filings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::task::TaskOrigin>,

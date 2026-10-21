@@ -31,6 +31,8 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
+            orchestrator_model_source: None,
             origin: None,
             relations: Vec::new(),
             tags: vec!["task-artifacts".to_string()],

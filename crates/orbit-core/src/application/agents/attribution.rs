@@ -191,15 +191,17 @@ impl Draft<'_> {
         self.charge(Owner::NotScored(reason), None, None, None, at)
     }
 
-    /// The task's orchestrator attribution, or Not scored when it names none.
+    /// The task's orchestrator attribution and its recorded model, or Not
+    /// scored when it names no orchestrator.
     fn orchestrator(self) -> Charge {
         match self.task.orchestrator.clone() {
             Some(name) => {
                 let anchor = self.task.created_at;
+                let model = self.task.orchestrator_model.clone();
                 self.charge(
                     Owner::Role(AgentRole::Orchestrators),
                     Some(name),
-                    None,
+                    model,
                     None,
                     anchor,
                 )
@@ -435,11 +437,7 @@ pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
                 *rows
                     .entry(role)
                     .or_default()
-                    .entry(row_key(
-                        role,
-                        charge.crew.as_deref(),
-                        charge.model.as_deref(),
-                    ))
+                    .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
                     .or_default() += 1;
             }
             Owner::NotScored(reason) => *reasons.entry(reason).or_default() += 1,
@@ -480,17 +478,11 @@ pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
 }
 
 /// The row a charge or credit counts in: its crew and model, `crew unknown`
-/// and `model unknown` when the run recorded none. Orchestrator rows never
-/// have a model.
-pub(super) fn row_key(
-    role: AgentRole,
-    crew: Option<&str>,
-    model: Option<&str>,
-) -> (String, String) {
-    let crew = crew.unwrap_or(super::CREW_UNKNOWN).to_string();
-    let model = match role {
-        AgentRole::Orchestrators => MODEL_UNKNOWN,
-        _ => model.unwrap_or(MODEL_UNKNOWN),
-    };
-    (crew, model.to_string())
+/// and `model unknown` when the run (or, for an orchestrator, the task)
+/// recorded none.
+pub(super) fn row_key(crew: Option<&str>, model: Option<&str>) -> (String, String) {
+    (
+        crew.unwrap_or(super::CREW_UNKNOWN).to_string(),
+        model.unwrap_or(MODEL_UNKNOWN).to_string(),
+    )
 }
