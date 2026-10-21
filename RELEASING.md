@@ -255,7 +255,7 @@ git merge-base --is-ancestor origin/main origin/agent-main && echo in-sync
 
 `in-sync` means `main` is the release commit or another ancestor of `agent-main`, so the next promotion is again a fast-forward. `agent-main` may be ahead of `main` by development commits landed since the tag; that is expected. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
 
-The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and doesn't gate on CI. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
+The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and requires the `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3` checks before merge. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
 
 ### 11. Mark the Orbit task done
 

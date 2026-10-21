@@ -35,10 +35,11 @@ env:
   UV_LINUX_SHA256: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
 
 jobs:
-  # [ORB-10010] Coverage visibility — informational, NOT a merge gate. No CI
-  # job gates merges on agent-main; failures are signals consumed by the host
-  # CI failure sweep. Per-crate coverage targets (goals, not gates) are
-  # documented in CONTRIBUTING.md "Testing & Coverage".
+  # [ORB-10010] Coverage visibility — informational, not a merge gate. The
+  # required agent-main PR checks are Check / Clippy / Test and Test shard
+  # 1/3, 2/3 and 3/3. Coverage failures feed the host CI failure sweep.
+  # Per-crate coverage targets (goals, not gates) are documented in
+  # CONTRIBUTING.md "Testing & Coverage".
   coverage:
     name: Coverage (informational)
     runs-on: ubuntu-latest
