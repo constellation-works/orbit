@@ -274,8 +274,15 @@ jobs:
           # triggered it, not whatever the branch points to once it starts.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Body-history completeness needs every first-parent asset revision.
+          fetch-depth: 0
 
       - *workflow-ci
+
+      - name: Check bundled auto-task body history
+        run: |
+          scripts/require-python.sh --yaml
+          python3 scripts/update-auto-task-body-history.py --check
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
         with:

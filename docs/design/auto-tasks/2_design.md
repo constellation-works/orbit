@@ -432,10 +432,16 @@ the resulting history with the next asset change or release preparation.
 The script scans first-parent integration history, recomputes existing records
 from their source revisions (or saved source fixtures in shallow clones), and
 never records uncommitted asset edits. It also regenerates the CLI history
-source fixtures; commit both generated files together. The CLI regression
-iterates every history entry through workspace sync without needing Git history.
-Current bodies are compared directly and need no history entry until they
-become historical.
+source fixtures; commit both generated files together. Run
+`python3 scripts/update-auto-task-body-history.py --check` to verify the history
+and fixtures without changing them. This check requires full Git history and
+rejects shallow checkouts; the CI Check job uses `fetch-depth: 0` and runs it
+before the Rust gates. Every superseded first-parent body must be recorded,
+including the last landed body when the checkout contains an uncommitted
+successor. Current bodies are compared directly and need no history entry until
+they become historical. The CLI regression exercises representative shipped
+bodies through workspace sync, including a settings-edited doc-duties copy,
+without needing Git history.
 The fingerprint format follows the v1 definition's serde defaults; update the
 generator together with any schema change. Unrecognized bodies are preserved
 conservatively; the manifest's exact-byte provenance behavior is unchanged.

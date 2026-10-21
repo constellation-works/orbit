@@ -69,6 +69,31 @@
       }
     }
   ],
+  "blocked-task-triage": [
+    {
+      "comments": [
+        "## Dispositions",
+        "## Execution summary",
+        "## Rules",
+        "## What qualifies"
+      ],
+      "digest": "65bb28fc2560d6d59f87369b06daf41c028c9f08c3e7e5567928a3d4426d1efb",
+      "revision": "d195c06c2f382198a33427f4d5caa2dde97edd67",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "25 * * * *"
+        },
+        "tags": [
+          "blocked-task-triage",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "code-review": [
     {
       "comments": [
@@ -515,6 +540,31 @@
     },
     {
       "comments": [],
+      "digest": "25152f319374b535594130ff2def294cb5a14f1ad85ee36f36074eb117ea0b14",
+      "revision": "e7b90a140a982da309efc04bbd37085818000148",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
       "digest": "3a5b2a787c76258cc99439a2add20a0bdc0b404c7dd469450b0bc2e921a66f72",
       "revision": "4f5d5cb175cf720e8822381820ae9a21e59df1e2",
       "settings": {
@@ -830,6 +880,30 @@
         "## Select a batch",
         "## Validate and record"
       ],
+      "digest": "0d7a6ad59e03500e080ae6e9712da4eabd8b4c7810a3ad44be82bcb2ce31e7eb",
+      "revision": "669d9bbdc91fd9e639394e35c826f26492a5a847",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
       "digest": "0fc7a08853984f36af3c639abe78d12236b06724ce5108dd2a81f1bdb5a16e79",
       "revision": "29ad235d3f49b8009c7c578fb8d46f27d5828b44",
       "settings": {
@@ -955,6 +1029,30 @@
       "settings": {
         "complexity": "low",
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "d313a5c97b0eff7188c397268ff8d73f16161acb9cd89e5ed02204f248dfb6c1",
+      "revision": "d1f39e6ec456051c6b98db4a20a555d1e7993d3c",
+      "settings": {
+        "complexity": "low",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",

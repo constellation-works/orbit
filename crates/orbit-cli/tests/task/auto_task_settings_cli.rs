@@ -276,7 +276,16 @@ fn settings_only_fork_migrates_and_a_body_fork_is_preserved_and_reported() {
 
 fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
     let fixture = Fixture::new();
+    let sources: Value = serde_json::from_str(include_str!(
+        "../fixtures/auto-task-body-history/sources.json"
+    ))
+    .unwrap();
+    // This shipped body was omitted when its successor landed [ORB-17408].
+    let doc_duties = sources["doc-duties"]["669d9bbdc91fd9e639394e35c826f26492a5a847"]
+        .as_str()
+        .unwrap();
     for (name, older) in [
+        ("doc-duties", doc_duties),
         (
             "run-failure-patterns",
             include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml"),
@@ -293,7 +302,11 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
         let path = definition_path(&fixture, name);
         let bundled = fs::read_to_string(&path).unwrap();
         let dir = path.parent().unwrap();
-        let mut edited = older.replacen("crew: system", "crew: opus", 1);
+        let mut edited = if name == "doc-duties" {
+            older.replacen("  priority: medium", "  priority: high", 1)
+        } else {
+            older.replacen("crew: system", "crew: opus", 1)
+        };
         if name == "delivery-code-review" {
             edited = edited
                 .replacen("enabled: false", "enabled: true", 1)
@@ -310,7 +323,7 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
             let definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&edited).unwrap();
             edited = serde_yaml::to_string(&definition).unwrap();
         }
-        assert_ne!(edited, older, "fixture must change the crew");
+        assert_ne!(edited, older, "fixture must change a setting");
         fs::write(&path, &edited).unwrap();
         // Stale operator copies can be untracked, or carry the old raw digest.
         set_manifest_digest(
@@ -356,8 +369,13 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
         assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
         let shown = fixture.json(&["auto-task", "show", name, "--json"]);
         assert_eq!(shown["layering"]["body"], "managed");
-        assert_eq!(shown["layering"]["settings"]["crew"], "opus");
-        assert_eq!(shown["template"]["crew"], "opus");
+        if name == "doc-duties" {
+            assert_eq!(shown["layering"]["settings"]["priority"], "high");
+            assert_eq!(shown["template"]["priority"], "high");
+        } else {
+            assert_eq!(shown["layering"]["settings"]["crew"], "opus");
+            assert_eq!(shown["template"]["crew"], "opus");
+        }
         if name == "delivery-code-review" {
             assert_eq!(shown["enabled"], true);
             let settings = &shown["layering"]["settings"];

@@ -543,6 +543,7 @@ fi
   run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/test-codeql-production-paths.py"
   run_guard "$repo_root/scripts/test-doc-duty-rotation.py"
+  run_guard "$repo_root/scripts/test-auto-task-body-history.py"
   run_guard "$repo_root/scripts/test-validate-codex-plugin.sh"
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
