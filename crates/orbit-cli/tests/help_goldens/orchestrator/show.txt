@@ -7,6 +7,9 @@ Arguments:
           The orchestrator name tasks record
 
 Options:
+      --model <MODEL>
+          The row's model; optional when the crew has one row
+
       --root <ROOT>
           Orbit data directory to use (overrides every other source)
 
@@ -16,13 +19,13 @@ Options:
           [default: 30d]
           [possible values: 1h, 24h, 7d, 30d, 90d, all]
 
+      --workspace <SELECTOR>
+          Active workspace to use: registered name, `ws_*` ID or checkout path
+
       --min-support <MIN_SUPPORT>
           Units of work a row needs before it is ranked
           
           [default: 10]
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
