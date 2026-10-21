@@ -242,3 +242,26 @@ fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR"]
+fn context_selector_basenames_keep_contention_colors_and_return_to_normal_on_refresh() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_context_basename_color_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .output()
+        .expect("node is required to execute the context basename browser fixture");
+    assert!(
+        output.status.success(),
+        "context selector basename contention colours failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
