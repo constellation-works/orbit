@@ -284,7 +284,7 @@ already-initialized fixture with its assertions intact.
 ### [crates/orbit-cli/tests/mcp/mcp_setup_root.rs](../../crates/orbit-cli/tests/mcp/mcp_setup_root.rs)
 
 - mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment → setup_root_expansion_and_config_confinement. Named table row; original body and assertions retained.
-- outside_client_config_guard_rejects_config_files_in_scanned_directories → setup_root_expansion_and_config_confinement. Named table row; original body and assertions retained.
+- outside_client_config_guard_rejects_config_files_in_scanned_directories → standalone `#[test]`, no longer a table row. Body and assertions retained; it re-executes itself through `isolated_test::run_in_child` because it swaps the process-wide panic hook, and its fixture runs no `orbit` process. Surviving coverage of the guard: the rows that call `assert_no_client_config_outside_the_checkout` in this file.
 - federated_home_setup_works_outside_a_workspace_and_reports_no_binding → setup_root_expansion_and_config_confinement. Named table row; original body and assertions retained.
 - federated_setup_inside_a_registered_checkout_reports_no_binding → federated_and_external_root_resolution. Named table row; original body and assertions retained.
 - mcp_init_resolves_the_registered_checkout_from_an_unrelated_directory → federated_and_external_root_resolution. Named table row; original body and assertions retained.

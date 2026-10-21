@@ -35,7 +35,9 @@ impl ExternalRootFixture {
         Self::init_at(None)
     }
 
-    fn init_at(home_suffix: Option<&str>) -> Self {
+    /// Lay out the external root, home and outside directories without running
+    /// any `orbit` process, for helpers that only inspect paths.
+    fn paths_at(home_suffix: Option<&str>) -> Self {
         // `--root` is recorded as given, and the assertions below expect the
         // resolved spelling, so root the fixture at a resolved temp directory
         // (the default macOS one sits behind the `/var` symlink).
@@ -51,15 +53,20 @@ impl ExternalRootFixture {
         for directory in [&home, &elsewhere] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
-        crate::git_repo::SeededRepo::new(&checkout).build();
 
-        let fixture = Self {
+        Self {
             _temp: temp,
             home,
             orbit_root,
             checkout,
             elsewhere,
-        };
+        }
+    }
+
+    fn init_at(home_suffix: Option<&str>) -> Self {
+        let fixture = Self::paths_at(home_suffix);
+        crate::git_repo::SeededRepo::new(&fixture.checkout).build();
+
         fixture
             .orbit(
                 &fixture.checkout,
@@ -294,8 +301,15 @@ fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment(
     }
 }
 
+#[test]
 fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
-    let fixture = ExternalRootFixture::init();
+    // The silenced panic hook is process-wide, so the body runs in a child.
+    if crate::isolated_test::run_in_child(
+        "mcp_setup_root::outside_client_config_guard_rejects_config_files_in_scanned_directories",
+    ) {
+        return;
+    }
+    let fixture = ExternalRootFixture::paths_at(None);
 
     for directory in fixture.outside_config_directories() {
         for relative_path in [
@@ -1154,10 +1168,6 @@ fn setup_root_expansion_and_config_confinement() {
         (
             "mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment",
             mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment as fn(),
-        ),
-        (
-            "outside_client_config_guard_rejects_config_files_in_scanned_directories",
-            outside_client_config_guard_rejects_config_files_in_scanned_directories as fn(),
         ),
         (
             "federated_home_setup_works_outside_a_workspace_and_reports_no_binding",
