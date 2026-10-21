@@ -680,6 +680,38 @@ cells = startedCells();
 assert(cells.Source === 'Pull from m-owner/ws-one ← --pull --host server', `a pull window names its owner: ${cells.Source}`);
 const greyed = [...get('drain-started-body').querySelectorAll('.drain-started-cell.owner-decides dt')].map(node => node.textContent).join(', ');
 assert(greyed === 'Complexity pools, Authority, Review, Worker containment', `owner-decided settings are greyed: ${greyed}`);
+
+// A pull drain's live ceiling can move independently of its submitted input.
+// One implementing claim uses the lower live value, then a raised value; an
+// unsent composer request must not override the live run's budget.
+runDetailFixture = {
+  run: {
+    ...runDetailFixture.run,
+    drain_worker_limit: { max_active_leaf_runs: 1 },
+  },
+  claimed_leaves: [leaf(5, 'implementing')],
+  refused_settlements: [],
+};
+drainCapacityOverride = { max_active_leaf_runs: 1, limit_source: 'pull_run_control' };
+await fetchAndRenderOperations();
+assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the live lowered ceiling closes admission at one claim: ${get('drain-claim-budget-sum').textContent}`);
+
+runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 4 };
+drainCapacityOverride = { max_active_leaf_runs: 4, limit_source: 'pull_run_control' };
+await fetchAndRenderOperations();
+assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 4) = 1 < 4 → claims up to 3 more', `the live raised ceiling opens three claims: ${get('drain-claim-budget-sum').textContent}`);
+const raisedBudgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
+assert(raisedBudgetCells === 'implementing open open open later later later later', `the raised budget draws eight cells: ${raisedBudgetCells}`);
+
+typeConcurrency('6');
+runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
+drainCapacityOverride = { max_active_leaf_runs: 6, limit_source: 'requested' };
+await fetchAndRenderOperations();
+assert(lastReadiness().concurrency === '6', 'the unsent composer value is included in readiness');
+assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the unsent requested limit does not change the live budget: ${get('drain-claim-budget-sum').textContent}`);
+
+typeConcurrency('2');
+drainCapacityOverride = {};
 assert(get('drain-started-command').textContent === 'orbit run auto \\\n    --pull ws-one --host server \\\n    --for 8h \\\n    --concurrency 3 \\\n    --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
 replicaWorkspace = false;
 pullDrainRunId = null;
