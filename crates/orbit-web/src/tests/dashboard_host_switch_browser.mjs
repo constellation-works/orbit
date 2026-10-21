@@ -465,8 +465,17 @@ try {
   assert(await quick.isDisabled(), 'the quick action is disabled on a read-only host');
   assert((await quick.getAttribute('title')).includes(READ_ONLY_REASON), 'the disabled quick action says why');
   await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
-  await page.locator('.host-read-only-note').waitFor({ state: 'visible' });
+  // Overview and Comments each render their own action row, and inactive
+  // panels stay in the DOM, so each note is scoped to its visible panel.
+  const overviewNote = page.locator('#task-detail-body .task-action-row.lifecycle-actions .host-read-only-note:visible');
+  await overviewNote.waitFor({ state: 'visible' });
+  assert((await overviewNote.textContent()).includes(READ_ONLY_REASON), 'the Overview note gives the refusal reason');
   assert(await page.locator('#task-detail-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
+  await page.locator('#task-detail-body').getByRole('tab', { name: /^Comments/ }).click();
+  const commentNote = page.locator('#task-detail-body .task-action-row.comment-actions .host-read-only-note:visible');
+  await commentNote.waitFor({ state: 'visible' });
+  assert((await commentNote.textContent()).includes(READ_ONLY_REASON), 'the Comments note gives the refusal reason');
+  assert(await page.locator('#task-detail-body .task-action-row.comment-actions .action.comment:visible').isDisabled(), 'Comment is disabled on a read-only host');
   await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
