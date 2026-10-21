@@ -23,10 +23,10 @@ For a task-backed `agent_loop`, the activity's
 - An allowlist (`tools`) gains the task's requirements, deduplicated. A task
   with no requirements gets the list unchanged.
 - A disallow list (`tool_disallow_list`) can't be overridden. On the
-  implementing activity (`agent_implement`), and on any activity that is not
-  a shipped recovery or review activity, a requirement the list covers is
-  refused before launch. Final recovery, step recovery and the other shipped
-  non-implementers drop that requirement and record a note; the tool stays
+  implementing activity (`agent_implement`) and on custom activities, a
+  requirement the list covers is refused before launch. Shipped
+  non-implementers, including exploration, invocation, pilot, verification,
+  recovery and review activities, drop that requirement and record a note; the tool stays
   uncallable.
 
 Unknown, inactive, malformed, wildcard, and non-agent-facing requirements are

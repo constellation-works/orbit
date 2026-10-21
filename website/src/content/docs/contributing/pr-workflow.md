@@ -18,7 +18,9 @@ replaced entry at its successor with a `Superseded by:` link.
 
 ## Checks
 
-Run these before you ask for review:
+For a task that delivers a diff, run the checks the change needs: tests of the
+behavior you changed, Clippy on touched crates, and goldens for changed golden
+surfaces. The repository provides these broader targets when needed:
 
 ```bash
 make ci-fast            # formatting and repository guardrails; no Rust tests
@@ -30,13 +32,16 @@ make goldens            # CLI help, MCP, CI log, and sandbox profile goldens
 `make ci-fast`, `make ci-lint`, and `make goldens` check formatting, guardrails,
 lints, and snapshots, but they don't run the test suite. `make ci-test-affected`
 runs the full test targets of every changed crate and its reverse workspace
-dependents. Focused test filters don't replace it, so run it before review even
-when the other gates pass.
+dependents. These are focused tools, not blanket pre-handoff gates. Required
+PR checks gate formatting, guardrails, lint, rustdoc, goldens, and the full
+test suite. The repository's
+[validation policy](https://github.com/constellation-works/orbit/blob/main/docs/DEVELOPMENT.md#validation-and-ci)
+describes the checks required for each kind of change.
 
 After an intentional change to CLI help, the MCP surface, or a sandbox policy,
 regenerate the goldens with `make goldens UPDATE=1` and review the diff. Use
-targeted checks while you iterate. The full `make ci` runs on every pull
-request as the merge gate, so you don't need to run it per change.
+targeted checks while you iterate. In a managed delivery, the pipeline runs
+the configured `workflow.required_validation_commands` on the final candidate.
 
 Pull requests target `agent-main`, the development integration branch. `main`
 is for releases.
