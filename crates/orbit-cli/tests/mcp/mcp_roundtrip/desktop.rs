@@ -191,7 +191,15 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "orbit_pipeline_invoke",
         json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true}),
     );
-    client.call_tool_err("orbit_pipeline_invoke",json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true,"input":{}}));
+    let mixed = client.call_tool_err(
+        "orbit_pipeline_invoke",
+        json!({"workspace":selector,"job_name":"stdio-maintenance","default_input":true,"input":{}}),
+    );
+    assert_eq!(mixed["code"], "invalid_input", "{mixed}");
+    assert_eq!(
+        mixed["message"], "invalid input: unknown field 'input'",
+        "the mixed form is refused before the disabled job is consulted: {mixed}"
+    );
     client.call_tool_err(
         "orbit_workflow_run_resume",
         json!({"workspace":selector,"id":"jrun-missing"}),
@@ -441,12 +449,36 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
     );
     assert_eq!(edited["snapshot"]["task"]["status"], "blocked");
     assert_eq!(edited["snapshot"]["task"]["title"], "Ordinary caller");
+    // The crew the task was created with, without an explicit crew, is the default.
+    let default_crew = created["snapshot"]["task"]["crew"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other = if default_crew == "astra" {
+        "luna"
+    } else {
+        "astra"
+    };
+    // Move off the default first, so a reset that leaves the crew in place cannot pass.
+    let explicit = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"id":id,"model":"codex",
+        "request_id":"explicit-crew","expected_revision":edited["snapshot"]["revision"],"crew":other}),
+    );
+    assert_eq!(explicit["snapshot"]["task"]["crew"], other, "{explicit}");
     let defaulted = client.call_tool_ok(
         "orbit_task_update",
         json!({"workspace":selector,"id":id,"model":"codex",
-        "request_id":"default-crew","expected_revision":edited["snapshot"]["revision"],"crew":""}),
+        "request_id":"default-crew","expected_revision":explicit["snapshot"]["revision"],"crew":""}),
     );
-    assert!(defaulted["snapshot"].is_object(), "{defaulted}");
+    assert!(
+        defaulted.get("conflict").is_none(),
+        "clearing the crew must not conflict: {defaulted}"
+    );
+    assert_eq!(
+        defaulted["snapshot"]["task"]["crew"], default_crew,
+        "clearing the crew reverts the task to its default: {defaulted}"
+    );
     orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
             .args(["task", "update", id, "--status", "review", "--force"]),
