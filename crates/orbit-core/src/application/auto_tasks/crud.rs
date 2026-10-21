@@ -210,51 +210,57 @@ pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), Orbi
 
 impl OrbitRuntime {
     /// Create a new auto-task definition. Fails if a definition with the same
-    /// name already exists (update or toggle it instead).
+    /// name already exists (update or toggle it instead). The cursor sidecar
+    /// lock serializes the existence check, stale settings removal and write
+    /// with the other definition writers. Settings failures publish no file.
     pub fn auto_task_add(
         &self,
         mut params: AutoTaskAddParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        reject_retired_delivery_coverage(&params.schedule)?;
-        params.template.required_tools = normalize_required_tools(params.template.required_tools);
-        let now = chrono::Utc::now().to_rfc3339();
-        let actor = self.actor().resolve_write_label(None, None)?;
-        let definition = AutoTaskDefinition {
-            schema_version: AUTO_TASK_SCHEMA_VERSION,
-            name: params.name,
-            description: params.description,
-            enabled: !matches!(&params.schedule, AutoTaskSchedule::Deliveries { .. }),
-            schedule: params.schedule,
-            template: params.template,
-            dedupe: params.dedupe,
-            // A mint-time precondition is configured in the definition YAML
-            // the workspace owns, not through the create surfaces.
-            skip_if_unchanged: None,
-            skip_unless_blocked_candidates: false,
-            created_by: Some(actor.clone()),
-            created_at: now.clone(),
-            updated_by: Some(actor),
-            updated_at: now,
-        };
-        self.validate_auto_task(&definition)?;
+        let state_path = cursor_state_path(&self.paths().state_dir);
+        with_exclusive_file_lock(&state_path, "auto-task cursor", || {
+            reject_retired_delivery_coverage(&params.schedule)?;
+            params.template.required_tools =
+                normalize_required_tools(params.template.required_tools);
+            let now = chrono::Utc::now().to_rfc3339();
+            let actor = self.actor().resolve_write_label(None, None)?;
+            let definition = AutoTaskDefinition {
+                schema_version: AUTO_TASK_SCHEMA_VERSION,
+                name: params.name,
+                description: params.description,
+                enabled: !matches!(&params.schedule, AutoTaskSchedule::Deliveries { .. }),
+                schedule: params.schedule,
+                template: params.template,
+                dedupe: params.dedupe,
+                // A mint-time precondition is configured in the definition YAML
+                // the workspace owns, not through the create surfaces.
+                skip_if_unchanged: None,
+                skip_unless_blocked_candidates: false,
+                created_by: Some(actor.clone()),
+                created_at: now.clone(),
+                updated_by: Some(actor),
+                updated_at: now,
+            };
+            self.validate_auto_task(&definition)?;
 
-        let collection = self.validated_auto_tasks(&definition.name)?;
-        let path = definition_path(&self.paths().local_dir, &definition.name);
-        if path.exists()
-            || collection
-                .definitions
-                .iter()
-                .any(|loaded| loaded.definition.name == definition.name)
-        {
-            return Err(OrbitError::InvalidInput(format!(
-                "auto-task '{}' already exists; update or toggle it instead",
-                definition.name
-            )));
-        }
-        self.write_auto_task(&definition)?;
-        self.drop_auto_task_settings(&definition.name)?;
-        Ok(definition)
+            let collection = self.validated_auto_tasks(&definition.name)?;
+            let path = definition_path(&self.paths().local_dir, &definition.name);
+            if path.exists()
+                || collection
+                    .definitions
+                    .iter()
+                    .any(|loaded| loaded.definition.name == definition.name)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{}' already exists; update or toggle it instead",
+                    definition.name
+                )));
+            }
+            self.drop_auto_task_settings(&definition.name)?;
+            self.write_auto_task(&definition)?;
+            Ok(definition)
+        })
     }
 
     /// List every definition in this workspace (stable filename order).

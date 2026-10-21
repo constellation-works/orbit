@@ -25,6 +25,99 @@ pub(crate) fn operator_json(fixture: &Fixture, args: &[&str]) -> serde_json::Val
     serde_json::from_slice(&output).unwrap_or_else(|error| panic!("JSON for {args:?}: {error}"))
 }
 
+/// Settings failures must not publish a definition that blocks a repaired retry.
+#[test]
+fn auto_task_add_settings_failure_leaves_no_definition_and_allows_retry() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_add_settings_failure_leaves_no_definition_and_allows_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
+    let dir = shipped_path.parent().unwrap();
+    // With existing definitions, the loader rejects settings before add can
+    // reach its writes. An empty catalog exercises the failing settings drop.
+    fs::rename(dir, fixture._temp.path().join("seeded-auto-tasks")).unwrap();
+    fs::create_dir(dir).unwrap();
+    let settings = dir.join(".orbit-auto-task-settings.json");
+    fs::create_dir(&settings).unwrap();
+    let args = [
+        "auto-task",
+        "add",
+        "--name",
+        "fixture-retry-add",
+        "--every-minutes",
+        "60",
+        "--title",
+        "Retryable add",
+        "--json",
+    ];
+    let failure = fixture.command(&args).assert().failure();
+    let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
+    assert!(stderr.contains("must be a regular file"), "{stderr}");
+    let definition = dir.join("fixture-retry-add.yaml");
+    assert!(
+        !definition.exists(),
+        "a failed settings drop must not publish the definition"
+    );
+
+    fs::remove_dir(&settings).unwrap();
+    let added = fixture.json(&args);
+    assert_eq!(added["name"], "fixture-retry-add");
+    assert!(definition.is_file());
+    assert_eq!(
+        fixture.json(&["auto-task", "show", "fixture-retry-add", "--json"])["name"],
+        added["name"]
+    );
+}
+
+/// A manifest failure must leave restore retryable after the manifest is repaired.
+#[test]
+fn auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
+    let original = fs::read(&path).unwrap();
+    operator_json(
+        &fixture,
+        &["auto-task", "delete", "backlog-hygiene", "--json"],
+    );
+    let manifest = path.parent().unwrap().join(".orbit-managed-assets.json");
+    let saved_manifest = fs::read(&manifest).unwrap();
+    fs::write(&manifest, "invalid manifest").unwrap();
+    let args = ["auto-task", "restore", "backlog-hygiene", "--json"];
+    let failure = fixture.command(&args).assert().failure();
+    let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
+    assert!(
+        stderr.contains("managed asset manifest") && stderr.contains("is invalid"),
+        "{stderr}"
+    );
+    assert!(
+        !path.exists(),
+        "a failed manifest update must not publish the restored definition"
+    );
+
+    fs::write(&manifest, saved_manifest).unwrap();
+    let restored = fixture.json(&args);
+    assert_eq!(restored["name"], "backlog-hygiene");
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    assert!(state["assets"]["backlog-hygiene"].is_string());
+    assert!(state.get("optedOut").is_none_or(|names| {
+        !names
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("backlog-hygiene"))
+    }));
+}
+
 fn auto_task_cli_update_preserves_explicit_empty_text_arguments() {
     let fixture = Fixture::new();
     let added = fixture.json(&[
