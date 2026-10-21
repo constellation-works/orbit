@@ -2734,12 +2734,18 @@ const LONG_DESCRIPTION_CHARS = 700;
 const LONG_DESCRIPTION_LINES = 12;
 // Tasks whose description the operator expanded; a rebuild keeps it open.
 const expandedDescriptions = new Set();
+// Tasks whose acceptance criteria the operator expanded; a rebuild keeps them open.
+const expandedCriteria = new Set();
 // Tasks whose context files the operator opened; a rebuild keeps them open.
 const openContextFiles = new Set();
 
 function isLongDescription(text) {
   const value = String(text || "");
   return value.length > LONG_DESCRIPTION_CHARS || value.split("\n").length > LONG_DESCRIPTION_LINES;
+}
+
+function isLongCriteria(criteria) {
+  return isLongDescription(linesToText(criteria));
 }
 
 // The attention callout's Retry landing goes to the claim panel's own control,
@@ -2898,7 +2904,31 @@ function buildTaskDetail(task, context, drain = null) {
   if (showsEditor("acceptance_criteria")) {
     const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
     const actions = actionSlot();
-    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria", actions), false, false, count ? { count, actions } : { actions });
+    const block = addField(leftCol, "Acceptance criteria", editor("acceptance_criteria", actions), false, false, {
+      actions,
+      class: "criteria-block",
+      ...(count ? { count } : {}),
+    });
+    if (isLongCriteria(task.acceptance_criteria)) {
+      const open = expandedCriteria.has(task.id);
+      if (!open) block.classList.add("clamped");
+      const toggle = el("button", {
+        class: "ac-toggle",
+        type: "button",
+        text: open ? "Show less" : "Show full AC",
+        "aria-expanded": String(open),
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const nowOpen = block.classList.contains("clamped");
+        block.classList.toggle("clamped", !nowOpen);
+        if (nowOpen) expandedCriteria.add(task.id);
+        else expandedCriteria.delete(task.id);
+        toggle.setAttribute("aria-expanded", String(nowOpen));
+        toggle.textContent = nowOpen ? "Show less" : "Show full AC";
+      });
+      block.appendChild(toggle);
+    }
   }
 
   if (showsEditor("description")) {
