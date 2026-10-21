@@ -78,7 +78,8 @@ and the sweep continues.
 `scratch` object, beside the worktree figures: `bytes_reclaimed`,
 `entries_removed`, `entries_skipped` (each listed in `entries` with its
 `reason`) and `entries_kept`. To empty the directory by hand regardless of age,
-use `orbit gc tmp`.
+use `orbit gc tmp --confirm`. Without `--confirm` the command only reports,
+and it refuses while job runs are active.
 
 On a replica checkout (one that pulls work from an owner on another machine),
 new claimed tasks live on the owner; historical tasks minted with this machine's
