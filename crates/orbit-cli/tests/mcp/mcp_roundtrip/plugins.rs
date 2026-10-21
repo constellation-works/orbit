@@ -659,11 +659,8 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
             "{\"subject\":\"cli\"}",
         ],
     );
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        stdout.contains("\"subject\": \"cli\"") || stdout.contains("cli"),
-        "{stdout}"
-    );
+    let run_output: Value = serde_json::from_slice(&run.stdout).expect("CLI output is JSON");
+    assert_eq!(run_output["echo"]["input"]["subject"], "cli");
 
     let listed = run_orbit(&workspace, &["tool", "list", "--format", "json"]);
     let listed = String::from_utf8_lossy(&listed.stdout);
@@ -2404,7 +2401,7 @@ fn plugin_backend_secrets() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn mcp_backend_discovery_and_secret_redaction() {
+fn linux_callback_and_root_confinement() {
     for (name, check) in [
         (
             "a_plugin_child_cannot_shed_its_callback_session_with_setsid",

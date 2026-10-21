@@ -323,8 +323,8 @@ already-initialized fixture with its assertions intact.
 - an_mcp_backend_plugin_is_advertised_and_proxied → callback_identity_confinement. Named table row; original body and assertions retained.
 - an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it → plugin_backend_secrets. Named table row; original body and assertions retained.
 - an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value → plugin_backend_secrets. Named table row; original body and assertions retained.
-- a_plugin_child_cannot_shed_its_callback_session_with_setsid → mcp_backend_discovery_and_secret_redaction. Named table row; original body and assertions retained.
-- a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots → mcp_backend_discovery_and_secret_redaction. Named table row; original body and assertions retained.
+- a_plugin_child_cannot_shed_its_callback_session_with_setsid → linux_callback_and_root_confinement. Named table row; original body and assertions retained.
+- a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots → linux_callback_and_root_confinement. Named table row; original body and assertions retained.
 
 ### [crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs)
 
