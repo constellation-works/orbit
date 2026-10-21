@@ -1013,8 +1013,41 @@ input.field-editor-input {
   font-variant-numeric: tabular-nums;
 }
 
+/* Authored task fields sit inside one surface; the description's fade masks
+   only its contents, leaving the panel's padding and border intact. */
+.task-markdown-panel {
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-control);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+.detail-disclosures > .field-block > .task-markdown-panel {
+  margin: 0 14px 14px 34px;
+  padding: 16px;
+}
+.task-markdown-panel .markdown-body {
+  width: 100%;
+  min-width: 0;
+  color: var(--fg-soft);
+  line-height: 1.7;
+  overflow-x: auto;
+}
+.task-markdown-panel .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-soft);
+  cursor: auto;
+}
+.task-markdown-panel .markdown-body > :first-child { margin-top: 0; }
+.task-markdown-panel .markdown-body h4::after { content: none; }
+.task-detail .task-markdown-panel .markdown-body :not(pre) > code {
+  background: var(--bg-well);
+}
+.task-markdown-panel .markdown-body th { background: var(--bg-well); }
+
 /* Long description or acceptance criteria open clamped behind a fade, with a toggle below. */
-.description-block .markdown-body { color: var(--fg-soft); line-height: 1.7; }
 .task-detail .markdown-body :not(pre) > code,
 .task-detail .ac-list code {
   padding: 0 4px;
