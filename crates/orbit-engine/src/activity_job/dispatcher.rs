@@ -140,6 +140,8 @@ pub struct DispatchOutcome {
 pub struct DispatchInvocationTrace {
     pub provider: String,
     pub model: Option<String>,
+    /// The crew account the invocation ran under, when its crew sets `env`.
+    pub account: Option<String>,
     pub trace: InvocationTrace,
 }
 

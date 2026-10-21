@@ -1,10 +1,11 @@
 //! Per-host provider authentication failures for the drain card.
 //!
 //! A `provider_unavailable` step is an authentication failure. The card groups
-//! those runs by the host that executed them and the provider that failed.
-//! A successful run of that same provider on that same host drops the group
-//! when it started after the failure. Nothing is written: the projection is
-//! the recent job history.
+//! those runs by the host that executed them and the provider account that
+//! failed: [ORB-17288] the crew account the failure names (a crew that sets
+//! `env`), else the provider's default login. A successful run of that same
+//! account on that same host drops the group when it started after the
+//! failure. Nothing is written: the projection is the recent job history.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -14,7 +15,7 @@ use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
     CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState, Provider,
-    ProviderFailureClass, failed_provider,
+    ProviderFailureClass, failed_account, failed_provider,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -46,6 +47,10 @@ pub(crate) struct ProviderAuthFailure {
     pub host: String,
     /// Canonical provider (`claude`, `codex`).
     pub provider: String,
+    /// The crew account that failed, when its crew sets `env`; `None` for the
+    /// provider's default login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// The failing runs, oldest first.
     pub runs: Vec<ProviderAuthFailureRun>,
     /// What the operator runs to renew this provider's credentials.
@@ -92,13 +97,18 @@ impl OrbitRuntime {
         ))?;
         let crews = self.recorded_run_crews(failures.iter().chain(successes.iter()))?;
         let fallback_host = self.fallback_host();
-        let mut cleared_at: BTreeMap<(String, String), DateTime<Utc>> = BTreeMap::new();
+        let mut cleared_at: BTreeMap<(String, String, Option<String>), DateTime<Utc>> =
+            BTreeMap::new();
         for run in &successes {
             for crew in crews.crews(run, None) {
                 let Some(provider) = self.provider_of_crew(&crew) else {
                     continue;
                 };
-                let key = (host_of(run, &fallback_host), provider);
+                let key = (
+                    host_of(run, &fallback_host),
+                    provider,
+                    self.account_of_crew(&crew),
+                );
                 let at = clearing_at(run);
                 cleared_at
                     .entry(key)
@@ -111,11 +121,12 @@ impl OrbitRuntime {
             }
         }
 
-        let mut open: BTreeMap<(String, String), Vec<ProviderAuthFailureRun>> = BTreeMap::new();
+        let mut open: BTreeMap<(String, String, Option<String>), Vec<ProviderAuthFailureRun>> =
+            BTreeMap::new();
         for run in &failures {
-            for provider in self.unavailable_providers(run, &crews) {
+            for (provider, account) in self.unavailable_providers(run, &crews) {
                 let at = run_at(run);
-                let key = (host_of(run, &fallback_host), provider);
+                let key = (host_of(run, &fallback_host), provider, account);
                 if cleared_at.get(&key).is_some_and(|cleared| *cleared > at) {
                     continue;
                 }
@@ -127,24 +138,34 @@ impl OrbitRuntime {
         }
 
         let mut items = Vec::new();
-        for ((host, provider), mut runs) in open {
+        for ((host, provider, account), mut runs) in open {
             runs.sort_by(|left, right| left.at.cmp(&right.at).then(left.run_id.cmp(&right.run_id)));
             if runs.is_empty() {
                 continue;
             }
+            let fix_command = match &account {
+                Some(account) => self.account_relogin_hint(account),
+                None => self.fix_command(&provider),
+            };
             items.push(ProviderAuthFailure {
                 host,
-                provider: provider.clone(),
+                provider,
+                account,
                 runs,
-                fix_command: self.fix_command(&provider),
+                fix_command,
             });
         }
         Ok(items)
     }
 
-    /// The provider the authentication step names, else the recorded agent
-    /// assignments of that failure. Ordinary jobs use their resolved crew.
-    fn unavailable_providers(&self, run: &JobRun, crews: &RunCrewLookup) -> Vec<String> {
+    /// The provider account the authentication step names, else those of the
+    /// recorded agent assignments of that failure. Ordinary jobs use their
+    /// resolved crew.
+    fn unavailable_providers(
+        &self,
+        run: &JobRun,
+        crews: &RunCrewLookup,
+    ) -> Vec<(String, Option<String>)> {
         let Some(step) = run
             .steps
             .iter()
@@ -156,13 +177,18 @@ impl OrbitRuntime {
         else {
             return Vec::new();
         };
-        if let Some(named) = step.error_message.as_deref().and_then(failed_provider) {
-            return vec![canonical_provider(named)];
+        if let Some(message) = step.error_message.as_deref()
+            && let Some(named) = failed_provider(message)
+        {
+            return vec![(
+                canonical_provider(named),
+                failed_account(message).map(ToOwned::to_owned),
+            )];
         }
         crews
             .crews(run, step.error_message.as_deref())
             .into_iter()
-            .filter_map(|crew| self.provider_of_crew(&crew))
+            .filter_map(|crew| Some((self.provider_of_crew(&crew)?, self.account_of_crew(&crew))))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -194,6 +220,18 @@ impl OrbitRuntime {
     pub(crate) fn provider_of_crew(&self, name: &str) -> Option<String> {
         let crew = self.context.settings().crews().get(name)?;
         Some(canonical_provider(&crew.assignment.provider))
+    }
+
+    /// [ORB-17288] The provider account crew `name` runs on: its own name
+    /// when it sets `env`, `None` for its provider's default login or a crew
+    /// this host does not define.
+    pub(crate) fn account_of_crew(&self, name: &str) -> Option<String> {
+        self.context
+            .settings()
+            .crews()
+            .get(name)?
+            .account()
+            .map(ToOwned::to_owned)
     }
 
     fn fix_command(&self, provider: &str) -> String {

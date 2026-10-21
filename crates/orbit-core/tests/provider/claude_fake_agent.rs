@@ -191,6 +191,7 @@ fn spec() -> AgentLoopSpec {
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 

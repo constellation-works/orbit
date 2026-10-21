@@ -101,8 +101,9 @@ fn claude_rate_limit(
         })
 }
 
-/// Record the limit in the host's provider-limit store. A host that cannot
-/// record it still fails the step with the typed limit; the store is advisory.
+/// Record the limit in the host's provider-limit store, attributed to the
+/// crew `account` the run used, if any. A host that cannot record it still
+/// fails the step with the typed limit; the store is advisory.
 pub(super) fn record_limit(
     host: &dyn RuntimeHost,
     provider: &str,
@@ -110,9 +111,11 @@ pub(super) fn record_limit(
     detail: &str,
     run_id: &str,
     crew: Option<&str>,
+    account: Option<&str>,
 ) {
     let observation = ProviderLimitObservation {
         provider: provider.to_string(),
+        account: account.map(str::to_string),
         model: limit.model.clone(),
         window: limit.window.clone(),
         exhausted: true,
@@ -133,7 +136,9 @@ pub(super) fn record_limit(
 /// [ORB-14696] Record each usage window the provider reported about its own
 /// account during the run, success or failure. `stdout` is the whole capture,
 /// since a long run's first frames sit before a truncation marker, and
-/// `codex_home` the `CODEX_HOME` the Codex child ran with.
+/// `codex_home` the `CODEX_HOME` the Codex child ran with. [ORB-17288] Each
+/// reading is attributed to `account`, the crew account the run used, or to
+/// the provider's default login when that is `None`.
 pub(super) fn record_usage_windows(
     host: &dyn RuntimeHost,
     provider: &str,
@@ -141,10 +146,12 @@ pub(super) fn record_usage_windows(
     codex_home: Option<&Path>,
     run_id: &str,
     crew: Option<&str>,
+    account: Option<&str>,
 ) {
     for mut observation in provider_usage_windows(provider, stdout, codex_home, Utc::now()) {
         observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
         observation.crew = crew.map(str::to_string);
+        observation.account = account.map(str::to_string);
         record(host, &observation);
     }
 }

@@ -7,6 +7,10 @@
 //! thresholds and crew coverage are admission's own rules (`provider_limit`),
 //! so no surface can disagree with the drain about what is gated. A reading
 //! observed on an earlier UTC date is stale even while its reset keeps it live.
+//!
+//! [ORB-17288] A crew that sets `env` is its own provider account, so its
+//! readings, and the status of its account, are listed apart from its
+//! provider's default login's, under `provider/crew`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +19,7 @@ use orbit_types::identity::Crew;
 use orbit_types::telemetry::{
     ProviderLimitObservation, ProviderLimitSource, USAGE_REPORTING_PROVIDERS,
 };
-use orbit_types::workflow::Provider;
+use orbit_types::workflow::{Provider, provider_account_label};
 use serde::{Deserialize, Serialize};
 
 use orbit_config::ProviderLimitThreshold;
@@ -29,6 +33,10 @@ use crate::OrbitRuntime;
 pub struct ProviderLimitReading {
     /// Canonical provider name (`claude`, `codex`).
     pub provider: String,
+    /// The crew account the reading was taken under, a crew that sets
+    /// `env`; `None` for the provider's default login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// The model or model family the reading covers; `None` covers the whole
     /// account.
     pub scope: Option<String>,
@@ -73,8 +81,8 @@ pub struct ProviderLimitReading {
 }
 
 impl ProviderLimitReading {
-    /// `claude five_hour`, or `claude [opus] seven_day` for a model-scoped
-    /// reading.
+    /// `claude five_hour`, `claude [opus] seven_day` for a model-scoped
+    /// reading, or `claude/opus-credits 30d budget` for a crew account's.
     #[must_use]
     pub fn label(&self) -> String {
         let scope = self
@@ -84,7 +92,7 @@ impl ProviderLimitReading {
             .unwrap_or_default();
         format!(
             "{}{scope} {}",
-            self.provider,
+            provider_account_label(&self.provider, self.account.as_deref()),
             self.window.as_deref().unwrap_or("usage window")
         )
     }
@@ -148,11 +156,16 @@ impl ProviderLimitReading {
     }
 }
 
-/// What the host knows about one configured provider's usage.
+/// What the host knows about one configured provider account's usage: a
+/// provider's default login, or [ORB-17288] a crew that sets `env`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderUsageStatus {
     /// Canonical provider name.
     pub provider: String,
+    /// The crew account, for a crew that sets `env`; `None` for the
+    /// provider's default login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// Whether the provider reports its usage windows after a run. One that
     /// does not is read only from a limit failure.
     pub reports_usage: bool,
@@ -164,11 +177,22 @@ pub struct ProviderUsageStatus {
     pub crews: Vec<String>,
 }
 
+impl ProviderUsageStatus {
+    /// `claude`, or `claude/opus-credits` for a crew account.
+    #[must_use]
+    pub fn label(&self) -> String {
+        provider_account_label(&self.provider, self.account.as_deref())
+    }
+}
+
 /// The reading closest to its limit among those covering one crew.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CrewProviderLimit {
     pub crew: String,
     pub provider: String,
+    /// The crew account the reading belongs to, when the crew sets `env`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub scope: Option<String>,
     pub window: Option<String>,
     pub used_percent: Option<f64>,
@@ -197,9 +221,10 @@ pub struct UngatedLaneLimit {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProviderLimitsView {
     pub as_of: DateTime<Utc>,
-    /// Every live reading, by provider, scope and window.
+    /// Every live reading, by provider, account, scope and window.
     pub readings: Vec<ProviderLimitReading>,
-    /// Every provider an enabled configured crew uses, by name.
+    /// Every provider account an enabled configured crew uses, by provider
+    /// and account.
     pub providers: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
     pub crews: Vec<CrewProviderLimit>,
@@ -229,7 +254,8 @@ impl ProviderLimitsView {
                 if until <= now {
                     return None;
                 }
-                let threshold = policy.threshold(&observation.provider);
+                let threshold =
+                    policy.account_threshold(&observation.provider, observation.account.as_deref());
                 let gated = match threshold {
                     ProviderLimitThreshold::Off => false,
                     ProviderLimitThreshold::Percent(percent) => {
@@ -238,6 +264,7 @@ impl ProviderLimitsView {
                 };
                 Some(ProviderLimitReading {
                     provider: canonical_provider(&observation.provider),
+                    account: observation.account.clone(),
                     scope: observation.model.clone(),
                     window: observation.window.clone(),
                     used_percent: observation.used_percent,
@@ -258,6 +285,7 @@ impl ProviderLimitsView {
                             crew.enabled
                                 && reading_covers(
                                     &observation.provider,
+                                    observation.account.as_deref(),
                                     observation.model.as_deref(),
                                     crew,
                                 )
@@ -268,30 +296,35 @@ impl ProviderLimitsView {
             })
             .collect::<Vec<_>>();
         readings.sort_by(|left, right| {
-            (&left.provider, &left.scope, &left.window).cmp(&(
+            (&left.provider, &left.account, &left.scope, &left.window).cmp(&(
                 &right.provider,
+                &right.account,
                 &right.scope,
                 &right.window,
             ))
         });
 
-        let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut providers = BTreeMap::<(String, Option<String>), BTreeSet<String>>::new();
         for crew in crews.iter().filter(|crew| crew.enabled) {
             providers
-                .entry(canonical_provider(&crew.assignment.provider))
+                .entry((
+                    canonical_provider(&crew.assignment.provider),
+                    crew.account().map(ToOwned::to_owned),
+                ))
                 .or_default()
                 .insert(crew.name.clone());
         }
         let providers = providers
             .into_iter()
-            .map(|(provider, crews)| ProviderUsageStatus {
+            .map(|((provider, account), crews)| ProviderUsageStatus {
                 reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
-                threshold: policy.threshold(&provider),
-                gated: readings
-                    .iter()
-                    .any(|reading| reading.gated && reading.provider == provider),
+                threshold: policy.account_threshold(&provider, account.as_deref()),
+                gated: readings.iter().any(|reading| {
+                    reading.gated && reading.provider == provider && reading.account == account
+                }),
                 crews: crews.into_iter().collect(),
                 provider,
+                account,
             })
             .collect();
 
@@ -306,7 +339,12 @@ impl ProviderLimitsView {
                 .iter()
                 .filter(|reading| {
                     reading.gated
-                        && reading_covers(&reading.provider, reading.scope.as_deref(), crew)
+                        && reading_covers(
+                            &reading.provider,
+                            reading.account.as_deref(),
+                            reading.scope.as_deref(),
+                            crew,
+                        )
                 })
                 .map(|reading| reading.until)
                 .max()?;
@@ -365,14 +403,16 @@ impl ProviderLimitsView {
         self.crews.iter().find(|limit| limit.crew == crew)
     }
 
-    /// The live readings of `provider`.
+    /// The live readings of `provider`'s `account`: its default login's for
+    /// `None`.
     pub fn provider_readings<'a>(
         &'a self,
         provider: &'a str,
+        account: Option<&'a str>,
     ) -> impl Iterator<Item = &'a ProviderLimitReading> {
-        self.readings
-            .iter()
-            .filter(move |reading| reading.provider == provider)
+        self.readings.iter().filter(move |reading| {
+            reading.provider == provider && reading.account.as_deref() == account
+        })
     }
 }
 
@@ -398,7 +438,13 @@ fn tightest(readings: &[ProviderLimitReading], crew: &Crew) -> Option<CrewProvid
     let covering = readings
         .iter()
         .filter(|reading| {
-            reading.gating && reading_covers(&reading.provider, reading.scope.as_deref(), crew)
+            reading.gating
+                && reading_covers(
+                    &reading.provider,
+                    reading.account.as_deref(),
+                    reading.scope.as_deref(),
+                    crew,
+                )
         })
         .collect::<Vec<_>>();
     let reading = covering
@@ -420,6 +466,7 @@ fn tightest(readings: &[ProviderLimitReading], crew: &Crew) -> Option<CrewProvid
     Some(CrewProviderLimit {
         crew: crew.name.clone(),
         provider: reading.provider.clone(),
+        account: reading.account.clone(),
         scope: reading.scope.clone(),
         window: reading.window.clone(),
         used_percent: reading.used_percent,

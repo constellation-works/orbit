@@ -565,7 +565,7 @@ function buildCrewWindow(window) {
   for (const exclusion of auth) {
     panel.appendChild(el("div", { class: "child-dispatch-row auth-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text:
-        `${exclusion.provider} auth failed on ${exclusion.host} at ${exclusion.excluded_at} (${exclusion.error_class}; credentials: ${exclusion.credential_source}); ${exclusion.relogin_hint}; next probe: ${exclusion.next_probe_at || "not declared; start a new drain after re-login"}` }),
+        `${exclusion.provider}${exclusion.account ? `/${exclusion.account}` : ""} auth failed on ${exclusion.host} at ${exclusion.excluded_at} (${exclusion.error_class}; credentials: ${exclusion.credential_source}); ${exclusion.relogin_hint}; next probe: ${exclusion.next_probe_at || "not declared; start a new drain after re-login"}` }),
     ]));
   }
   return panel;

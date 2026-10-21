@@ -212,7 +212,10 @@ impl crate::OrbitRuntime {
             // released failure whose class blames this host excludes the crew
             // too. [ORB-14262] Authentication is the provider's login, not the
             // crew's model, so every configured crew of that provider is
-            // excluded. Capacity stays on the named crew: another model may
+            // excluded; [ORB-17288] of that provider account, that is: a crew
+            // that sets `env` is its own account and alone excluded, and a
+            // crew without one excludes the provider's other crews without
+            // one. Capacity stays on the named crew: another model may
             // still have room. Provider labels are parsed, so `anthropic`
             // groups with `claude`. [ORB-14697] A usage limit excludes nothing
             // here: the leaf recorded it in this host's provider-limit store,
@@ -227,10 +230,10 @@ impl crate::OrbitRuntime {
                 if incident.recovered_at.is_some() {
                     continue;
                 }
-                if !auth_exclusions
-                    .iter()
-                    .any(|entry: &PullAuthExclusion| entry.provider == incident.exclusion.provider)
-                {
+                if !auth_exclusions.iter().any(|entry: &PullAuthExclusion| {
+                    entry.provider == incident.exclusion.provider
+                        && entry.account == incident.exclusion.account
+                }) {
                     auth_exclusions.push(incident.exclusion);
                 }
             }
@@ -254,7 +257,7 @@ impl crate::OrbitRuntime {
                 (Some(_), Some(failure)) if failure.provider_limit && !authentication => continue,
                 (Some(unavailable), _) => {
                     let crews = match unavailable.crew.as_deref() {
-                        Some(crew) if authentication => self.crews_sharing_provider(crew),
+                        Some(crew) if authentication => self.crews_sharing_account(crew),
                         Some(crew) => vec![crew.to_string()],
                         None => Vec::new(),
                     };
@@ -463,12 +466,18 @@ impl crate::OrbitRuntime {
             .map(|run| run.finished_at.or(run.started_at).unwrap_or(run.created_at)))
     }
 
-    /// `failed` plus every configured crew whose provider parses to the same
-    /// canonical provider. An unparsable or unknown crew stays a single name.
-    fn crews_sharing_provider(&self, failed: &str) -> Vec<String> {
+    /// `failed` plus every configured crew on the same provider account:
+    /// whose provider parses to the same canonical provider and, [ORB-17288]
+    /// as a crew that sets `env` is its own account, that shares `failed`'s
+    /// account. A crew with `env` is alone on its account; one without
+    /// shares the provider's default login with the others without. An
+    /// unparsable or unknown crew stays a single name.
+    fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
         let registry = self.context.settings().crews();
-        let Some(provider) = registry.get(failed).and_then(|crew| {
-            orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+        let Some((provider, account)) = registry.get(failed).and_then(|crew| {
+            orbit_types::workflow::Provider::parse(&crew.assignment.provider)
+                .ok()
+                .map(|provider| (provider, crew.account()))
         }) else {
             return vec![failed.to_string()];
         };
@@ -477,6 +486,7 @@ impl crate::OrbitRuntime {
             .filter(|crew| {
                 orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
                     == Some(provider)
+                    && crew.account() == account
             })
             .map(|crew| crew.name.clone())
             .collect::<Vec<_>>();

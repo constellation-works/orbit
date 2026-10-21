@@ -298,8 +298,8 @@ impl OrbitRuntime {
     }
 
     /// [ORB-14695] Records a provider usage limit in this host's store,
-    /// unless a newer observation for its provider, scope and window stands.
-    /// Returns whether it was stored.
+    /// unless a newer observation for its provider account, scope and window
+    /// stands. Returns whether it was stored.
     pub fn record_provider_limit(
         &self,
         observation: &ProviderLimitObservation,
@@ -311,8 +311,8 @@ impl OrbitRuntime {
             .record_provider_limit(observation)
     }
 
-    /// [ORB-14695] The latest provider usage limit per provider, scope and
-    /// window this host observed, newest first.
+    /// [ORB-14695] The latest provider usage limit per provider account,
+    /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         self.context.stores().host.provider_limit.provider_limits()
     }
@@ -343,14 +343,17 @@ impl OrbitRuntime {
             .provider_crew_outages(now)
     }
 
-    /// [ORB-14699] The provider's invocations since `since`, oldest first,
-    /// across this host; `provider_names` are the names it goes by.
+    /// [ORB-14699] The provider account's invocations since `since`, oldest
+    /// first, across this host; `provider_names` are the names the provider
+    /// goes by, and `account` the crew account, `None` for the default login
+    /// [ORB-17288].
     pub(crate) fn provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
-        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, since)
+        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, account, since)
     }
 
     /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.

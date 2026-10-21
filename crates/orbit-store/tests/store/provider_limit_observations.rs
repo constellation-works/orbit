@@ -38,6 +38,7 @@ fn observation(
 ) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: provider.to_string(),
+        account: None,
         model: None,
         window: None,
         exhausted: true,
@@ -83,7 +84,11 @@ fn the_latest_observation_per_provider_scope_wins() {
     );
 
     // Microseconds survive, so two failures in one second still order.
-    let close = observation("antigravity", at(14, 30) + provider_limit_observations_Duration::microseconds(7), None);
+    let close = observation(
+        "antigravity",
+        at(14, 30) + provider_limit_observations_Duration::microseconds(7),
+        None,
+    );
     assert!(store.record_provider_limit(&close).unwrap());
     assert_eq!(
         store.provider_limits().unwrap(),
@@ -127,7 +132,9 @@ fn the_latest_observation_per_provider_scope_wins() {
 /// open without touching what it held, and records limits afterwards.
 #[test]
 fn an_existing_store_gains_the_provider_limit_table_additively() {
-    if !provider_limit_observations_isolated("an_existing_store_gains_the_provider_limit_table_additively") {
+    if !provider_limit_observations_isolated(
+        "an_existing_store_gains_the_provider_limit_table_additively",
+    ) {
         return;
     }
     let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
@@ -213,4 +220,65 @@ fn a_v40_table_gains_the_reading_columns_additively() {
     assert_eq!(row.source, ProviderLimitSource::Error);
     assert_eq!((row.used_percent, row.window_minutes), (None, None));
     assert!(row.gating, "a failure an older binary recorded still gates");
+}
+
+/// [ORB-17288] A crew account's readings are kept apart from its provider's
+/// default login's: the same provider, scope and window holds one row per
+/// account, and neither replaces the other. A store from before accounts
+/// were named gains their table on open, and the row an older binary wrote
+/// reads back as the default login's.
+#[test]
+fn crew_account_readings_are_kept_apart_from_the_default_login() {
+    if !provider_limit_observations_isolated(
+        "crew_account_readings_are_kept_apart_from_the_default_login",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+    let path = root.path().join("orbit.db");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    // Recreate schema v55, with a row the older binary wrote.
+    conn.execute_batch(
+        "DROP TABLE provider_account_limit_observations;
+        ALTER TABLE invocations DROP COLUMN account;
+        DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0056';
+        INSERT INTO provider_limit_observations (provider, model_scope, window_label,
+            exhausted, source, resets_at, observed_at, run_id, crew, detail,
+            used_percent, window_minutes, gating)
+        VALUES ('claude', '', 'five_hour', 0, 'event', NULL, '2026-10-08T14:00:00.000000Z',
+            'run-1', 'opus-credits', 'status=allowed', 97.0, 300, 1);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = provider_limit_store_from_store(Store::open(&path).unwrap());
+    let [legacy] = store.provider_limits().unwrap().try_into().unwrap();
+    assert_eq!(
+        (legacy.account, legacy.crew.as_deref()),
+        (None, Some("opus-credits")),
+        "a row written before accounts were named is the default login's, whatever crew ran"
+    );
+
+    let five_hour = |account: Option<&str>, observed_at| ProviderLimitObservation {
+        account: account.map(str::to_string),
+        window: Some("five_hour".to_string()),
+        ..observation("claude", observed_at, Some(at(19, 0)))
+    };
+    let credits = five_hour(Some("opus-credits"), at(14, 10));
+    assert!(store.record_provider_limit(&credits).unwrap());
+    let subscription = five_hour(None, at(14, 20));
+    assert!(store.record_provider_limit(&subscription).unwrap());
+    assert_eq!(
+        store.provider_limits().unwrap(),
+        [subscription.clone(), credits.clone()],
+        "one row per account, newest first"
+    );
+
+    let older_credits = five_hour(Some("opus-credits"), at(14, 5));
+    assert!(
+        !store.record_provider_limit(&older_credits).unwrap(),
+        "an older reading of the account does not replace its newer one"
+    );
+    assert_eq!(store.provider_limits().unwrap(), [subscription, credits]);
 }

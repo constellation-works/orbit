@@ -2629,6 +2629,7 @@ pub(super) fn seed_pilot_run(
         .runtime
         .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
             job_run_id: run_id.into(),
+            account: None,
             activity_id: "task_pilot".into(),
             agent: "fixture".into(),
             provider: None,

@@ -1,5 +1,7 @@
 //! [ORB-14695] The host's provider usage limits in `provider_limit_observations`,
-//! and [ORB-16379] its crew outages in `provider_crew_outages`.
+//! [ORB-17288] those of its crew accounts in
+//! `provider_account_limit_observations`, and [ORB-16379] its crew outages in
+//! `provider_crew_outages`.
 //!
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders them by comparing the text.
@@ -23,44 +25,75 @@ impl ProviderLimitStoreBackend for Store {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<bool, OrbitError> {
+        // [ORB-17288] A crew account's readings are kept in their own table,
+        // so the default login's rows, and an older binary's writes of them,
+        // keep their key.
+        let account = observation
+            .account
+            .as_deref()
+            .map(str::trim)
+            .filter(|account| !account.is_empty());
+        let (table, account_column, account_value, key) = match account {
+            Some(_) => (
+                "provider_account_limit_observations",
+                "account, ",
+                "?14, ",
+                "provider, account, model_scope, window_label",
+            ),
+            None => (
+                "provider_limit_observations",
+                "",
+                "",
+                "provider, model_scope, window_label",
+            ),
+        };
+        let sql = format!(
+            r#"
+            INSERT INTO {table} (
+                {account_column}provider, model_scope, window_label, exhausted, source,
+                resets_at, observed_at, run_id, crew, detail,
+                used_percent, window_minutes, gating
+            ) VALUES ({account_value}?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT ({key}) DO UPDATE SET
+                exhausted = excluded.exhausted,
+                source = excluded.source,
+                resets_at = excluded.resets_at,
+                observed_at = excluded.observed_at,
+                run_id = excluded.run_id,
+                crew = excluded.crew,
+                detail = excluded.detail,
+                used_percent = excluded.used_percent,
+                window_minutes = excluded.window_minutes,
+                gating = excluded.gating
+            WHERE excluded.observed_at >= {table}.observed_at
+            "#
+        );
+        let model = observation.model.as_deref().unwrap_or_default();
+        let window = observation.window.as_deref().unwrap_or_default();
+        let source = observation.source.as_str();
+        let resets_at = observation.resets_at.map(stamp);
+        let observed_at = stamp(observation.observed_at);
+        let mut bound: Vec<&dyn rusqlite::ToSql> = vec![
+            &observation.provider,
+            &model,
+            &window,
+            &observation.exhausted,
+            &source,
+            &resets_at,
+            &observed_at,
+            &observation.run_id,
+            &observation.crew,
+            &observation.detail,
+            &observation.used_percent,
+            &observation.window_minutes,
+            &observation.gating,
+        ];
+        if let Some(account) = &account {
+            bound.push(account);
+        }
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
-                .execute(
-                    r#"
-                    INSERT INTO provider_limit_observations (
-                        provider, model_scope, window_label, exhausted, source,
-                        resets_at, observed_at, run_id, crew, detail,
-                        used_percent, window_minutes, gating
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-                    ON CONFLICT (provider, model_scope, window_label) DO UPDATE SET
-                        exhausted = excluded.exhausted,
-                        source = excluded.source,
-                        resets_at = excluded.resets_at,
-                        observed_at = excluded.observed_at,
-                        run_id = excluded.run_id,
-                        crew = excluded.crew,
-                        detail = excluded.detail,
-                        used_percent = excluded.used_percent,
-                        window_minutes = excluded.window_minutes,
-                        gating = excluded.gating
-                    WHERE excluded.observed_at >= provider_limit_observations.observed_at
-                    "#,
-                    params![
-                        observation.provider,
-                        observation.model.as_deref().unwrap_or_default(),
-                        observation.window.as_deref().unwrap_or_default(),
-                        observation.exhausted,
-                        observation.source.as_str(),
-                        observation.resets_at.map(stamp),
-                        stamp(observation.observed_at),
-                        observation.run_id,
-                        observation.crew,
-                        observation.detail,
-                        observation.used_percent,
-                        observation.window_minutes,
-                        observation.gating,
-                    ],
-                )
+                .execute(&sql, bound.as_slice())
                 .map(|changed| changed > 0)
                 .map_err(sqlite_store_error)
         })
@@ -68,14 +101,21 @@ impl ProviderLimitStoreBackend for Store {
 
     fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         let conn = self.read()?;
+        // [ORB-17288] Rows of the default login's table, every one recorded
+        // before accounts were named included, carry no account.
         let mut statement = conn
             .prepare(
                 r#"
                 SELECT provider, model_scope, window_label, exhausted, source,
                        resets_at, observed_at, run_id, crew, detail,
-                       used_percent, window_minutes, gating
+                       used_percent, window_minutes, gating, '' AS account
                 FROM provider_limit_observations
-                ORDER BY observed_at DESC, provider, model_scope, window_label
+                UNION ALL
+                SELECT provider, model_scope, window_label, exhausted, source,
+                       resets_at, observed_at, run_id, crew, detail,
+                       used_percent, window_minutes, gating, account
+                FROM provider_account_limit_observations
+                ORDER BY observed_at DESC, provider, account, model_scope, window_label
                 "#,
             )
             .map_err(sqlite_store_error)?;
@@ -85,6 +125,7 @@ impl ProviderLimitStoreBackend for Store {
                 let source: String = row.get(4)?;
                 Ok(ProviderLimitObservation {
                     provider: row.get(0)?,
+                    account: non_empty(row.get(13)?),
                     model: non_empty(row.get(1)?),
                     window: non_empty(row.get(2)?),
                     exhausted: row.get(3)?,

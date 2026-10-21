@@ -565,12 +565,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_executor_census,
     },
+    // ORB-17288: a crew that sets `env` is its own provider account. A new
+    // table for its usage readings and a nullable `invocations.account`
+    // column; an older binary never reads the table and keeps inserting
+    // invocations without the column, so drains on older binaries keep
+    // writing.
+    Migration {
+        version: 56,
+        name: "provider_crew_accounts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_crew_accounts,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 55;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 56;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

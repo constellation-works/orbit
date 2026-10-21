@@ -2,17 +2,17 @@
 type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]
-last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 ---
 
 # Scope: per-crew credentials (`crews.<name>.env`)
 
-Status: phase 1 (`crews.<name>.env`, [ORB-17287]) implemented; phase 2 not started.
+Status: phase 1 (`crews.<name>.env`, [ORB-17287]) and phase 2 (crew as account, [ORB-17288]) implemented.
 Bearing: [`[execution.env]`](../../CONFIG.md#executionenv--the-agent-subprocess-environment) is an
 allowlist of names, never values; [provider usage limits](../../CONFIG.md#provider-usage-limits)
 and [auth recovery probes](../../CONFIG.md#executor-authentication-recovery-probes) are keyed by
-provider.
+provider account: the provider's default login, or a crew that sets `env`.
 
 ## Problem
 
@@ -77,7 +77,8 @@ Rules:
    unset-source exclusion, doctor and config surfaces. Usable alone; limits still per provider
    (documented).
 2. **Crew as account** [ORB-17288]. Limits, holds, exclusions, probes and budgets keyed by crew
-   for crews with `env`. Existing records read as provider-level; no migration.
+   for crews with `env`. Existing records read as provider-level; an additive migration adds
+   the crew-account readings table and the invocation `account` column.
 
 ## Open questions
 

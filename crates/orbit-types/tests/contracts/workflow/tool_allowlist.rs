@@ -54,6 +54,7 @@ fn agent_loop_activity(
             trusted_host_execution: false,
             tool_disallow_list: None,
             crew_env: Vec::new(),
+            crew_account: None,
         }),
     }
 }

@@ -9,7 +9,7 @@
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
 use orbit_types::task::HostOs;
-use orbit_types::workflow::ExecutorDef;
+use orbit_types::workflow::{ExecutorDef, provider_account_label};
 use serde_json::{Value, json};
 
 use super::browser_kit::browser_kit_rows;
@@ -253,14 +253,19 @@ fn unsupported_on_this_os(def: &ExecutorDef) -> bool {
         .is_some_and(|hosts| !HostOs::current().is_some_and(|host| hosts.contains(&host)))
 }
 
-/// One warning per provider an active drain excludes for failed authentication.
+/// One warning per provider account an active drain excludes for failed
+/// authentication: `provider-auth:claude`, or `provider-auth:claude/<crew>`
+/// for a crew that sets `env` and so is its own account.
 fn provider_auth_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     match runtime.active_pull_auth_exclusions() {
         Ok(exclusions) => exclusions
             .into_iter()
             .map(|exclusion| WorkspaceDoctorResult {
                 duration_ms: 0,
-                check_name: format!("provider-auth:{}", exclusion.provider),
+                check_name: format!(
+                    "provider-auth:{}",
+                    provider_account_label(&exclusion.provider, exclusion.account.as_deref())
+                ),
                 status: WorkspaceDoctorStatus::Warning,
                 message: exclusion.describe(),
                 remediation: Some(exclusion.relogin_hint),
@@ -285,7 +290,9 @@ fn provider_limit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 }
 
 /// [ORB-14698] One `provider-limits:<provider>` row per provider an enabled
-/// crew uses, from the host's provider-limit view: `warning` while a reading
+/// crew uses, and [ORB-17288] one `provider-limits:<provider>/<crew>` row
+/// per enabled crew that sets `env` and so is its own account, from the
+/// host's provider-limit view: `warning` while a reading
 /// gates it (window, use, reset and skipped crews), `ok` below its threshold
 /// or when `provider:off` has turned the gate off (the row says gating is
 /// off), and `info` for a provider that reports no usage, whose limits Orbit
@@ -323,9 +330,10 @@ pub fn provider_limit_findings(
         .providers
         .iter()
         .map(|provider| {
-            let check_name = format!("provider-limits:{}", provider.provider);
+            let label = provider.label();
+            let check_name = format!("provider-limits:{label}");
             let readings = view
-                .provider_readings(&provider.provider)
+                .provider_readings(&provider.provider, provider.account.as_deref())
                 .collect::<Vec<_>>();
             let finding = if provider.gated {
                 let gated = readings
@@ -339,8 +347,8 @@ pub fn provider_limit_findings(
                     gated.join("; "),
                     Some(
                         "Admission draws these crews again after the reset. To run closer to \
-                         the limit, raise `workflow.provider_limit_overrides` for this provider, \
-                         or set it to `off` to record readings without gating.",
+                         the limit, raise `workflow.provider_limit_overrides` for this provider \
+                         (or crew account), or set it to `off` to record readings without gating.",
                     ),
                 )
             } else if provider.threshold.is_off() {
@@ -350,9 +358,9 @@ pub fn provider_limit_findings(
                     .collect::<Vec<_>>()
                     .join(", ");
                 let message = if described.is_empty() {
-                    format!("{}: gating is off", provider.provider)
+                    format!("{label}: gating is off")
                 } else {
-                    format!("{}: gating is off: {described}", provider.provider)
+                    format!("{label}: gating is off: {described}")
                 };
                 row(
                     check_name,
@@ -367,10 +375,7 @@ pub fn provider_limit_findings(
                 row(
                     check_name,
                     WorkspaceDoctorStatus::Info,
-                    format!(
-                        "{}: no usage signal; Orbit learns limits from failures",
-                        provider.provider
-                    ),
+                    format!("{label}: no usage signal; Orbit learns limits from failures"),
                     None,
                 )
             } else if readings.is_empty() {
@@ -378,8 +383,8 @@ pub fn provider_limit_findings(
                     check_name,
                     WorkspaceDoctorStatus::Ok,
                     format!(
-                        "{}: no live usage reading; its crews are skipped at {}% of a window",
-                        provider.provider, provider.threshold
+                        "{label}: no live usage reading; its crews are skipped at {}% of a window",
+                        provider.threshold
                     ),
                     None,
                 )
@@ -388,8 +393,7 @@ pub fn provider_limit_findings(
                     check_name,
                     WorkspaceDoctorStatus::Ok,
                     format!(
-                        "{} below its {}% limit: {}",
-                        provider.provider,
+                        "{label} below its {}% limit: {}",
                         provider.threshold,
                         readings
                             .iter()

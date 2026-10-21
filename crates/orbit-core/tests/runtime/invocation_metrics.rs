@@ -14,6 +14,7 @@ fn record(runtime: &OrbitRuntime, task_ids: &[String], scale: u64) {
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
             job_run_id: "fixture-run".to_string(),
+            account: None,
             activity_id: "fixture".to_string(),
             agent: "codex".to_string(),
             provider: None,

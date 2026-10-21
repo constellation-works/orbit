@@ -95,12 +95,16 @@ fn off_turns_one_providers_gate_off_and_is_stored_canonically() {
     assert_eq!(policy.threshold("codex"), ProviderLimitThreshold::Off);
     assert_eq!(policy.threshold("openai"), ProviderLimitThreshold::Off);
     assert_eq!(policy.threshold("chatgpt"), ProviderLimitThreshold::Off);
-    assert_eq!(policy.budget_threshold("codex"), 80, "off is not a percent");
+    assert_eq!(
+        policy.budget_threshold("codex", None),
+        80,
+        "off is not a percent"
+    );
     assert_eq!(
         policy.threshold("grok"),
         ProviderLimitThreshold::Percent(100)
     );
-    assert_eq!(policy.budget_threshold("grok"), 100);
+    assert_eq!(policy.budget_threshold("grok", None), 100);
     assert_eq!(
         policy.threshold("claude"),
         ProviderLimitThreshold::Percent(80)
@@ -161,7 +165,7 @@ fn budgets_are_admitted_under_their_canonical_provider() {
         .iter()
         .map(|budget| {
             (
-                budget.provider.as_str(),
+                budget.target.name(),
                 budget.amount,
                 budget.unit,
                 budget.window_minutes(),
@@ -231,5 +235,96 @@ fn invalid_budgets_are_refused_by_load_and_config_set() {
             assert!(error.contains(BUDGETS), "{value}: {error}");
             assert!(error.contains(expected), "{value}: {error}");
         }
+    }
+}
+
+/// [ORB-17288] A budget or override may name a crew that sets `env`, its own
+/// account, from either layer; one naming an undefined crew, or a crew on its
+/// provider's default login, fails the load naming that crew.
+#[test]
+fn crew_account_targets_load_only_for_a_defined_crew_with_env() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    std::fs::write(
+        global.path().join("config.toml"),
+        "[workflow]\ndefault_crew = \"opus\"\n\n\
+         [crews.opus]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n\n\
+         [crews.opus-credits]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n\
+         env = [\"ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1\"]\n",
+    )
+    .expect("write global config");
+    let load_workspace = |body: &str| {
+        std::fs::write(
+            workspace.path().join("config.toml"),
+            format!("[workflow]\n{body}\n"),
+        )
+        .expect("write workspace config");
+        ResolvedConfig::load(&roots).map_err(|error| error.to_string())
+    };
+
+    let policy = load_workspace(
+        "provider_limit_budgets = [\"opus-credits:200usd/30d\", \"grok:30usd/5h\"]\n\
+         provider_limit_overrides = [\"opus-credits:off\", \"claude:95\"]",
+    )
+    .expect("crew targets naming a crew with env load")
+    .snapshot
+    .provider_limit_policy();
+    let budgets = policy
+        .budgets
+        .iter()
+        .map(|budget| (budget.target.clone(), budget.render()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        budgets,
+        [
+            (
+                ProviderLimitTarget::Provider("grok".into()),
+                "grok:30usd/5h".to_string()
+            ),
+            (
+                ProviderLimitTarget::Crew("opus-credits".into()),
+                "opus-credits:200usd/30d".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        policy.account_threshold("claude", Some("opus-credits")),
+        ProviderLimitThreshold::Off,
+        "the crew account's own override"
+    );
+    assert_eq!(
+        policy.account_threshold("claude", None),
+        ProviderLimitThreshold::Percent(95),
+        "the default login keeps the provider's override"
+    );
+
+    for (body, crew, expected) in [
+        (
+            "provider_limit_budgets = [\"opus:200usd/30d\"]",
+            "opus",
+            "sets no `env`",
+        ),
+        (
+            "provider_limit_overrides = [\"opus:off\"]",
+            "opus",
+            "sets no `env`",
+        ),
+        (
+            "provider_limit_budgets = [\"nobody:200usd/30d\"]",
+            "nobody",
+            "no crew `nobody` is defined",
+        ),
+        (
+            "provider_limit_overrides = [\"nobody:90\"]",
+            "nobody",
+            "no crew `nobody` is defined",
+        ),
+    ] {
+        let error = load_workspace(body).expect_err(body);
+        assert!(
+            error.contains(&format!("`{crew}`")) && error.contains(expected),
+            "{body}: {error}"
+        );
     }
 }

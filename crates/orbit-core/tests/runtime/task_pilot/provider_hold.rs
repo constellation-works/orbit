@@ -272,6 +272,7 @@ fn save_probe(
         PullAuthRecovery {
             exclusion: PullAuthExclusion {
                 provider: provider.into(),
+                account: None,
                 host: "fixture-machine".into(),
                 excluded_at: recovered_at - Duration::minutes(5),
                 error_class: "provider_unavailable".into(),

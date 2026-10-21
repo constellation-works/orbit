@@ -232,6 +232,18 @@ pub struct Crew {
     pub env: Vec<CrewEnvVar>,
 }
 
+impl Crew {
+    /// The provider account this crew runs on when it is its own: a crew
+    /// that sets `env` runs on the credential that names, so its usage
+    /// limits, provider holds and authentication exclusions are its own,
+    /// keyed by its name. `None` for a crew on its provider's default
+    /// login, which shares those with the provider's other such crews.
+    #[must_use]
+    pub fn account(&self) -> Option<&str> {
+        (!self.env.is_empty()).then_some(self.name.as_str())
+    }
+}
+
 fn crew_enabled_default() -> bool {
     true
 }

@@ -635,6 +635,29 @@ impl Pair {
         Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
     }
 
+    /// [`Self::with_owner_config`] with `follower_global` as the follower's
+    /// global `config.toml`, where a crew's `env` is set [ORB-17288].
+    fn with_follower_global_crews(
+        owner_config: &str,
+        follower_global: &str,
+        crews: &[Option<&str>],
+    ) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let orbit = root.path().join(OWNER).join("repo/.orbit");
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(orbit.join("config.toml"), owner_config).unwrap();
+        let global = root.path().join(FOLLOWER).join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("config.toml"), follower_global).unwrap();
+        let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let tasks = crews
+            .iter()
+            .enumerate()
+            .map(|(n, crew)| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), *crew))
+            .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
+    }
+
     /// [`Self::with_configs`] with the owner's runtime passed through `host`.
     fn with_owner_host(
         owner_config: &str,

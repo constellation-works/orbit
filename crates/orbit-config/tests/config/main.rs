@@ -22,6 +22,7 @@ use orbit_config::PluginConfigSchema;
 use orbit_config::ProviderLimitBudgetUnit;
 use orbit_config::ProviderLimitExplicitCrews;
 use orbit_config::ProviderLimitPolicy;
+use orbit_config::ProviderLimitTarget;
 use orbit_config::ProviderLimitThreshold;
 use orbit_config::RETIRED_SYSTEM_CREW;
 use orbit_config::REVIEW_CREW_KEY;

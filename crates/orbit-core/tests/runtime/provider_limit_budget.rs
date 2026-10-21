@@ -73,6 +73,7 @@ impl Fixture {
         self.runtime
             .insert_invocation_trace_record(&InvocationInsertParams {
                 job_run_id: "fixture-run".into(),
+                account: None,
                 activity_id: "implement_one".into(),
                 agent: agent.into(),
                 provider: Some(provider.into()),
@@ -108,7 +109,7 @@ impl Fixture {
     fn readings(&self, provider: &str) -> Vec<orbit_core::application::task::ProviderLimitReading> {
         self.runtime
             .provider_limits_view(Utc::now())
-            .provider_readings(provider)
+            .provider_readings(provider, None)
             .cloned()
             .collect()
     }
@@ -155,6 +156,7 @@ impl Fixture {
         self.runtime
             .record_provider_limit(&ProviderLimitObservation {
                 provider: "grok".into(),
+                account: None,
                 model: None,
                 window: Some("session".into()),
                 exhausted,

@@ -29,6 +29,7 @@ model = \"claude-opus\"
 fn codex_reading(used_percent: f64, resets_at: chrono::DateTime<Utc>) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: "codex".into(),
+        account: None,
         model: None,
         window: Some("primary".into()),
         exhausted: false,

@@ -3,7 +3,8 @@
 //!
 //! The host's provider-limit store holds the latest reading of each usage
 //! window (`runtime::engine::invocation`). A reading gates the crews of its
-//! provider — or, when it names a model, only the crews on that model — while
+//! provider account — or, when it names a model, only the crews on that
+//! model — while
 //! it is live and either exhausted or used at or above the provider's
 //! `workflow.provider_limit_*` threshold. An override of `provider:off`
 //! records and shows the reading and gates nothing. A reading is live until
@@ -12,6 +13,11 @@
 //! for the first backoff a usage-limit hold uses. Nothing has to probe the
 //! provider again:
 //! the next admission pass after that simply draws the crew again.
+//!
+//! [ORB-17288] A crew that sets `env` is its own account: only readings taken
+//! under it, and its own budget, gate it, and a reading of the provider's
+//! default login gates only the provider's crews without `env`. A crew
+//! account's threshold is its own override, else its provider's.
 //!
 //! Limited crews are removed from a task's draw before it is made. A task
 //! drawn from a purpose pool falls back to the unlimited members of that
@@ -32,7 +38,7 @@ use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimi
 use orbit_types::identity::Crew;
 use orbit_types::task::Task;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
-use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
+use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_account_label};
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
@@ -50,6 +56,7 @@ const UNKNOWN_WINDOW_LIFETIME: Duration = Duration::minutes(60);
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProviderLimit {
     provider: String,
+    account: Option<String>,
     model: Option<String>,
     window: Option<String>,
     used_percent: Option<f64>,
@@ -77,12 +84,14 @@ impl ProviderLimit {
         // `off` is the operator's way to keep using a provider whose plan
         // window is exhausted while paid credits remain. The reading stays
         // in the store; this gate simply does not act on it.
-        let ProviderLimitThreshold::Percent(threshold) = policy.threshold(&observation.provider)
+        let ProviderLimitThreshold::Percent(threshold) =
+            policy.account_threshold(&observation.provider, observation.account.as_deref())
         else {
             return None;
         };
         reading_at_limit(observation, threshold).then(|| Self {
             provider: observation.provider.clone(),
+            account: observation.account.clone(),
             model: observation.model.clone(),
             window: observation.window.clone(),
             used_percent: observation.used_percent,
@@ -92,13 +101,19 @@ impl ProviderLimit {
         })
     }
 
-    /// Whether the limit applies to `crew`: same provider, and the limit's
-    /// model, when it names one, is the crew's.
+    /// Whether the limit applies to `crew`: same provider account, and the
+    /// limit's model, when it names one, is the crew's.
     fn covers(&self, crew: &Crew) -> bool {
-        reading_covers(&self.provider, self.model.as_deref(), crew)
+        reading_covers(
+            &self.provider,
+            self.account.as_deref(),
+            self.model.as_deref(),
+            crew,
+        )
     }
 
-    /// `<provider> <window> at <used>% (limit <threshold>%) until <reset>`.
+    /// `<provider>[/<account>] <window> at <used>% (limit <threshold>%) until
+    /// <reset>`.
     pub(crate) fn describe(&self) -> String {
         let window = self
             .window
@@ -115,7 +130,7 @@ impl ProviderLimit {
         };
         format!(
             "{} {window} {usage}{partial} (limit {}%) until {}",
-            self.provider,
+            provider_account_label(&self.provider, self.account.as_deref()),
             self.threshold,
             self.until.to_rfc3339()
         )
@@ -146,10 +161,18 @@ pub(super) fn reading_at_limit(observation: &ProviderLimitObservation, threshold
                 .is_some_and(|used| used >= f64::from(threshold)))
 }
 
-/// Whether a reading of `provider`, scoped to `model` when it names one,
-/// applies to `crew`.
-pub(super) fn reading_covers(provider: &str, model: Option<&str>, crew: &Crew) -> bool {
+/// Whether a reading of `provider`'s `account`, scoped to `model` when it
+/// names one, applies to `crew`. [ORB-17288] A crew account's reading
+/// applies only to that crew, and the default login's (`None`) only to the
+/// provider's crews without `env`.
+pub(super) fn reading_covers(
+    provider: &str,
+    account: Option<&str>,
+    model: Option<&str>,
+    crew: &Crew,
+) -> bool {
     same_provider(Some(&crew.assignment.provider), Some(provider))
+        && crew.account() == account
         && model.is_none_or(|model| {
             crew.assignment
                 .model

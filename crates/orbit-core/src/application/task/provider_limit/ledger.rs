@@ -12,10 +12,15 @@
 //! The ledger holds only Orbit's own runs on this host. Interactive use and
 //! other hosts sharing the login are invisible to it, so a budget is the
 //! operator's share of the allowance, not the allowance.
+//!
+//! [ORB-17288] A budget naming a crew that sets `env` reads that crew
+//! account's own spend and gates only that crew; a provider's budget reads
+//! the spend of its default login, the invocations recorded without an
+//! account.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::{ProviderLimitBudget, ProviderLimitBudgetUnit};
+use orbit_config::{ProviderLimitBudget, ProviderLimitBudgetUnit, ProviderLimitTarget};
 use orbit_store::contracts::ProviderLedgerEntry;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::Provider;
@@ -27,11 +32,12 @@ use crate::runtime::task::provider_hold::same_provider;
 /// What a surface adds to a reading that undercounts.
 pub(crate) const PARTIAL_NOTE: &str = "partial: some invocations report no cost";
 
-/// The ledger reading of `budget` at `now` over `entries`, the provider's
-/// invocations in the trailing window. `threshold` is the provider's gating
-/// threshold, which decides when the reading's reset falls.
+/// The ledger reading of `budget` at `now` over `entries`, the invocations of
+/// `provider`'s `account` in the trailing window. `threshold` is that
+/// account's gating threshold, which decides when the reading's reset falls.
 pub(crate) fn ledger_observation(
     budget: &ProviderLimitBudget,
+    (provider, account): (&str, Option<&str>),
     entries: &[ProviderLedgerEntry],
     threshold: u8,
     now: DateTime<Utc>,
@@ -75,8 +81,12 @@ pub(crate) fn ledger_observation(
             format!("{spent} of {} tokens", budget.amount)
         }
     };
+    let by = account
+        .map(|account| format!(" by crew {account}"))
+        .unwrap_or_default();
     ProviderLimitObservation {
-        provider: budget.provider.clone(),
+        provider: provider.to_string(),
+        account: account.map(ToOwned::to_owned),
         model: None,
         window: Some(format!("{} budget", budget.window_label)),
         exhausted: used >= 100.0,
@@ -90,7 +100,7 @@ pub(crate) fn ledger_observation(
         run_id: None,
         crew: None,
         detail: ProviderLimitObservation::bounded_detail(&format!(
-            "{spent_text} in the trailing {} on this host{}",
+            "{spent_text} in the trailing {}{by} on this host{}",
             budget.window_label,
             if partial { " (partial)" } else { "" }
         )),
@@ -112,42 +122,57 @@ fn ledger_names(provider: Provider) -> Vec<String> {
 
 impl OrbitRuntime {
     /// The provider limits in force at `now`: this host's stored readings,
-    /// and a ledger reading for each budgeted provider with no live stored
-    /// reading. A provider-reported window or a limit failure takes
-    /// precedence over the ledger, whatever it says. A budget whose ledger
-    /// cannot be read is logged and gates nothing, as an unreadable store
-    /// does.
+    /// and a ledger reading for each budgeted provider account with no live
+    /// stored reading of that account. A provider-reported window or a limit
+    /// failure takes precedence over the ledger, whatever it says. A budget
+    /// whose ledger cannot be read is logged and gates nothing, as an
+    /// unreadable store does; so does a crew budget naming a crew this host
+    /// does not define with `env`.
     pub(crate) fn provider_limit_observations(
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         let mut observations = self.provider_limits()?;
         let policy = self.provider_limit_policy();
+        let registry = self.context.settings().crews();
         for budget in &policy.budgets {
-            let Ok(provider) = Provider::parse(&budget.provider) else {
+            let (provider, account) = match &budget.target {
+                ProviderLimitTarget::Provider(provider) => (provider.as_str(), None),
+                ProviderLimitTarget::Crew(name) => {
+                    let Some(crew) = registry.get(name).filter(|crew| crew.account().is_some())
+                    else {
+                        continue;
+                    };
+                    (crew.assignment.provider.as_str(), crew.account())
+                }
+            };
+            let Ok(parsed) = Provider::parse(provider) else {
                 continue;
             };
+            let provider = parsed.as_str();
             let reported = observations.iter().any(|observation| {
-                same_provider(Some(&observation.provider), Some(&budget.provider))
+                same_provider(Some(&observation.provider), Some(provider))
+                    && observation.account.as_deref() == account
                     && reading_lifetime(observation) > now
             });
             if reported {
                 continue;
             }
             let since = now - Duration::hours(budget.window_hours.into());
-            match self.provider_ledger_entries(&ledger_names(provider), since) {
+            match self.provider_ledger_entries(&ledger_names(parsed), account, since) {
                 Ok(entries) => observations.push(ledger_observation(
                     budget,
+                    (provider, account),
                     &entries,
                     // `off` is not a percent. The budget's reset stays on the
                     // default (or a percent override); admission then ignores
                     // the reading because the gate is off.
-                    policy.budget_threshold(&budget.provider),
+                    policy.budget_threshold(provider, account),
                     now,
                 )),
                 Err(error) => tracing::warn!(
                     "could not read this host's invocation ledger for the {} budget: {error}",
-                    budget.provider
+                    budget.target.name()
                 ),
             }
         }

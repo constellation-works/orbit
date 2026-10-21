@@ -475,14 +475,10 @@ pub(super) fn persist_dispatch_invocation(
         return;
     };
 
-    if let Err(error) = ctx.host.persist_invocation_trace(
-        &ctx.run_id,
-        step_id,
-        &invocation.provider,
-        invocation.model.as_deref(),
-        input,
-        &invocation.trace,
-    ) {
+    if let Err(error) = ctx
+        .host
+        .persist_invocation_trace(&ctx.run_id, step_id, input, invocation)
+    {
         ctx.audit
             .note_telemetry_failure("invocation_trace", Some(step_id), &error);
     }

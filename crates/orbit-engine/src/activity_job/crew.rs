@@ -23,6 +23,8 @@ pub struct ResolvedAgentSettings {
     /// The crew's `env` entries. A crew without any keeps the inline
     /// activity's (always empty: assets cannot set them).
     pub env: Vec<CrewEnvVar>,
+    /// The crew's own provider account, when it sets `env`.
+    pub account: Option<String>,
 }
 
 /// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
@@ -93,6 +95,7 @@ fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedA
         model: config.model.clone().or_else(|| inline.model.clone()),
         reasoning_effort: config.reasoning_effort.or(inline.reasoning_effort),
         env: config.env.clone(),
+        account: config.account.clone(),
     }
 }
 
@@ -101,4 +104,5 @@ pub fn apply_resolved_settings(spec: &mut AgentLoopSpec, resolved: &ResolvedAgen
     spec.model = resolved.model.clone();
     spec.reasoning_effort = resolved.reasoning_effort;
     spec.crew_env.clone_from(&resolved.env);
+    spec.crew_account.clone_from(&resolved.account);
 }

@@ -137,11 +137,19 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
                     }
                 }
             }
+            // A crew that sets `env` is its own account, `provider/crew`.
+            let account = |entry: &Value| {
+                let provider = entry["provider"].as_str()?;
+                Some(orbit_types::workflow::provider_account_label(
+                    provider,
+                    entry["account"].as_str(),
+                ))
+            };
             for limit in payload["provider_limits"].as_array().into_iter().flatten() {
                 if limit["gated"] == true
-                    && let Some(provider) = limit["provider"].as_str()
+                    && let Some(account) = account(limit)
                 {
-                    holds.push(json!(format!("{provider} usage limit")));
+                    holds.push(json!(format!("{account} usage limit")));
                 }
             }
             for failure in payload["provider_auth_failures"]
@@ -149,8 +157,8 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
                 .into_iter()
                 .flatten()
             {
-                if let Some(provider) = failure["provider"].as_str() {
-                    holds.push(json!(format!("{provider} authentication failed")));
+                if let Some(account) = account(failure) {
+                    holds.push(json!(format!("{account} authentication failed")));
                 }
             }
             let phase =

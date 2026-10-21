@@ -22,7 +22,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
+use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
     CommentLogMark, DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe,
     TagInstruction,
@@ -1006,20 +1006,10 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         job_run_id: &str,
         activity_id: &str,
-        provider: &str,
-        model: Option<&str>,
         input: &Value,
-        trace: &InvocationTrace,
+        invocation: &orbit_engine::DispatchInvocationTrace,
     ) -> Result<(), DispatchError> {
-        invocation::persist_invocation_trace(
-            self,
-            job_run_id,
-            activity_id,
-            provider,
-            model,
-            input,
-            trace,
-        )
+        invocation::persist_invocation_trace(self, job_run_id, activity_id, input, invocation)
     }
 
     fn agent_crew_config_for_input(

@@ -3,16 +3,19 @@
 //!
 //! A budget is the operator's share of a provider's allowance on this host:
 //! an amount of `usd` or `tokens` per rolling window, written
-//! `provider:<amount><unit>/<n><h|d>`, like `grok:30usd/5h`. The host reads
-//! its spend against the budget from its invocation ledger; this module only
-//! parses and admits the declarations.
+//! `provider:<amount><unit>/<n><h|d>`, like `grok:30usd/5h`. [ORB-17288] A
+//! crew that sets `env` is its own account, and a budget may name it instead
+//! (`opus-credits:200usd/30d`): it then reads only that crew's spend. The
+//! host reads its spend against the budget from its invocation ledger; this
+//! module only parses and admits the declarations.
 
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::Provider;
+use orbit_types::identity::Crew;
 
 use crate::ConfigSnapshot;
+use crate::provider_limit::{ProviderLimitTarget, validate_crew_target};
 
 pub(crate) const BUDGETS_KEY: &str = "workflow.provider_limit_budgets";
 
@@ -43,8 +46,9 @@ impl ProviderLimitBudgetUnit {
 /// One admitted `workflow.provider_limit_budgets` entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderLimitBudget {
-    /// The canonical provider the budget covers.
-    pub provider: String,
+    /// What the budget covers: a provider's default login, or one crew
+    /// account.
+    pub target: ProviderLimitTarget,
     /// The amount the window may spend, in `unit`. Positive.
     pub amount: f64,
     /// What `amount` counts.
@@ -67,16 +71,18 @@ impl ProviderLimitBudget {
     pub fn render(&self) -> String {
         format!(
             "{}:{}{}/{}",
-            self.provider,
+            self.target.name(),
             self.amount,
             self.unit.as_str(),
             self.window_label
         )
     }
 
-    /// Parse one entry: the provider a known one (an alias resolves to its
-    /// canonical name), the amount a positive number (a whole number of
-    /// tokens), the window `<n>h` or `<n>d` of at most 31 days.
+    /// Parse one entry: the target a known provider (an alias resolves to
+    /// its canonical name) or a crew name, the amount a positive number (a
+    /// whole number of tokens), the window `<n>h` or `<n>d` of at most 31
+    /// days. Whether a crew target names a crew that sets `env` is checked
+    /// once the crews are known.
     pub fn parse(entry: &str) -> Result<Self, String> {
         let shape = || {
             format!(
@@ -84,9 +90,9 @@ impl ProviderLimitBudget {
                  like `grok:30usd/5h`"
             )
         };
-        let (provider, rest) = entry.trim().split_once(':').ok_or_else(shape)?;
+        let (target, rest) = entry.trim().split_once(':').ok_or_else(shape)?;
         let (amount, window) = rest.split_once('/').ok_or_else(shape)?;
-        let provider = Provider::parse(provider.trim())
+        let target = ProviderLimitTarget::parse(target)
             .map_err(|error| format!("entry `{entry}`: {error}"))?;
 
         let amount = amount.trim().to_ascii_lowercase();
@@ -144,7 +150,7 @@ impl ProviderLimitBudget {
             .ok_or_else(window_error)?;
 
         Ok(Self {
-            provider: provider.as_str().to_string(),
+            target,
             amount,
             unit,
             window_hours,
@@ -165,20 +171,39 @@ impl ConfigSnapshot {
 }
 
 /// Admit `workflow.provider_limit_budgets`: every entry
-/// `provider:<amount><unit>/<window>`, each provider named once (an alias is
-/// stored under its canonical name). Stored sorted by provider; none by
-/// default.
+/// `target:<amount><unit>/<window>`, each target named once (an alias is
+/// stored under its canonical provider). Stored sorted by target; none by
+/// default. Crew targets are checked against the crews once they are known.
 pub(crate) fn admit_budgets(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     let mut budgets = BTreeMap::new();
     for entry in raw.unwrap_or_default() {
         let budget = ProviderLimitBudget::parse(&entry)
             .map_err(|reason| OrbitError::InvalidInput(format!("{BUDGETS_KEY} {reason}")))?;
-        let provider = budget.provider.clone();
-        if budgets.insert(provider.clone(), budget).is_some() {
+        let target = budget.target.clone();
+        if budgets.insert(target.clone(), budget).is_some() {
+            let kind = match target {
+                ProviderLimitTarget::Provider(_) => "provider",
+                ProviderLimitTarget::Crew(_) => "crew",
+            };
             return Err(OrbitError::InvalidInput(format!(
-                "{BUDGETS_KEY} names provider `{provider}` more than once"
+                "{BUDGETS_KEY} names {kind} `{}` more than once",
+                target.name()
             )));
         }
     }
     Ok(budgets.values().map(ProviderLimitBudget::render).collect())
+}
+
+/// [ORB-17288] Refuse an admitted budget whose crew target is not a defined
+/// crew that sets `env`.
+pub(crate) fn validate_budget_crews(
+    entries: &[String],
+    crews: &BTreeMap<String, Crew>,
+) -> Result<(), OrbitError> {
+    for entry in entries {
+        if let Ok(budget) = ProviderLimitBudget::parse(entry) {
+            validate_crew_target(BUDGETS_KEY, entry, &budget.target, crews)?;
+        }
+    }
+    Ok(())
 }

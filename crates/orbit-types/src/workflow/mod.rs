@@ -165,14 +165,15 @@ pub use run::{
     TransientInfraRequeue, TransientInfrastructure, UPGRADE_PENDING_ERROR_CODE,
     UPGRADE_PENDING_MARKER, UPGRADE_PENDING_REQUEUED_EVENT, VALIDATION_ENVIRONMENT_ERROR_CODE,
     VALIDATION_ENVIRONMENT_MARKER, ValidationGateSource, ValidationGates,
-    agent_blocker_from_output, deferral_handoff, failed_provider, failure_classification_text,
-    implementer_regression_from, is_baseline_red_failure, is_contract_refusal,
-    is_forge_unavailable, is_owner_busy, is_owner_route_unavailable,
+    agent_blocker_from_output, deferral_handoff, failed_account, failed_provider,
+    failure_classification_text, implementer_regression_from, is_baseline_red_failure,
+    is_contract_refusal, is_forge_unavailable, is_owner_busy, is_owner_route_unavailable,
     is_provider_capacity_exhausted, is_provider_failure, is_provider_limit, is_provider_refusal,
     is_provider_unavailable, is_task_blocked_by_agent, is_upgrade_pending,
-    is_validation_environment_failure, normalize_unfiled_findings, provider_failure_text,
-    run_id_candidate, run_id_minute_stem, run_id_role, task_blocked_by_agent_kind,
-    task_blocked_by_agent_message, unfiled_findings_shape_error, upgrade_pending_kind,
+    is_validation_environment_failure, normalize_unfiled_findings, provider_account_label,
+    provider_failure_text, run_id_candidate, run_id_minute_stem, run_id_role,
+    task_blocked_by_agent_kind, task_blocked_by_agent_message, unfiled_findings_shape_error,
+    upgrade_pending_kind, with_failed_account,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

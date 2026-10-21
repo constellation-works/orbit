@@ -36,6 +36,11 @@ pub struct InvocationInsertParams {
     /// family. `None` for a caller that does not know it [ORB-14699].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The crew account the invocation ran under: a crew that sets `env` and
+    /// so runs on its own credential, whose budget reads only its spend.
+    /// `None` for the provider's default login [ORB-17288].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub model: Option<String>,
     pub task_ids: Vec<String>,
     pub trace: InvocationTrace,
@@ -77,6 +82,10 @@ pub struct InvocationRecord {
     /// (`orbit_common::model::pricing`). `None` when no price row covers
     /// this model/date.
     pub derived_cost_usd: Option<f64>,
+    /// The crew account the invocation ran under, when its crew sets `env`;
+    /// `None` for the provider's default login [ORB-17288].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// Workspace and date window for reconciliation-safe invocation accounting reads.

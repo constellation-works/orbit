@@ -119,7 +119,7 @@ pub use plugin_enablement::{
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use provider_limit::{
     DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
-    ProviderLimitThreshold,
+    ProviderLimitTarget, ProviderLimitThreshold,
 };
 pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{

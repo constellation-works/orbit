@@ -10,9 +10,10 @@
 use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 use orbit_engine::{V2DispatchInput, dispatch_v2_activity};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use orbit_types::workflow::{
-    ProviderFailureClass, ProviderLimitFailure, failed_provider, is_provider_limit,
+    ProviderFailureClass, ProviderLimitFailure, failed_account, failed_provider, is_provider_limit,
     is_provider_unavailable,
 };
 use serde_json::json;
@@ -503,6 +504,55 @@ fn a_usage_limit_skips_recovery_and_keeps_the_candidate() {
     );
 }
 
+/// [ORB-17288] A crew that sets `env` is its own account: its usage-limit
+/// failure names that account after the provider, still parses as the limit
+/// the provider reported, and its reading and invocation are attributed to
+/// it rather than to the provider's default login.
+fn a_crew_accounts_limit_names_its_account() {
+    let stdout = format!(
+        "{}\n{}",
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1791561600,"rateLimitType":"five_hour"}}"#,
+        r#"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your usage limit"}"#
+    );
+    let fake = FakeProvider::new("claude", &stdout, "", 0, "");
+    let audit = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, audit.path());
+    let spec = AgentLoopSpec {
+        crew_account: Some("opus-credits".into()),
+        ..agent_spec(Provider::Claude)
+    };
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "limit_fixture",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: json!({ "prompt": "implement" }),
+        audit: outcome_writer("limit-account"),
+        run_id: "limit-account",
+        host: Some(&host),
+    })
+    .unwrap();
+    assert!(!outcome.success);
+    let message = outcome.message.as_deref();
+    let limit = typed_limit(message, "claude");
+    assert_eq!(failed_account(message.unwrap()), Some("opus-credits"));
+    assert_eq!(limit.window.as_deref(), Some("five_hour"));
+    assert_eq!(
+        limit.resets_at,
+        DateTime::from_timestamp(1_791_561_600, 0),
+        "the account token leaves the limit's own tokens readable"
+    );
+    let limits = host.limits.lock().unwrap().clone();
+    assert!(!limits.is_empty(), "the reading is recorded");
+    assert!(
+        limits
+            .iter()
+            .all(|reading| reading.account.as_deref() == Some("opus-credits")),
+        "every reading belongs to the crew account: {limits:?}"
+    );
+    let invocation = outcome.invocation.expect("the turn's invocation trace");
+    assert_eq!(invocation.account.as_deref(), Some("opus-credits"));
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn provider_limit_contracts_1() {
@@ -523,6 +573,10 @@ fn provider_limit_contracts_1() {
             (
                 "a_usage_limit_skips_recovery_and_keeps_the_candidate",
                 a_usage_limit_skips_recovery_and_keeps_the_candidate,
+            ),
+            (
+                "a_crew_accounts_limit_names_its_account",
+                a_crew_accounts_limit_names_its_account,
             ),
         ]);
     });
