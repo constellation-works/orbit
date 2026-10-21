@@ -12,7 +12,8 @@
 //! Discovery is confined to each configured catalog root: links below a root
 //! are reported rather than followed, and only regular files are read or
 //! rewritten, so a linked or special entry can neither redirect the repair
-//! outside the catalog nor stall the scan.
+//! outside the catalog nor stall the scan. Traversal failures report the
+//! affected path rather than treating an unavailable inspection as healthy.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -133,10 +134,9 @@ pub(crate) fn repair_retired_activity_backends(
         let (root, path) = match entry {
             CatalogEntry::File { root, path } => (root, path),
             CatalogEntry::Refused { path, reason } => {
-                report.skipped.push(RetiredActivityBackendSkip {
-                    path,
-                    reason: reason.to_string(),
-                });
+                report
+                    .skipped
+                    .push(RetiredActivityBackendSkip { path, reason });
                 continue;
             }
         };
@@ -401,8 +401,8 @@ const NOT_REGULAR: &str =
 enum CatalogEntry {
     /// A regular YAML file reached without crossing a link below `root`.
     File { root: PathBuf, path: PathBuf },
-    /// A link or special entry that is reported instead of followed or read.
-    Refused { path: PathBuf, reason: &'static str },
+    /// An unsafe or unreadable entry reported instead of followed or read.
+    Refused { path: PathBuf, reason: String },
 }
 
 /// Enumerate every production catalog root. Configured roots are resolved as
@@ -420,13 +420,28 @@ fn activity_catalog_entries(runtime: &OrbitRuntime) -> Vec<CatalogEntry> {
 /// Walk `dir` using each entry's own file type, so links are never traversed
 /// (which also makes a linked directory cycle impossible to revisit).
 fn collect_catalog_entries(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, CatalogEntry>) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return;
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            record_catalog_io_fault(dir, "list directory", error, entries);
+            return;
+        }
     };
-    for entry in read_dir.flatten() {
+    for entry in read_dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                record_catalog_io_fault(dir, "read directory entry", error, entries);
+                continue;
+            }
+        };
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                record_catalog_io_fault(&path, "inspect entry type", error, entries);
+                continue;
+            }
         };
         if file_type.is_dir() {
             collect_catalog_entries(root, &path, entries);
@@ -453,8 +468,27 @@ fn collect_catalog_entries(root: &Path, dir: &Path, entries: &mut BTreeMap<PathB
         };
         entries
             .entry(path.clone())
-            .or_insert(CatalogEntry::Refused { path, reason });
+            .or_insert(CatalogEntry::Refused {
+                path,
+                reason: reason.to_string(),
+            });
     }
+}
+
+fn record_catalog_io_fault(
+    path: &Path,
+    operation: &str,
+    error: std::io::Error,
+    entries: &mut BTreeMap<PathBuf, CatalogEntry>,
+) {
+    entries
+        .entry(path.to_path_buf())
+        .or_insert_with(|| CatalogEntry::Refused {
+            path: path.to_path_buf(),
+            reason: format!(
+                "cannot {operation}: {error}; check catalog permissions and availability, then rerun `orbit doctor`"
+            ),
+        });
 }
 
 fn is_yaml(path: &Path) -> bool {

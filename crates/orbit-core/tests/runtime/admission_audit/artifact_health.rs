@@ -34,6 +34,124 @@ fn health_of(report: &[ArtifactHealth], kind: ArtifactKind) -> &ArtifactHealth {
         .unwrap_or_else(|| panic!("missing artifact health for {kind:?}"))
 }
 
+#[cfg(unix)]
+#[test]
+fn activity_catalog_health_reports_unreadable_directories() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "activity_catalog_health_reports_unreadable_directories",
+    ) {
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_engine::activity_job::CatalogError;
+
+    // Restore access even if an assertion unwinds, before TempDir cleans up.
+    struct RestorePermissions(PathBuf, std::fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            std::fs::set_permissions(&self.0, self.1.clone())
+                .expect("restore directory permissions");
+        }
+    }
+
+    for nested in [false, true] {
+        let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+        let (runtime, _, activities) = workspace_runtime(root.path());
+        let blocked = if nested {
+            activities.join("unreadable")
+        } else {
+            activities.clone()
+        };
+        std::fs::create_dir_all(&blocked).expect("catalog directory");
+        std::fs::write(blocked.join("hidden.yaml"), agent_loop_yaml("hidden", ""))
+            .expect("activity in unreadable directory");
+        let permissions = blocked
+            .metadata()
+            .expect("directory metadata")
+            .permissions();
+        let restore = RestorePermissions(blocked.clone(), permissions.clone());
+        // Searchable but not listable: is_dir still succeeds for the root.
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o100))
+            .expect("deny directory listing");
+        assert_eq!(
+            std::fs::read_dir(&blocked)
+                .expect_err("fixture requires a Unix user without directory permission bypass")
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let source_error = match runtime
+            .v2_activity_catalog()
+            .expect_err("dispatch must fail")
+        {
+            CatalogError::ReadDir { path, source } => {
+                assert_eq!(path, blocked);
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+                source.to_string()
+            }
+            error => panic!("expected a traversal failure: {error}"),
+        };
+        let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+        let findings = &health_of(&report, ArtifactKind::Activity).findings;
+        let fault = findings
+            .iter()
+            .find(|finding| finding.path == blocked)
+            .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", blocked.display()));
+        assert_eq!(fault.condition, ArtifactCondition::Faulty);
+        assert!(
+            fault
+                .detail
+                .contains(blocked.to_str().expect("fixture path"))
+        );
+        assert!(fault.detail.contains(&source_error), "{fault:?}");
+        assert!(
+            !fault
+                .remediation
+                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD)
+        );
+        let repair = runtime
+            .repair_retired_activity_backends()
+            .expect("repair scan");
+        assert!(repair.repaired.is_empty());
+        assert!(repair.skipped.iter().any(|skip| skip.path == blocked));
+
+        drop(restore);
+        assert_eq!(
+            blocked
+                .metadata()
+                .expect("restored directory")
+                .permissions()
+                .mode(),
+            permissions.mode()
+        );
+        runtime.v2_activity_catalog().expect("loading recovers");
+        let report = runtime
+            .inspect_definition_artifacts()
+            .expect("doctor recovers");
+        assert!(
+            health_of(&report, ArtifactKind::Activity)
+                .findings
+                .is_empty()
+        );
+    }
+
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("absent fixture");
+    let (runtime, _, activities) = workspace_runtime(root.path());
+    std::fs::remove_dir(&activities).expect("remove empty optional catalog directory");
+    assert!(!activities.exists());
+    runtime
+        .v2_activity_catalog()
+        .expect("absent catalogs are permitted");
+    let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+    assert!(
+        health_of(&report, ArtifactKind::Activity)
+            .findings
+            .is_empty()
+    );
+}
+
 #[test]
 fn activity_catalog_health_matches_runtime_duplicate_admission() {
     if !crate::admission_audit::isolate(

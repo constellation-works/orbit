@@ -339,6 +339,12 @@ file, a linked directory, or a special file such as a FIFO is reported by doctor
 skipped by the repair, and its target is never read or rewritten. To have such an activity
 checked and repaired, replace the link with a regular file inside the catalog.
 
+If a catalog directory cannot be listed, or a directory entry cannot be read or
+its type inspected, doctor reports the affected directory or entry path and the I/O error.
+Check permissions and availability at that path, then rerun `orbit doctor`.
+The retired-backend repair lists these paths as skipped. Genuinely absent catalog
+directories remain optional and do not produce findings.
+
 ### Release leaked automation attempt pins
 
 Admitting a state-routine attempt (the task-pilot routine) pins the commit it froze in a
