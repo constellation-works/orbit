@@ -110,7 +110,9 @@ async function assertFrictionTaskLinks(page) {
         throw new Error('Opening a friction task must not fall back to copying its ID');
       }
       if (status === 'backlog') {
-        for (const action of ['comment', 'reject']) {
+        // Comment is offered only on the Comments tab; Reject stays on Overview.
+        for (const [action, tab] of [['comment', 'comments'], ['reject', 'overview']]) {
+          await pinned.locator(`[role="tab"][data-tab="${tab}"]`).click();
           const button = pinned.locator(`.actions > .action.${action}`);
           await page.keyboard.press('Tab');
           await button.focus();
