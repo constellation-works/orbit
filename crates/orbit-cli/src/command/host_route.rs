@@ -270,13 +270,23 @@ struct RoutedCall {
 }
 
 enum Render {
-    TaskShow { fields: Vec<String> },
-    TaskWrite { verb: &'static str },
-    ArtifactGet { out: Option<PathBuf> },
+    TaskShow {
+        fields: Vec<String>,
+    },
+    TaskWrite {
+        verb: &'static str,
+    },
+    ArtifactGet {
+        out: Option<PathBuf>,
+    },
     ReviewReset,
     Requeue,
     Reconcile,
-    ToolRun { full: bool, fields: Vec<String> },
+    ToolRun {
+        full: bool,
+        fields: Vec<String>,
+        bare_field: bool,
+    },
 }
 
 fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
@@ -297,12 +307,14 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     &mut input,
                     &args.fields,
                 )?;
+                let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
                     render: Render::ToolRun {
                         full: args.full,
                         fields: args.fields.clone(),
+                        bare_field,
                     },
                 })
             }
@@ -523,8 +535,12 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
-        Render::ToolRun { full, fields } => {
-            let shaped = super::tool::shape_tool_output(name, value, full, &fields)?;
+        Render::ToolRun {
+            full,
+            fields,
+            bare_field,
+        } => {
+            let shaped = super::tool::shape_tool_output(name, value, full, &fields, bare_field)?;
             Ok(Payload::document(shaped).into())
         }
     }

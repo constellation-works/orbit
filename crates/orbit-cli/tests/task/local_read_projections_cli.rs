@@ -657,6 +657,139 @@ fn task_show_prints_blocked_guidance_on_cli_and_tool() {
     }
 }
 
+/// [ORB-17401] An object-valued single-field `orbit.task.show` projection keeps
+/// its value under an explicit `--fields`, as scalar, array and multi-field
+/// projections already do. An ordinary record filtered by `--fields` stays a
+/// keyed selection, and `terminal` keeps its own key.
+fn task_show_object_field_projection_keeps_its_value_under_fields() {
+    let fixture = Fixture::new();
+    let id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Object projection",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Keep readiness",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let field = json!({"id": id, "field": "readiness"}).to_string();
+    let proposed_readiness = fixture.json(&["task", "show", &id, "--json"])["readiness"].clone();
+    assert!(
+        proposed_readiness.is_object(),
+        "a proposed task carries a readiness object: {proposed_readiness}"
+    );
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &field,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": proposed_readiness }),
+        "a proposed readiness object survives its single-field projection"
+    );
+
+    fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    let backlog_readiness = fixture.json(&["task", "show", &id, "--json"])["readiness"].clone();
+    assert!(
+        backlog_readiness.is_object(),
+        "a backlog task carries a readiness object: {backlog_readiness}"
+    );
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &field,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": backlog_readiness }),
+        "a backlog readiness object survives its single-field projection"
+    );
+
+    let title = json!({"id": id, "field": "title"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &title,
+            "--fields",
+            "title",
+        ]),
+        json!({ "title": "Object projection" }),
+        "a scalar single-field projection"
+    );
+    let criteria = json!({"id": id, "field": "acceptance_criteria"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &criteria,
+            "--fields",
+            "acceptance_criteria",
+        ]),
+        json!({ "acceptance_criteria": ["Keep readiness"] }),
+        "an array single-field projection"
+    );
+    let pair = json!({"id": id, "fields": ["title", "readiness"]}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &pair,
+            "--fields",
+            "title,readiness",
+        ]),
+        json!({ "title": "Object projection", "readiness": backlog_readiness }),
+        "a multi-field projection is already keyed"
+    );
+    let record = json!({"id": id}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &record,
+            "--fields",
+            "readiness",
+        ]),
+        json!({ "readiness": backlog_readiness }),
+        "an ordinary record filtered by --fields stays a keyed selection"
+    );
+    let terminal = json!({"id": id, "field": "terminal"}).to_string();
+    assert_eq!(
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &terminal,
+            "--fields",
+            "terminal",
+        ]),
+        json!({ "terminal": false }),
+        "terminal keeps its own key"
+    );
+}
+
 #[test]
 fn local_read_projection_contracts() {
     for (name, check) in [
@@ -676,6 +809,10 @@ fn local_read_projection_contracts() {
         (
             "task_show_prints_blocked_guidance_on_cli_and_tool",
             task_show_prints_blocked_guidance_on_cli_and_tool as fn(),
+        ),
+        (
+            "task_show_object_field_projection_keeps_its_value_under_fields",
+            task_show_object_field_projection_keeps_its_value_under_fields as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
