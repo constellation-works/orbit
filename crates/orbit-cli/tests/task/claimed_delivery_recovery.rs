@@ -234,8 +234,13 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
         assert_eq!(new_attempt.state, BatchState::Admitted);
         assert_debt_unchanged(&before, &evaluated);
         let task = runtime.get_task(new_id).unwrap();
+        // Guidance may contain JSON examples before the appended frozen input.
+        // Check the reissued obligations, rather than whichever example is first.
         let frozen: Value = serde_json::from_str(
             task.description
+                .split_once("Frozen automation input (inspect these exact revisions):\n")
+                .expect("the reissued task carries its frozen input")
+                .1
                 .split("```json\n")
                 .nth(1)
                 .unwrap()

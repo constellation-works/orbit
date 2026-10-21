@@ -66,8 +66,23 @@ template:
     and write a `rationale` of at least 40 characters, specific to that delivery,
     saying why the verdict holds. Settlement refuses evidence whose paths do not
     match the frozen diff.
-    Supply actual checks (subject, method,
-    observation); set examination_complete only after all obligations are examined.
+    Preserve the supplied schema_version and frozen identity. Batch/action IDs,
+    consumer, epoch and input_digest are strings. The examined_commits,
+    examined_deliveries and findings arrays contain strings: copy commit SHAs
+    and delivery keys, not the frozen commit/delivery objects.
+    Each checks entry is an object with string subject, method and observation.
+    For example, these fields have valid shapes (replace every example with
+    your actual evidence; use findings: [] when there are no findings):
+    ```json
+    {"checks":[{"subject":"src/lib.rs","method":"git diff <before> <after> -- src/lib.rs","observation":"The error branch drops the caller's retry token."}],"findings":["<finding task ID>: retry token lost; introduced by <culprit task ID> at <commit SHA>"]}
+    ```
+    Verdict findings are task-ID strings, for example
+    `{"findings":["<finding task ID>"]}`, not task objects.
+    If attachment is refused, read the named field/index and expected type in
+    the error, correct that field using the assigned evidence template, and
+    re-put the corrected file inside this run. Do not change the version or
+    frozen identity to bypass a refusal.
+    Set examination_complete only after all obligations are examined.
     Persist an execution summary of what you examined with `orbit.task.update`:
     a review whose agent records none leaves its batch owed, even with valid
     evidence. Task status and successful process exit do not certify coverage.
