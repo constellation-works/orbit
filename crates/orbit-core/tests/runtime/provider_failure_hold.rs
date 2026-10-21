@@ -779,6 +779,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
     };
     let asset = json!({
         "schemaVersion": 2,

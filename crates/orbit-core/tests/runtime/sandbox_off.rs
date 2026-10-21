@@ -177,6 +177,7 @@ fn dispatch_codex(
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

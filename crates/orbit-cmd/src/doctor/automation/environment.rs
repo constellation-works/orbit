@@ -9,28 +9,59 @@ use crate::doctor::*;
 /// pass-listed variable missing here (a dedicated worker token, say) silently
 /// leaves agents on another login. A warning, never an error: optional
 /// provider keys can legitimately be absent. Names only, never values.
+///
+/// A crew whose `[crews.<name>] env` reads an unset source is reported in the
+/// same row: drains exclude that crew and its activities are refused.
 pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
-    if unset.is_empty() {
+    let crew_unset = runtime.unset_crew_env();
+    if unset.is_empty() && crew_unset.is_empty() {
         return check(
             "env-pass",
             WorkspaceDoctorStatus::Ok,
-            "every operator-added `execution.env.pass` variable is set in this environment"
+            "every operator-added `execution.env.pass` variable and crew `env` source is set in \
+             this environment"
                 .to_string(),
         );
+    }
+    let mut problems = Vec::new();
+    if !unset.is_empty() {
+        problems.push(format!(
+            "`execution.env.pass` names variables unset or empty in this environment: {}; \
+             agents started from it will not receive them",
+            unset.join(", ")
+        ));
+    }
+    if !crew_unset.is_empty() {
+        problems.push(format!(
+            "{} unset or empty in this environment; drains exclude {} and {} activities are \
+             refused",
+            crew_unset
+                .iter()
+                .map(orbit_types::workflow::CrewEnvUnset::describe)
+                .collect::<Vec<_>>()
+                .join("; "),
+            if crew_unset.len() == 1 {
+                "that crew"
+            } else {
+                "those crews"
+            },
+            if crew_unset.len() == 1 {
+                "its"
+            } else {
+                "their"
+            },
+        ));
     }
     actionable_check(
         "env-pass",
         WorkspaceDoctorStatus::Warning,
-        format!(
-            "`execution.env.pass` names variables unset or empty in this environment: {}; \
-             agents started from it will not receive them",
-            unset.join(", ")
-        ),
-        "Export the variables before starting the drain or service. Drains inherit the \
-         launching shell's environment, so start them from a login shell (or set the \
-         variables in the unit's environment), or remove the names from \
-         `execution.env.pass`, then rerun `orbit doctor`."
+        problems.join("; "),
+        "Export the variables before starting the drain or service (clock-started runs read \
+         them from ~/.orbit/clock.env). Drains inherit the launching shell's environment, so \
+         start them from a login shell (or set the variables in the unit's environment), or \
+         remove the names from `execution.env.pass` or the crew's `env`, then rerun \
+         `orbit doctor`."
             .to_string(),
     )
 }

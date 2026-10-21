@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::identity::CrewEnvVar;
 use serde_json::Value;
 
 use crate::workflow::JobRunState;
@@ -16,6 +18,36 @@ use super::{
     DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     PullDrainState, SteeringRound, SteeringWatermark, TaskCancellationPolicy,
 };
+
+/// A crew whose `[crews.<name>] env` entries read sources the launching
+/// environment does not hold. Names only, never values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrewEnvUnset {
+    /// The crew name.
+    pub crew: String,
+    /// Its entries whose source is unset or empty.
+    pub env: Vec<CrewEnvVar>,
+}
+
+impl CrewEnvUnset {
+    /// One clause naming the crew and each unset source with the variable it
+    /// feeds, for warnings and run detail. Names only.
+    pub fn describe(&self) -> String {
+        let sources = self
+            .env
+            .iter()
+            .map(|entry| {
+                if entry.is_mapped() {
+                    format!("{} (for {})", entry.source, entry.name)
+                } else {
+                    entry.source.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("crew `{}` env source {sources}", self.crew)
+    }
+}
 
 /// The PR leaf step that admits the before-landing review of its open pull
 /// request [ORB-14849]; its output's `applies` says whether that review runs.
@@ -141,6 +173,11 @@ pub struct PipelineState {
     /// and on runs recorded before this existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_pass_unset: Vec<String>,
+    /// Crews whose `[crews.<name>] env` sources the submitting process held
+    /// no value for: drains excluded them and their activities are refused.
+    /// Names only, never values. Absent when none were unset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_env_unset: Vec<CrewEnvUnset>,
     /// The leaf failure this run's own failure echoes, when it failed only
     /// because a child it waited on failed [ORB-15202]. Absent for a run that
     /// failed on its own, and on runs recorded before this existed.
@@ -192,6 +229,7 @@ impl PipelineState {
             final_recovery: None,
             trigger: None,
             env_pass_unset: Vec::new(),
+            crew_env_unset: Vec::new(),
             root_cause: None,
             steering_watermarks: BTreeMap::new(),
             steering_rounds: BTreeMap::new(),

@@ -19,6 +19,7 @@ pub(super) const CREW_FIELDS: &[&str] = &[
     "model",
     "effort",
     "tags",
+    "env",
     "description",
 ];
 
@@ -428,6 +429,7 @@ pub(super) fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue])
                 "model": cell("model"),
                 "effort": cell("effort"),
                 "tags": cell("tags"),
+                "env": cell("env"),
                 "description": cell("description"),
                 "source": layers.join("+"),
                 "referenced_by": referenced_by,

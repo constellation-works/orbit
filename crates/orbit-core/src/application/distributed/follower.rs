@@ -248,9 +248,8 @@ impl crate::OrbitRuntime {
         }
         // Unknown or blank names fail here, before the probe and before any
         // run exists; canonical names are what every pass reads back.
-        let allowed_crews = self.drain_crews_without_worker_credential(
-            self.canonical_allowed_crews(request.allowed_crews)?,
-        )?;
+        let allowed_crews =
+            self.drain_crews_runnable_here(self.canonical_allowed_crews(request.allowed_crews)?)?;
         // A host that would refuse every leaf claims nothing: no run exists yet.
         self.preflight_git_protection()?;
         let (destination, owner_gates) = self.resolve_pull_destination(request.selector)?;

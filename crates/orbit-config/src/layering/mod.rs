@@ -40,9 +40,9 @@ mod types;
 pub(crate) use document::{set_value_at_path, value_at_path};
 pub use load::load_effective_config;
 pub(crate) use load::{
-    LoadedResolvedConfig, load_layered_resolved, reject_workspace_machine_table,
-    resolve_workspace_file_document, validate_staged_global_document,
-    validate_staged_workspace_document,
+    LoadedResolvedConfig, load_layered_resolved, reject_workspace_crew_env,
+    reject_workspace_machine_table, resolve_workspace_file_document,
+    validate_staged_global_document, validate_staged_workspace_document,
 };
 pub use types::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,

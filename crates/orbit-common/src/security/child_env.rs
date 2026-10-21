@@ -25,6 +25,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_types::identity::CrewEnvVar;
+
 /// Runtime context every supported provider CLI needs in order to start.
 ///
 /// Kept explicit so the effective floor of a child environment is reviewable
@@ -215,6 +217,79 @@ pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Ve
         }
     }
     unset
+}
+
+/// The variables either of which authenticates the `claude` CLI. A crew that
+/// sets one through `[crews.<name>] env` has the other removed from its
+/// agents, so exactly the credential the crew chose is present.
+pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// Overlay one crew's `[crews.<name>] env` entries on a composed child
+/// environment, taking values from `parent`.
+///
+/// Each entry's `name` replaces whatever `child` held for it (crew env wins
+/// over `pass`) with `parent`'s non-empty value of its `source`, or is
+/// removed when `parent` holds none: a crew whose credential is unset never
+/// falls back to the shared one. A mapped source is not forwarded under its
+/// own name to this crew. When the crew sets a Claude credential
+/// ([`CLAUDE_CREDENTIAL_ENV`]), the other one is removed. Privilege-bearing
+/// `ORBIT_*` names are never admitted, whoever asks.
+pub fn apply_crew_env_from(
+    child: &mut Vec<(String, String)>,
+    parent: &[(String, String)],
+    crew_env: &[CrewEnvVar],
+) {
+    let entries: Vec<&CrewEnvVar> = crew_env
+        .iter()
+        .filter(|entry| {
+            !is_privilege_bearing_orbit_name(&entry.name)
+                && !is_privilege_bearing_orbit_name(&entry.source)
+        })
+        .collect();
+    if entries.is_empty() {
+        return;
+    }
+    let targets: BTreeSet<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    let mut removed: BTreeSet<&str> = targets.clone();
+    removed.extend(
+        entries
+            .iter()
+            .filter(|entry| entry.is_mapped())
+            .map(|entry| entry.source.as_str()),
+    );
+    if CLAUDE_CREDENTIAL_ENV
+        .iter()
+        .any(|name| targets.contains(name))
+    {
+        removed.extend(CLAUDE_CREDENTIAL_ENV);
+    }
+    child.retain(|(key, _)| !removed.contains(key.as_str()));
+    for entry in entries {
+        if let Some((_, value)) = parent
+            .iter()
+            .rev()
+            .find(|(key, value)| key == &entry.source && !value.is_empty())
+        {
+            child.push((entry.name.clone(), value.clone()));
+        }
+    }
+}
+
+/// The crew `env` entries whose source `parent` holds no non-empty value for,
+/// in listed order. Names only, never values.
+pub fn unset_crew_env_from(
+    parent: &[(String, String)],
+    crew_env: &[CrewEnvVar],
+) -> Vec<CrewEnvVar> {
+    crew_env
+        .iter()
+        .filter(|entry| {
+            !parent
+                .iter()
+                .any(|(key, value)| key == &entry.source && !value.is_empty())
+        })
+        .cloned()
+        .collect()
 }
 
 /// Full inheritance of the parent environment.

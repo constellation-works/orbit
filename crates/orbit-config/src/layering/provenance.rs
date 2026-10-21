@@ -122,6 +122,10 @@ fn crew_field_values(crew: &Crew) -> Vec<(&'static str, serde_json::Value)> {
     if let Some(effort) = crew.assignment.effort {
         fields.push(("effort", serde_json::json!(effort)));
     }
+    // Names only: each entry is `NAME` or `NAME=SOURCE`, never a value.
+    if !crew.env.is_empty() {
+        fields.push(("env", serde_json::json!(crew.env)));
+    }
     fields
 }
 

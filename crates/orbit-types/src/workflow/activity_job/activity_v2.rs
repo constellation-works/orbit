@@ -170,6 +170,12 @@ pub struct AgentLoopSpec {
     /// grants it. See `crate::workflow::activity_job::trusted_host`.
     #[serde(rename = "trustedHostExecution", default)]
     pub trusted_host_execution: bool,
+    /// The dispatching crew's `[crews.<name>] env` entries, set by crew
+    /// resolution just before dispatch. Never read from an asset or a
+    /// persisted snapshot, so only the executing host's global config can
+    /// supply it.
+    #[serde(skip)]
+    pub crew_env: Vec<crate::identity::CrewEnvVar>,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].

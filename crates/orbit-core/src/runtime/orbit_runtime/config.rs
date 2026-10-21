@@ -97,6 +97,23 @@ impl OrbitRuntime {
             .extend_agent_environment(self.agent_environment(extras))
     }
 
+    /// [`Self::agent_session_environment`] for an agent of a crew with
+    /// `[crews.<name>] env` entries: the crew's names carry their sources'
+    /// values (runtime defaults such as `clock.env` included) and win over
+    /// `pass`, and a crew that sets one Claude credential has the other
+    /// removed. Unset sources leave their names absent.
+    pub fn crew_agent_session_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        extras: &[&str],
+    ) -> Vec<(String, String)> {
+        let base = self
+            .execution_env_policy()
+            .crew_agent_subprocess_env(crew_env, extras);
+        self.validation_environment()
+            .extend_agent_environment(self.validation_env_policy().agent_environment(base))
+    }
+
     /// Why required validation may not find the user's toolchain on this
     /// host, for drain submission and `orbit doctor` [ORB-13987]. `None` when
     /// no required commands are configured or the environment resolved
@@ -120,6 +137,12 @@ impl OrbitRuntime {
     /// The `execution.env.pass` names this workspace's agents may receive.
     pub fn env_pass_names(&self) -> Vec<String> {
         self.execution_env_policy().pass_names().to_vec()
+    }
+
+    /// The names a runtime default such as `clock.env` may supply: the
+    /// `execution.env.pass` names and every crew's `env` sources.
+    pub fn child_env_default_names(&self) -> Vec<String> {
+        self.execution_env_policy().default_names()
     }
 
     /// The warning for [`Self::unset_env_pass_names`], for drain/ship starts

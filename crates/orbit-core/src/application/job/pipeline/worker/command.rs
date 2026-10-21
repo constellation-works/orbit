@@ -409,13 +409,21 @@ impl WorkerCommandConfig {
         )
     }
 
-    /// Admitted runtime credentials and the strict-containment flag.
+    /// Admitted runtime credentials (`pass` names and crew `env` sources) and
+    /// the strict-containment flag.
     ///
     /// An edit already on `command`, including a removal, keeps precedence over
     /// the policy snapshot.
     fn apply_launch_environment(&self, command: &mut Command) {
         if let Some(policy) = &self.environment {
-            for (name, value) in policy.agent_subprocess_env(&[]) {
+            // Crew `env` sources ride along under their own names: the worker
+            // composes each crew's agent environment from its own process
+            // environment, and a scope admits them name-only.
+            for (name, value) in policy
+                .agent_subprocess_env(&[])
+                .into_iter()
+                .chain(policy.crew_source_env())
+            {
                 if !command
                     .get_envs()
                     .any(|(held, _)| held == OsStr::new(&name))

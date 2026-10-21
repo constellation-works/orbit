@@ -536,7 +536,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     };
     if kind.is_some() {
         assert!(
-            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+            run_auth_probe(&host, "claude", &[], &probe, "auth-fixture", &root)
                 .unwrap()
                 .passed,
             "sandbox must deny the protected write while allowing the minimal invocation"
@@ -554,7 +554,7 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     ] {
         probe.args = vec!["plain".into(), response.into(), exit.into()];
         assert_eq!(
-            run_auth_probe(&host, "claude", &probe, "auth-fixture", &root)
+            run_auth_probe(&host, "claude", &[], &probe, "auth-fixture", &root)
                 .unwrap()
                 .passed,
             passed
@@ -599,7 +599,7 @@ fn auth_probe_refused_registration_ends_the_grandchild() {
         relogin_hint: "Run `claude login`.".into(),
     };
 
-    let outcome = run_auth_probe(&host, "claude", &probe, "registration-refusal", &root);
+    let outcome = run_auth_probe(&host, "claude", &[], &probe, "registration-refusal", &root);
     assert!(
         outcome.is_err(),
         "a refused registration must fail the probe"

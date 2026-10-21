@@ -630,9 +630,10 @@ pub(crate) fn run_sweep_at_with_providers_at(
 }
 
 /// Load the `clock.env` values any discovered workspace's effective
-/// `execution.env.pass` lists. A refused or unreadable file is a load error
-/// row, not a failed tick: runs still start, and a Claude activity without its
-/// token then fails fast with an actionable error.
+/// `execution.env.pass` lists or a crew's `env` reads. A refused or
+/// unreadable file is a load error row, not a failed tick: runs still start,
+/// and a Claude activity without its token then fails fast with an
+/// actionable error.
 fn load_clock_env_for(
     global_root: &Path,
     discovered: &mut super::loader::DiscoveredWorkspaces,
@@ -642,7 +643,7 @@ fn load_clock_env_for(
         .entries
         .iter()
         .chain(&discovered.replicas)
-        .flat_map(|(_, runtime)| runtime.env_pass_names())
+        .flat_map(|(_, runtime)| runtime.child_env_default_names())
         .collect();
     let pass: Vec<String> = pass.into_iter().collect();
     match orbit_common::security::operator_env::load_clock_env(global_root, &pass) {

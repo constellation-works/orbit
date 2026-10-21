@@ -1,12 +1,20 @@
 use orbit_engine::CrewConfig;
-use orbit_types::identity::CrewAssignment;
+use orbit_types::identity::{Crew, CrewAssignment};
 use orbit_types::workflow::activity_job::Provider;
 
 /// Convert a crew assignment (string fields) into the typed [`CrewConfig`]
 /// surface used by the engine resolver. An unrecognized `provider` yields
 /// `None` for that field with a warn-log — silently coercing dispatch onto a
 /// different runtime would defeat the point of the override.
-pub(crate) fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewConfig {
+pub(crate) fn typed_crew_config(crew: &Crew) -> CrewConfig {
+    CrewConfig {
+        env: crew.env.clone(),
+        ..typed_crew_config_from_assignment(&crew.assignment)
+    }
+}
+
+/// [`typed_crew_config`] for an assignment with no crew `env` entries.
+fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewConfig {
     let provider = Some(raw.provider.as_str()).and_then(|raw_value| {
         // Canonical string→provider parsing lives on the orbit-common `Provider`
         // surface (ORB-10091); the crew path routes through it so casing/alias
@@ -42,5 +50,6 @@ pub(crate) fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewCon
         provider,
         model,
         reasoning_effort: raw.effort,
+        env: Vec::new(),
     }
 }

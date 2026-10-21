@@ -475,6 +475,21 @@ pub trait NullRuntimeHost: Send + Sync {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }
+    /// This host's own agent environment, overlaid with the crew's entries
+    /// from the process environment.
+    fn crew_agent_subprocess_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        required_env_vars: &[&str],
+    ) -> Vec<(String, String)> {
+        let mut env = NullRuntimeHost::agent_subprocess_environment(self, required_env_vars);
+        orbit_common::security::child_env::apply_crew_env_from(
+            &mut env,
+            &std::env::vars().collect::<Vec<_>>(),
+            crew_env,
+        );
+        env
+    }
     fn requires_claude_worker_credential(&self) -> bool {
         false
     }

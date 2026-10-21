@@ -4,8 +4,9 @@
 //! would otherwise hit without a sign: a host throttle holding its waves
 //! [ORB-13901], a validation environment that may not find the user's
 //! toolchain [ORB-13987], backlog only a host of another OS can start, an
-//! `execution.env.pass` variable the launching environment does not hold
-//! [ORB-14777], or a host that runs no required validation. CLI, MCP and the
+//! `execution.env.pass` variable or `[crews.<name>] env` source the launching
+//! environment does not hold [ORB-14777], or a host that runs no required
+//! validation. CLI, MCP and the
 //! dashboard all render the same [`SubmissionNotices`].
 
 use orbit_types::workflow::ResourceThrottle;
@@ -44,6 +45,9 @@ pub struct SubmissionNotices {
     pub host_os_backlog_warning: Option<String>,
     /// The `execution.env.pass` names this environment does not hold.
     pub unset_env_pass_warning: Option<String>,
+    /// Crews whose `[crews.<name>] env` sources this environment does not
+    /// hold; drains exclude them and their activities are refused.
+    pub unset_crew_env_warning: Option<String>,
     /// Claude crews a drain here excludes for want of a worker credential
     /// [ORB-16663]. Drains only.
     pub claude_worker_credential_warning: Option<String>,
@@ -62,6 +66,7 @@ impl SubmissionNotices {
             .chain(self.validation_env_warning.clone())
             .chain(self.host_os_backlog_warning.clone())
             .chain(self.unset_env_pass_warning.clone())
+            .chain(self.unset_crew_env_warning.clone())
             .chain(self.claude_worker_credential_warning.clone())
             .collect()
     }
@@ -112,6 +117,7 @@ impl OrbitRuntime {
                 .then(|| self.host_os_backlog_warning())
                 .flatten(),
             unset_env_pass_warning: self.unset_env_pass_warning(),
+            unset_crew_env_warning: self.unset_crew_env_warning(),
             claude_worker_credential_warning: kind
                 .is_drain()
                 .then(|| self.claude_worker_credential_warning())

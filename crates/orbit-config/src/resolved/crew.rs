@@ -11,7 +11,9 @@ use orbit_common::model_defaults::{
     MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
+use orbit_types::identity::{
+    Crew, CrewAssignment, CrewEnvVar, ReasoningEffort, validate_antigravity_model,
+};
 use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
@@ -177,6 +179,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
                 description: None,
                 tags: Vec::new(),
                 enabled: true,
+                env: Vec::new(),
             },
         );
     }
@@ -238,6 +241,7 @@ pub(crate) fn crews_from_raw(
             description: normalized_crew_description(entry.description.as_deref()),
             tags: normalized_crew_tags(&entry.tags),
             enabled: entry.enabled.unwrap_or(true),
+            env: crew_env_from_raw(trimmed, entry.env.as_deref())?,
         };
         if crews.insert(trimmed.to_string(), crew).is_some() {
             return Err(OrbitError::InvalidInput(format!(
@@ -246,6 +250,27 @@ pub(crate) fn crews_from_raw(
         }
     }
     Ok((crews, ignored))
+}
+
+/// `[crews.<name>] env`, parsed. An entry that is not `NAME` or
+/// `NAME=SOURCE` over valid, non-`ORBIT_*` variable names, or a second entry
+/// for the same agent variable, fails the load naming the crew and entry: a
+/// credential routing the operator wrote must never be dropped silently.
+fn crew_env_from_raw(crew: &str, raw: Option<&[String]>) -> Result<Vec<CrewEnvVar>, OrbitError> {
+    let mut env: Vec<CrewEnvVar> = Vec::new();
+    for entry in raw.unwrap_or_default() {
+        let parsed = CrewEnvVar::parse(entry.trim()).map_err(|error| {
+            OrbitError::InvalidInput(format!("[crews.{crew}].env entry {error}"))
+        })?;
+        if env.iter().any(|held| held.name == parsed.name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "[crews.{crew}].env sets '{}' more than once",
+                parsed.name
+            )));
+        }
+        env.push(parsed);
+    }
+    Ok(env)
 }
 
 fn normalized_crew_description(raw: Option<&str>) -> Option<String> {

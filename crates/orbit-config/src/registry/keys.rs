@@ -237,9 +237,16 @@ pub(crate) fn is_machine_identity_key(key: &str) -> bool {
     matches!(key, "machine.id" | "machine.name" | "machine.task_prefix")
 }
 
-/// Whether `key` names a setting a workspace `config.toml` may not supply.
+/// Whether `key` names a setting a workspace `config.toml` may not supply:
+/// the `[machine]` table, and each crew's `env` list, which routes host
+/// variables into that crew's agents.
 pub fn is_global_only_key(key: &str) -> bool {
-    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.') || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
+    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
+        || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
+        || matches!(
+            parse_crew_field_key(key),
+            Ok(Some(CrewFieldKey { field: "env", .. }))
+        )
 }
 
 /// Admit a dotted key for a write through `orbit config set`.

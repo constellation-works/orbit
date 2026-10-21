@@ -523,18 +523,21 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// [ORB-14777] Record which pass-listed variables this submitting process
-    /// does not hold, so `run show` and the dashboard explain a worker that
-    /// fell back to another login. Writes nothing when none are unset.
+    /// [ORB-14777] Record which pass-listed variables and crew `env` sources
+    /// this submitting process does not hold, so `run show` and the dashboard
+    /// explain a worker that fell back to another login or a crew that was
+    /// excluded. Writes nothing when none are unset.
     fn record_run_env_pass_unset(&self, run_id: &str) -> Result<(), OrbitError> {
         let unset = self.unset_env_pass_names();
-        if unset.is_empty() {
+        let crew_unset = self.unset_crew_env();
+        if unset.is_empty() && crew_unset.is_empty() {
             return Ok(());
         }
         self.stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 state.env_pass_unset = unset.clone();
+                state.crew_env_unset = crew_unset.clone();
                 Ok(())
             })?;
         Ok(())

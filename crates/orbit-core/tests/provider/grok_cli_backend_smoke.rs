@@ -78,6 +78,7 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
     };
 
     let outcome = dispatch_v2_activity(V2DispatchInput {

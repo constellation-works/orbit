@@ -345,7 +345,8 @@ impl ResolvedConfig {
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
 
         Ok(Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
+            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
+                .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env)),
             codex_execution: CodexExecutionPolicy::from_snapshot(&snapshot),
             persistence,
             pr: PrSettings {
