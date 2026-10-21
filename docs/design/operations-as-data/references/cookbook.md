@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-21
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
@@ -357,11 +357,14 @@ runtime need all come from the spec.
   shows the new binary writing no audit at all. Compare output on the shared
   fixture and audit rows on a fixture each binary built (task reads,
   [ORB-15937]).
-- **Run in-process CLI tests outside a managed run's environment.** A
+- **Run mutable fixtures in an isolated child process.** A
   delivery shell carries the managed-worker variables (`ORBIT_MANAGED_RUN_CONTEXT`,
   `ORBIT_WORKER_CONTEXT_REQUIRED` and the task and run IDs), and tests that
   open a runtime refuse with "managed worker runtime binding unavailable".
-  Unset them for focused local runs.
+  Follow [Safe Mutable CLI Fixtures](../../../DEVELOPMENT.md#safe-mutable-cli-fixtures):
+  clear inherited authority on the child before setting its disposable home
+  and workspace. Core's `run_isolated_test` and the CLI suites' `run_in_child`
+  helpers do this before fixture setup.
 - **Test layout.** Sibling `tests/` mirroring source filenames, per
   [test_layout.md](../../../design-patterns/test_layout.md), not a nested
   `<module>/tests.rs` child.

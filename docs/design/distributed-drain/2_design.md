@@ -1442,8 +1442,9 @@ Acceptance criteria, not reported as passing.
 - **Revocation cannot stop remote compute or retract external writes.** An old attempt may push
   or open an orphan PR; fencing keeps it out of delivery, and GC does not delete remote branches
   or close PRs.
-- **No heterogeneous eligibility.** Every participant must meet the workspace's full execution
-  requirements; auth probes alone cannot establish that a Mac and a Linux host are
+- **Eligibility is declared, not inferred.** Per-executor OS, crew and browser-kit filters
+  support different hosts, but each executor must still meet its admitted task's sandbox and
+  toolchain requirements. Auth probes alone cannot establish that a Mac and a Linux host are
   interchangeable.
 - **Coordination requires the owner.** Task reads, evidence writes, settlement and handoff stall
   during partitions; large tasks hold their slots for as long as they run.
