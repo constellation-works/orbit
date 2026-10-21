@@ -136,7 +136,9 @@ export async function assertClockRepaint(browser, origin, evidence) {
     await page.screenshot({ path: path.join(evidence, 'clock-task-local-dark-1440.png') });
 
     // A comment draft holds the detail verbatim across refreshes; its thread
-    // times still follow the clock, and the draft, caret and focus stay.
+    // times still follow the clock, and the draft, caret and focus stay. Comment
+    // is offered only on the Comments tab, so the draft opens from there.
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
     await detail.locator('.actions .action.comment').click();
     const textarea = detail.locator('.comment-form textarea');
     await textarea.fill('Draft written before the switch');
