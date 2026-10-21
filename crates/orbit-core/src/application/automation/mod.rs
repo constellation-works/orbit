@@ -39,6 +39,8 @@ pub use inspect::{
 };
 pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
 pub use recovery::recover_auto_task;
+#[cfg(feature = "test-support")]
+pub use reset::probe_hook::with_reset_probe_hook;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
 pub(crate) use source_cache::SourceCache;

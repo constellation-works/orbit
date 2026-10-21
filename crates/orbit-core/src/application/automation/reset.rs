@@ -49,12 +49,12 @@ pub fn reset_auto_task(
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
     let store = runtime.automation_store()?;
-    let action_liveness = super::auto_task_action_liveness(
-        runtime,
-        definition,
-        store.automation_state(&consumer)?.as_ref(),
-        now,
-    );
+    let inspected_state = store.automation_state(&consumer)?;
+    let action_liveness =
+        super::auto_task_action_liveness(runtime, definition, inspected_state.as_ref(), now);
+
+    #[cfg(feature = "test-support")]
+    probe_hook::after_probe();
 
     if !request.mutates() {
         return reset::preview(
@@ -69,6 +69,7 @@ pub fn reset_auto_task(
                 now,
                 baseline,
                 released_refs: vec![],
+                inspected_state: inspected_state.as_ref(),
                 action_terminal: action_liveness.terminal,
                 action_failed_without_evidence: action_liveness.failed_without_evidence,
             },
@@ -97,6 +98,7 @@ pub fn reset_auto_task(
             now,
             baseline,
             released_refs: retained.clone(),
+            inspected_state: inspected_state.as_ref(),
             action_terminal: action_liveness.terminal,
             action_failed_without_evidence: action_liveness.failed_without_evidence,
         },
@@ -217,4 +219,35 @@ fn delivery_consumer(
         return Ok(None);
     }
     super::consumer_key(runtime, "auto-task", &definition.name).map(Some)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) mod probe_hook {
+    use std::{cell::RefCell, rc::Rc};
+
+    type Hook = Rc<dyn Fn()>;
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    /// Interleave a consumer transition after reset inspects action liveness.
+    /// Scoped to this thread and restored on return or unwind.
+    pub fn with_reset_probe_hook<T>(hook: impl Fn() + 'static, operation: impl FnOnce() -> T) -> T {
+        let _restore = Restore(HOOK.with(|slot| slot.replace(Some(Rc::new(hook)))));
+        operation()
+    }
+
+    struct Restore(Option<Hook>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOOK.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+
+    pub(super) fn after_probe() {
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }

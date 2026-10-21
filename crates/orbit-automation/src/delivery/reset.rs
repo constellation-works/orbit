@@ -36,6 +36,9 @@ pub struct Reset<'a> {
     /// Pinned `refs/orbit/automation/<consumer-digest>/*` refs the host holds
     /// for the forgotten batches. Recorded by an apply; empty on a preview.
     pub released_refs: Vec<String>,
+    /// Exact consumer snapshot whose action the host inspected.
+    /// A moved snapshot must never inherit liveness or retained-ref facts.
+    pub inspected_state: Option<&'a AutomationState>,
     /// The host proved the admitted action's task or run is terminal.
     pub action_terminal: bool,
     /// The terminal action stopped without acceptable evidence.
@@ -47,7 +50,7 @@ pub fn preview(
     store: &dyn AutomationStoreBackend,
     request: &Reset<'_>,
 ) -> Result<ResetPreview, AutomationError> {
-    let state = recovery::load(store, request.consumer)?;
+    let state = load_inspected(store, request)?;
     project(store, request, &state, false)
 }
 
@@ -58,7 +61,7 @@ pub fn apply(
     store: &dyn AutomationStoreBackend,
     request: &Reset<'_>,
 ) -> Result<ResetPreview, AutomationError> {
-    let state = recovery::load(store, request.consumer)?;
+    let state = load_inspected(store, request)?;
 
     if !request.request.mutates() {
         return project(store, request, &state, false);
@@ -78,6 +81,19 @@ pub fn apply(
     // The state is gone, so the applied document reports the position the reset
     // destroyed rather than re-reading a consumer that no longer exists.
     project(store, request, &state, true)
+}
+
+/// Reject movement before using liveness or inventory from the host's probe.
+/// Store fences movement after this read against this same snapshot.
+fn load_inspected(
+    store: &dyn AutomationStoreBackend,
+    request: &Reset<'_>,
+) -> Result<AutomationState, AutomationError> {
+    let state = recovery::load(store, request.consumer)?;
+    if request.inspected_state != Some(&state) {
+        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+    }
+    Ok(state)
 }
 
 /// The immutable audit of one reset: the identity it destroyed, the debt it
