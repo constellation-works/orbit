@@ -686,8 +686,142 @@ fn a_requeue_without_a_receipt_refuses_an_unbound_pull_request() {
     assert_eq!(answer["status"], "backlog");
 }
 
+/// A plain status update through the public task-update tool, as an
+/// operator or agent would move a blocked task back to backlog.
+fn plain_backlog(f: &Fixture, discard: bool) -> Result<(), orbit_core::OrbitError> {
+    if discard {
+        // The tool host carries `discard_candidate` as a CLI-style option;
+        // the human surface below is the same shared core operation.
+        f.runtime.update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
+                ..Default::default()
+            },
+            "human".into(),
+        )?;
+        return Ok(());
+    }
+    f.runtime.run_tool(
+        "orbit.task.update",
+        json!({"id": f.task, "workspace": f.repo, "status": "backlog", "model": "claude"}),
+    )?;
+    Ok(())
+}
+
+/// A refused plain update leaves the task and its history as they were.
+fn plain_refused(f: &Fixture, case: &str) -> String {
+    let task = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    let error = plain_backlog(f, false)
+        .err()
+        .unwrap_or_else(|| panic!("{case}: unexpectedly returned to backlog"));
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        task,
+        "{case}: task changed"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+        history,
+        "{case}: history written"
+    );
+    assert_eq!(status(f), TaskStatus::Blocked, "{case}: task moved");
+    error.to_string()
+}
+
+/// A plain blocked-to-backlog update authenticates the failure-handoff
+/// publication like a requeue: it returns to backlog with the preservation
+/// recorded, and its next run resumes the same candidate and pull request.
+fn plain_status_update_resumes_the_failure_handoff_candidate() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    assert_eq!(status(&f), TaskStatus::Blocked);
+    plain_backlog(&f, false).unwrap();
+    assert_eq!(status(&f), TaskStatus::Backlog);
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// A plain update a requeue would refuse (specification changed after
+/// publication) is refused with the discard exit and nothing written; a
+/// plain update with the discard option then discards and closes the PR.
+fn plain_status_update_refuses_changed_publication_and_discard_closes_it() {
+    let (mut f, _) = escalated_handoff_fixture(None, None);
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                description: Some("Repair the remaining compiler error and its sibling".into()),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    let error = plain_refused(&f, "changed specification");
+    assert!(
+        error.contains("--discard-candidate"),
+        "the mismatch offers its exit: {error}"
+    );
+    let forge = delivery_forge(&f);
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    plain_backlog(&f, true).unwrap();
+    assert_eq!(status(&f), TaskStatus::Backlog);
+    let closed = forge.closed.lock().unwrap().clone();
+    assert_eq!(
+        closed.iter().map(|(number, _)| *number).collect::<Vec<_>>(),
+        [17],
+        "the discarded candidate's [BLOCKED] pull request is closed"
+    );
+    let (run, setup) = next(&f);
+    let resumed = f.action(
+        "candidate_resume",
+        json!({"job_run_id":run.run_id,"task_ids":[f.task],
+        "workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),
+    );
+    assert_eq!(
+        resumed["implement"], true,
+        "the rerun implements fresh: {resumed}"
+    );
+}
+
+/// A plain update with an unbound pull request on record is refused like a
+/// requeue, and the candidate-resume refusal names the publishing run and
+/// its discard route instead of a stopped successor.
+fn plain_status_update_refuses_an_unbound_pull_request() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    let error = plain_refused(&f, "unbound pull request");
+    assert!(error.contains("--discard-candidate"), "{error}");
+    let resume_error = f
+        .runtime
+        .owner_published_candidate(&f.task, Some(&f.source.run_id))
+        .expect_err("an unbound publication refuses candidate resume")
+        .to_string();
+    assert!(
+        resume_error.contains(&f.source.run_id),
+        "the refusal names the publishing run: {resume_error}"
+    );
+    assert!(
+        resume_error.contains("discard"),
+        "the refusal names its next step: {resume_error}"
+    );
+    assert!(
+        !resume_error.contains("stopped successor"),
+        "no successor is pointed at: {resume_error}"
+    );
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
+    plain_status_update_resumes_the_failure_handoff_candidate,
+    plain_status_update_refuses_changed_publication_and_discard_closes_it,
+    plain_status_update_refuses_an_unbound_pull_request,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
     requeue_keeps_the_published_owner_refusals,
     changed_or_discarded_candidates_are_refused_with_a_discard_exit,

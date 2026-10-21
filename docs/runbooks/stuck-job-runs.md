@@ -618,9 +618,19 @@ orbit task requeue <task-id> --reason '<why this candidate can continue>'
 
 The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
 `discard_candidate`; it needs operator authority and is unavailable inside a
-managed run. Do not move such a task with a plain `orbit task update --status
-backlog`: its next run finds a publication it cannot authenticate and refuses
-to start.
+managed run. Every return from `blocked` to `backlog` is authenticated the
+same way: a plain `orbit task update --status backlog` (and the same move
+through MCP, HTTP or the dashboard) applies the requeue publication
+pre-flight in the shared core operation before writing. A publication a
+requeue would refuse (a specification changed after publication, or a pull
+request or preserved candidate no handoff receipt binds) refuses the plain
+update with the same message and discard/explicit-source-repair guidance,
+and the task stays `blocked` with nothing written. A publication a requeue
+would accept is returned to `backlog` with the same `requeued` decision and
+publication-preservation record a requeue writes, so its next run resumes
+it; with no publication on record the task simply returns to `backlog`. A
+plain update with `--discard-candidate` still discards the candidate and
+closes the task's undelivered Orbit pull requests.
 
 The requeue waits for the task's run to stop. Final recovery blocks the task
 before the run's failure handoff publishes, so while the run is live the

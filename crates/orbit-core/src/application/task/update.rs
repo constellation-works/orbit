@@ -7,9 +7,10 @@ use orbit_types::identity::{
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, LIGHT_DELIVERY_TAGS, Task, TaskArtifact,
-    TaskHistoryEntry, TaskStatus, canonical_artifact_path, is_system_identity_tag,
-    is_valid_orb_task_id, normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, LIGHT_DELIVERY_TAGS,
+    RecordedFinalRecovery, Task, TaskArtifact, TaskDecision, TaskHistoryEntry, TaskStatus,
+    canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
@@ -539,6 +540,55 @@ impl OrbitRuntime {
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
         params = validated.params;
+        // A plain blocked-to-backlog move on an attributed surface applies
+        // the same publication authentication as `orbit task requeue`:
+        // refuse before writing what the next run would refuse, and record
+        // the preservation a requeue would record for what it accepts.
+        // Internal machinery and a discard keep their own contracts.
+        let backlog_preservation = if requested_status == Some(TaskStatus::Backlog)
+            && task.status == TaskStatus::Blocked
+            && matches!(
+                status_authority,
+                StatusAuthority::Lifecycle | StatusAuthority::Forced
+            )
+            && !system_writer
+            && !params.discard_candidate
+        {
+            let mut preview = task.clone();
+            if let Some(title) = &params.title {
+                preview.title = title.clone();
+            }
+            if let Some(description) = &params.description {
+                preview.description = description.clone();
+            }
+            if let Some(criteria) = &params.acceptance_criteria {
+                preview.acceptance_criteria = criteria.clone();
+            }
+            if let Some(plan) = &params.plan {
+                preview.plan = plan.clone();
+            }
+            if let Some(context_files) = &params.context_files {
+                preview.context_files = context_files.clone();
+            }
+            if let Some(tags) = &params.tags {
+                preview.tags = tags.clone();
+            }
+            if let Some(relations) = &params.relations {
+                preview.relations = relations.clone();
+            }
+            if let Some(task_type) = params.task_type {
+                preview.task_type = task_type;
+            }
+            if let Some(crew) = &params.crew {
+                preview.crew = crew.clone();
+            }
+            if let Some(complexity) = params.complexity {
+                preview.complexity = Some(complexity);
+            }
+            self.authenticate_blocked_to_backlog(&preview)?
+        } else {
+            None
+        };
 
         let actor = self.actor().clone();
         let attribution = assemble_task_attribution(
@@ -589,6 +639,29 @@ impl OrbitRuntime {
             None
         };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(preserved) = backlog_preservation {
+            // The `requeued` decision is written only with its preservation
+            // record, exactly as `write_candidate_requeue` writes it.
+            if let Some(run_id) = task.job_run_id.clone() {
+                append_history.push(TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: SYSTEM_ACTOR_LABEL.to_string(),
+                    event: FINAL_RECOVERY_DECIDED_EVENT.to_string(),
+                    note: Some(format!(
+                        "operator_requeue (run_id={run_id}): outcome=requeued"
+                    )),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::FinalRecovery {
+                        run_id,
+                        decision: "operator_requeue".to_string(),
+                        outcome: RecordedFinalRecovery::Requeued,
+                    }),
+                });
+            }
+            append_history.push(preserved);
+        }
         if operator_write
             && let Some(resolution) =
                 self.pilot_hold_resolution(&task, &params, &effective_label)?

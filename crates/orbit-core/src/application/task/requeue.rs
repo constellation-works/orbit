@@ -632,6 +632,35 @@ impl OrbitRuntime {
             .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
     }
 
+    /// Authenticate a plain blocked-to-backlog status update without a
+    /// discard, exactly as an operator requeue does. Returns the
+    /// publication-preservation record to append with the status change
+    /// (`None` when the same record is already on file or nothing was
+    /// published). A refusal leaves the task blocked with nothing written.
+    pub(crate) fn authenticate_blocked_to_backlog(
+        &self,
+        task: &Task,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        // No bound publishing run: there is no publication this move could
+        // resume or strand (a bare pull-request record on a task that was
+        // blocked by hand is the PR-closure path's concern, not a stopped
+        // run's candidate).
+        if task.job_run_id.is_none() {
+            self.kept_claim_requeue(task)?;
+            return Ok(None);
+        }
+        let receipt = self.handoff_receipt(task)?;
+        if let Some((preserved, _binding)) =
+            self.authenticate_operator_requeue(task, receipt.as_ref())?
+        {
+            return Ok(preserved);
+        }
+        // A kept claim candidate the specification has outgrown is refused
+        // the same way, as a requeue refuses it.
+        self.kept_claim_requeue(task)?;
+        Ok(None)
+    }
+
     /// Authenticate what an operator requeue without a discard resumes: the
     /// failure handoff's publication when there is one, else nothing, refusing
     /// exactly what the next admission would refuse. The preservation record

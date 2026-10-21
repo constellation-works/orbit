@@ -83,6 +83,19 @@ know why it failed and that a rerun can succeed. A sandbox denial or provider
 failure is not inherently transient; repeated identical failures need a repair
 or configuration correction before another attempt.
 
+Every return from `blocked` to `backlog` is authenticated the same way.
+`orbit task requeue`, a plain `orbit task update --status backlog`, and the
+same move through MCP, HTTP or the dashboard all apply the same publication
+pre-flight in the shared core operation before writing: a task whose
+specification changed after its run published a pull request, or with a pull
+request or preserved candidate no handoff receipt binds, is refused with the
+same discard/explicit-source-repair guidance and stays `blocked` with
+nothing written. An authenticated failure-handoff publication (or no
+publication on record) returns to `backlog` — with the requeue's
+preservation recorded when there is one to resume — and an update with
+`--discard-candidate` still discards the candidate and closes its pull
+requests so the next run implements fresh.
+
 When a run stops on a rebase conflict, final recovery can repair the conflict
 files and resume. The next conflict recovery adopts those repairs and continues
 the stopped rebase, so don't abort it or stage files by hand. Adoption still
