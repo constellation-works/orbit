@@ -252,8 +252,6 @@
         "application/routines/clock/tests/install.rs::systemd_install_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger",
         "application/routines/clock/tests/manager.rs::hanging_manager_probe_times_out_naming_the_command",
         "application/routines/clock/tests/manager.rs::missing_manager_program_names_the_command",
-        "application/routines/clock/tests/settings.rs::cadence_change_keeps_a_paused_clock_paused",
-        "application/routines/clock/tests/settings.rs::cadence_change_on_a_running_clock_activates_or_restores_the_setting",
         "application/routines/clock/tests/status.rs::active_timer_does_not_hide_an_overdue_tick_or_a_failed_tick",
         "application/routines/clock/tests/status.rs::active_timer_with_infinite_next_elapse_waits_for_the_service_tick",
         "application/routines/clock/tests/status.rs::launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log",
