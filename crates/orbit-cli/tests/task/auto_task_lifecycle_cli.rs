@@ -316,6 +316,101 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
+fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
+    use chrono::Utc;
+    use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
+
+    let fixture = Fixture::new();
+    git(
+        &fixture,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fixture/origin.git",
+        ],
+    );
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let original = store.automation_state(&consumer).unwrap().unwrap();
+
+    // The local branch remains available, but origin no longer serves it.
+    move_origin_head_off_branch(&fixture);
+    git(
+        &fixture,
+        &["push", "-q", "origin", "--delete", "fixture-delivery"],
+    );
+    assert_eq!(
+        git(&fixture, &["rev-parse", "refs/heads/fixture-delivery"]),
+        original.observed.commit
+    );
+
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
+    assert_eq!(preview["applied"], false);
+    assert_eq!(store.automation_state(&consumer).unwrap(), Some(original));
+
+    let reset = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--reason",
+            "Reset after origin branch deletion",
+            "--json",
+        ],
+    );
+    assert_eq!(reset["applied"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .automation_recoveries(&consumer, 10)
+            .unwrap()
+            .iter()
+            .any(|record| record.reason == "Reset after origin branch deletion")
+    );
+
+    // Recreate the origin branch to establish a fresh consumer, then remove
+    // it again so forced deletion exercises teardown under the same failure.
+    publish_origin_if_configured(&fixture);
+    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    move_origin_head_off_branch(&fixture);
+    git(
+        &fixture,
+        &["push", "-q", "origin", "--delete", "fixture-delivery"],
+    );
+    let removed = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "delete",
+            &definition.name,
+            "--reason",
+            "Delete after origin branch deletion",
+            "--force",
+            "--json",
+        ],
+    );
+    assert_eq!(removed["consumer"]["reset"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .automation_recoveries(&consumer, 10)
+            .unwrap()
+            .iter()
+            .any(|record| record.reason == "Delete after origin branch deletion")
+    );
+    fixture
+        .command(&["auto-task", "show", &definition.name, "--json"])
+        .assert()
+        .failure();
+}
+
 fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
     use orbit_common::security::release::sha256_hex;
     use orbit_core::application::auto_tasks::{
@@ -746,6 +841,27 @@ pub(crate) fn publish_origin_if_configured(fixture: &Fixture) {
     git(
         fixture,
         &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
+}
+
+/// Keep the bare origin's HEAD on a different branch so it permits deletion
+/// of the watched branch in lifecycle fixtures.
+fn move_origin_head_off_branch(fixture: &Fixture) {
+    let bare = fixture.repo.with_file_name("origin.git");
+    let bare_path = bare.display().to_string();
+    git(
+        fixture,
+        &["push", "-q", "origin", "HEAD:refs/heads/fixture-keep"],
+    );
+    git(
+        fixture,
+        &[
+            "--git-dir",
+            &bare_path,
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/fixture-keep",
+        ],
     );
 }
 
@@ -1378,6 +1494,11 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
 
 #[test]
 fn auto_task_lifecycle_and_recovery() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::auto_task_lifecycle_and_recovery",
+    ) {
+        return;
+    }
     for (name, check) in [
         (
             "auto_task_cli_update_preserves_explicit_empty_text_arguments",
@@ -1390,6 +1511,10 @@ fn auto_task_lifecycle_and_recovery() {
         (
             "auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes",
             auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes as fn(),
+        ),
+        (
+            "auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing",
+            auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing as fn(),
         ),
         (
             "auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor",
