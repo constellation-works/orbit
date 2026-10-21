@@ -5,12 +5,40 @@ use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
 use orbit_core::application::routines::{
-    OwnerOnlyRoutine, RetiredRoutine, RoutineStatusReport, recent_fires,
+    FireField, OwnerOnlyRoutine, RetiredRoutine, RoutineField, RoutineStatusReport, project_fire,
+    recent_fires,
 };
 use orbit_types::workflow::automation::members::BatchMember;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 const RECENT_FIRE_LIMIT: usize = 10;
+
+const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
+    ("name", RoutineField::Name),
+    ("description", RoutineField::Description),
+    ("source", RoutineField::Source),
+    ("origin", RoutineField::Origin),
+    ("path", RoutineField::Path),
+    ("enabled", RoutineField::Enabled),
+    ("paused_at", RoutineField::PausedAt),
+    ("effective", RoutineField::Effective),
+    ("cron", RoutineField::Cron),
+    ("trigger", RoutineField::Trigger),
+    ("automation", RoutineField::Automation),
+    ("missed_run", RoutineField::MissedRun),
+    ("target", RoutineField::Target),
+    ("policy", RoutineField::Policy),
+    ("next_due", RoutineField::NextDue),
+];
+
+const FIRE_COLUMNS: &[(&str, FireField)] = &[
+    ("slot", FireField::Slot),
+    ("attempt", FireField::Attempt),
+    ("state", FireField::State),
+    ("run_id", FireField::RunId),
+    ("detail", FireField::Detail),
+    ("updated_at", FireField::UpdatedAt),
+];
 
 #[derive(Args)]
 pub struct RoutineShowArgs {
@@ -51,33 +79,22 @@ impl RoutineShowArgs {
         let fires = recent_fires(global_root, &self.name, RECENT_FIRE_LIMIT)?;
         let definition = &status.routine.definition;
 
-        let doc = json!({
-            "machine_name": report.machine_name,
-            "machine_id": report.machine_id,
-            "name": definition.name,
-            "description": definition.description,
-            "source": status.routine.source_workspace,
-            "origin": status.routine.origin.as_str(),
-            "path": status.routine.path.display().to_string(),
-            "enabled": definition.enabled,
-            "paused_at": status.paused_at,
-            "effective": status.effective(),
-            "cron": definition.trigger.cron,
-            "trigger": definition.trigger,
-            "automation": status.automation,
-            "missed_run": definition.trigger.missed_run,
-            "target": definition.target.as_ref_string(),
-            "policy": definition.policy,
-            "next_due": status.next_due,
-            "recent_fires": fires.iter().map(|fire| json!({
-                "slot": fire.slot,
-                "attempt": fire.attempt,
-                "state": fire.state.as_str(),
-                "run_id": fire.run_id,
-                "detail": fire.detail,
-                "updated_at": fire.updated_at,
-            })).collect::<Vec<_>>(),
-        });
+        let mut doc = Map::new();
+        doc.insert("machine_name".into(), json!(report.machine_name));
+        doc.insert("machine_id".into(), json!(report.machine_id));
+        doc.extend(status.project(ROUTINE_COLUMNS));
+        // The fire store's attempts, retries included, rather than the
+        // status's distinct fires.
+        doc.insert(
+            "recent_fires".into(),
+            json!(
+                fires
+                    .iter()
+                    .map(|fire| project_fire(fire, FIRE_COLUMNS))
+                    .collect::<Vec<_>>()
+            ),
+        );
+        let doc = Value::Object(doc);
 
         use std::fmt::Write as _;
         let mut out = String::new();

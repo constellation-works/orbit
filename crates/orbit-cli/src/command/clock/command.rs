@@ -2,8 +2,8 @@ use std::path::Path;
 
 use clap::{Args, Subcommand};
 use orbit_core::application::routines::{
-    ClockStatus, ClockUnitInspection, ClockUnitVerdict, clock_status, inspect_clock_unit,
-    set_clock_cadence, set_clock_enabled,
+    ClockHealth, ClockStatus, ClockUnitInspection, ClockUnitVerdict, clock_status,
+    inspect_clock_unit, set_clock_cadence, set_clock_enabled,
 };
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
@@ -123,7 +123,10 @@ impl ClockCommand {
 /// `orbit clock status` as a detail payload: one JSON object under
 /// `--format json`/`ndjson`, the one-line summary (plus a health line when
 /// the clock is unhealthy) on a terminal.
-fn clock_status_payload(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -> Payload {
+pub(super) fn clock_status_payload(
+    status: &ClockStatus,
+    unit: Option<&ClockUnitInspection>,
+) -> Payload {
     Payload::detail(
         clock_status_doc(status, unit),
         clock_status_text(status, unit),
@@ -169,15 +172,16 @@ fn clock_status_text(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -
     text
 }
 
+/// The `state` token: any reported issue, a running paused timer or an enabled
+/// clock without a future trigger is `unhealthy`.
 fn clock_state(status: &ClockStatus) -> &'static str {
-    if status.health_issue.is_some() || (status.running == Some(true) && !status.enabled) {
-        "unhealthy"
-    } else if !status.enabled {
-        "paused"
-    } else if status.schedulable {
-        "enabled"
-    } else {
-        "unhealthy"
+    match status.health() {
+        ClockHealth::Healthy => "enabled",
+        ClockHealth::Paused => "paused",
+        ClockHealth::ScheduledWithIssue
+        | ClockHealth::Missed
+        | ClockHealth::PausedWithIssue
+        | ClockHealth::RunningWhilePaused => "unhealthy",
     }
 }
 

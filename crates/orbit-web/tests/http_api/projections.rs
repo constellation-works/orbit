@@ -498,7 +498,8 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
 
 /// [ORB-14173] On a replica the dashboard lists the worktree GC routine as
 /// toggleable and the owner's work apart with the owner named; toggling the
-/// owner's routine is refused without a write.
+/// owner's routine is refused without a write, as is every other refused
+/// selection, each under its own error code.
 #[test]
 fn replica_routines_project_only_worktree_gc_as_toggleable() {
     isolated(
@@ -528,19 +529,53 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             let scheduled = report["routines"].as_array().unwrap();
             assert_eq!(scheduled.len(), 1, "{report}");
             assert_eq!(scheduled[0]["name"], "replica-gc", "{report}");
+            assert_eq!(scheduled[0]["origin"], "workspace", "{report}");
             let owner_only = report["owner_only"].as_array().unwrap();
             assert_eq!(owner_only.len(), 1, "{report}");
             assert_eq!(owner_only[0]["name"], "replica-ship");
             assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
+            assert_eq!(
+                fs::canonicalize(owner_only[0]["path"].as_str().unwrap()).unwrap(),
+                fs::canonicalize(&ship_path).unwrap(),
+                "{report}"
+            );
 
-            let toggle = |name: &str, target: &str| {
+            let toggle_from = |name: &str, source: &str, target: &str, expected: bool| {
                 server.send(
                     "POST",
                     "/api/routines/toggle?workspace=ws_http_fixture",
-                    json!({"name":name,"source":"fixture","target":target,
-                        "machine_name":"http-fixture","expected_enabled":false,"enabled":true}),
+                    json!({"name":name,"source":source,"target":target,
+                        "machine_name":"http-fixture","expected_enabled":expected,"enabled":true}),
                 )
             };
+            let toggle = |name: &str, target: &str| toggle_from(name, "fixture", target, false);
+            let gc_path = routines.join("replica-gc.yaml");
+            let gc_before = fs::read(&gc_path).unwrap();
+            for (response, status, code) in [
+                (
+                    toggle("missing", "job:worktree_gc_pipeline"),
+                    404,
+                    "routine_not_found",
+                ),
+                (
+                    toggle_from("replica-gc", "elsewhere", "job:worktree_gc_pipeline", false),
+                    409,
+                    "workspace_mismatch",
+                ),
+                (
+                    toggle("replica-gc", "job:workspace_ship_pipeline"),
+                    409,
+                    "target_mismatch",
+                ),
+                (
+                    toggle_from("replica-gc", "fixture", "job:worktree_gc_pipeline", true),
+                    409,
+                    "stale_routine_state",
+                ),
+            ] {
+                error_code(response, status, code);
+                assert_eq!(fs::read(&gc_path).unwrap(), gc_before, "{code} wrote");
+            }
             let refused = error_code(
                 toggle("replica-ship", "job:workspace_ship_pipeline"),
                 409,
@@ -556,7 +591,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
             assert_eq!(enabled["changed"], true, "{enabled}");
             assert!(
-                fs::read_to_string(routines.join("replica-gc.yaml"))
+                fs::read_to_string(&gc_path)
                     .unwrap()
                     .contains("enabled: true")
             );

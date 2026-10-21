@@ -1,7 +1,8 @@
 //! Read-only status projection for `orbit routine list` / `show` [ORB-10021]:
 //! every routine with both toggle layers (versioned `enabled` and host-local
 //! pause), the computed next-due slot, and the last recorded fire — so "why
-//! didn't this fire?" is one command.
+//! didn't this fire?" is one command. The row, fire and report projections
+//! and the toggle selection here serve the CLI, dashboard and MCP alike.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -13,6 +14,7 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::{JobRunQuery, RoutineFireRecord, RoutineFireState};
 use orbit_types::workflow::{JobRun, JobRunState, RoutineTarget};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use serde_json::{Map, Value, json};
 
 use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
@@ -73,6 +75,16 @@ impl ScheduleDisplayState {
     pub fn is_hypothetical(self) -> bool {
         matches!(self, Self::Disabled | Self::Paused)
     }
+
+    /// The `{state, at, hypothetical}` next-evaluation record. A waiting
+    /// trigger has no slot to show.
+    pub fn next_evaluation(self, at: Option<String>) -> Value {
+        json!({
+            "state": self.as_str(),
+            "at": if self == Self::Waiting { None } else { at },
+            "hypothetical": self.is_hypothetical(),
+        })
+    }
 }
 
 /// Full effective state of one routine on this host.
@@ -130,6 +142,153 @@ impl RoutineStatus {
         }
         ScheduleDisplayState::Unavailable
     }
+
+    /// This status as the `(key, field)` columns a surface renders, in order.
+    pub fn project(&self, columns: &[(&str, RoutineField)]) -> Map<String, Value> {
+        columns
+            .iter()
+            .map(|(key, field)| ((*key).to_string(), self.field(*field)))
+            .collect()
+    }
+
+    fn field(&self, field: RoutineField) -> Value {
+        let routine = &self.routine;
+        let definition = &routine.definition;
+        match field {
+            RoutineField::Name => json!(definition.name),
+            RoutineField::Description => json!(definition.description),
+            RoutineField::Source => json!(routine.source_workspace),
+            RoutineField::Origin => json!(routine.origin.as_str()),
+            RoutineField::Path => json!(routine.path.display().to_string()),
+            RoutineField::Target => json!(definition.target.as_ref_string()),
+            RoutineField::Enabled => json!(definition.enabled),
+            RoutineField::PausedAt => json!(self.paused_at),
+            RoutineField::Effective => json!(self.effective()),
+            RoutineField::Cron => json!(definition.trigger.cron),
+            RoutineField::Trigger => json!(definition.trigger),
+            RoutineField::MissedRun => json!(definition.trigger.missed_run),
+            RoutineField::Policy => json!(definition.policy),
+            RoutineField::Automation => json!(self.automation),
+            RoutineField::FirstObservedAt => json!(self.first_observed_at),
+            RoutineField::LastEvaluatedSlot => json!(self.last_evaluated_slot),
+            RoutineField::NextDue => json!(self.next_due),
+            RoutineField::NextEvaluation => self
+                .schedule_display_state()
+                .next_evaluation(self.next_due.clone()),
+            RoutineField::State => json!(self.schedule_display_state().as_str()),
+            RoutineField::LastFire(columns) => json!(
+                self.last_fire
+                    .as_ref()
+                    .map(|fire| project_fire(fire, columns))
+            ),
+            RoutineField::RecentFires(columns) => json!(
+                self.recent_fires
+                    .iter()
+                    .map(|fire| project_fire(fire, columns))
+                    .collect::<Vec<_>>()
+            ),
+            RoutineField::FailureStreak => json!({
+                "count": self.failure_streak.count,
+                "since": self.failure_streak.since,
+                "truncated": self.failure_streak.truncated,
+            }),
+        }
+    }
+}
+
+/// One field of the shared routine status projection ([`RoutineStatus::project`]).
+/// Each surface pairs a field with the key it renders it under.
+#[derive(Debug, Clone, Copy)]
+pub enum RoutineField {
+    Name,
+    Description,
+    /// Source workspace name.
+    Source,
+    Origin,
+    /// Definition file path.
+    Path,
+    Target,
+    /// Versioned definition `enabled`.
+    Enabled,
+    PausedAt,
+    /// Enabled and not paused.
+    Effective,
+    Cron,
+    /// The whole trigger definition.
+    Trigger,
+    MissedRun,
+    Policy,
+    /// Raw automation diagnostic of a state- or delivery-triggered routine.
+    Automation,
+    FirstObservedAt,
+    LastEvaluatedSlot,
+    NextDue,
+    /// [`ScheduleDisplayState::next_evaluation`] over the next slot.
+    NextEvaluation,
+    /// [`ScheduleDisplayState`] token.
+    State,
+    /// The last fire, projected with these columns.
+    LastFire(&'static [(&'static str, FireField)]),
+    /// Recent distinct fires, newest first, projected with these columns.
+    RecentFires(&'static [(&'static str, FireField)]),
+    /// `{count, since, truncated}` of the latest consecutive failures.
+    FailureStreak,
+}
+
+/// One field of the shared fire projection ([`project_fire`]).
+#[derive(Debug, Clone, Copy)]
+pub enum FireField {
+    Slot,
+    Attempt,
+    State,
+    /// Coarse outcome: true on success, false on failure, null otherwise.
+    Ok,
+    RunId,
+    Detail,
+    /// When the attempt was recorded.
+    StartedAt,
+    /// Last update of a terminal attempt; null while it is in flight.
+    FinishedAt,
+    /// Wall-clock duration of a terminal attempt.
+    DurationMs,
+    UpdatedAt,
+}
+
+/// One fire attempt as the `(key, field)` columns a surface renders, in order.
+pub fn project_fire(fire: &RoutineFireRecord, columns: &[(&str, FireField)]) -> Value {
+    let terminal = fire.state.is_terminal();
+    let field = |field: FireField| match field {
+        FireField::Slot => json!(fire.slot),
+        FireField::Attempt => json!(fire.attempt),
+        FireField::State => json!(fire.state.as_str()),
+        FireField::Ok => json!(match fire.state {
+            RoutineFireState::Succeeded => Some(true),
+            RoutineFireState::Failed | RoutineFireState::TimedOut | RoutineFireState::Error => {
+                Some(false)
+            }
+            RoutineFireState::Skipped | RoutineFireState::Intent | RoutineFireState::Dispatched => {
+                None
+            }
+        }),
+        FireField::RunId => json!(fire.run_id),
+        FireField::Detail => json!(fire.detail),
+        FireField::StartedAt => json!(fire.created_at),
+        FireField::FinishedAt => json!(terminal.then(|| fire.updated_at.clone())),
+        FireField::DurationMs => json!(terminal.then(|| fire_duration_ms(fire)).flatten()),
+        FireField::UpdatedAt => json!(fire.updated_at),
+    };
+    Value::Object(
+        columns
+            .iter()
+            .map(|(key, column)| ((*key).to_string(), field(*column)))
+            .collect(),
+    )
+}
+
+fn fire_duration_ms(fire: &RoutineFireRecord) -> Option<i64> {
+    let start = DateTime::parse_from_rfc3339(&fire.created_at).ok()?;
+    let end = DateTime::parse_from_rfc3339(&fire.updated_at).ok()?;
+    Some((end - start).num_milliseconds())
 }
 
 fn automation_unavailable(automation: Option<&serde_json::Value>) -> bool {
@@ -174,6 +333,56 @@ impl RoutineStatusReport {
     /// The plugin-parked definitions a default listing hides.
     pub fn inactive_plugin_routines(&self) -> impl Iterator<Item = &RetiredRoutine> {
         self.retired.iter().filter(|routine| routine.skipped)
+    }
+
+    /// The `retired` rows of a routine listing ([`Self::listed_retired`]).
+    pub fn retired_rows(&self, include_inactive_plugins: bool) -> Vec<Value> {
+        self.listed_retired(include_inactive_plugins)
+            .map(|routine| {
+                json!({
+                    "name": routine.name,
+                    "source": routine.source_workspace,
+                    "origin": routine.origin.as_str(),
+                    "path": routine.path.display().to_string(),
+                    "target": format!("job:{}", routine.job),
+                    "reason": routine.reason,
+                    "plugin_inactive": routine.skipped,
+                })
+            })
+            .collect()
+    }
+
+    /// The `owner_only` rows of a routine listing.
+    pub fn owner_only_rows(&self) -> Vec<Value> {
+        self.owner_only
+            .iter()
+            .map(|owned| {
+                json!({
+                    "name": owned.routine.definition.name,
+                    "source": owned.routine.source_workspace,
+                    "origin": owned.routine.origin.as_str(),
+                    "path": owned.routine.path.display().to_string(),
+                    "target": owned.routine.definition.target.as_ref_string(),
+                    "enabled": owned.routine.definition.enabled,
+                    "owner_machine": owned.owner_machine,
+                    "reason": owned.reason,
+                })
+            })
+            .collect()
+    }
+
+    /// The `load_errors` rows of a routine listing.
+    pub fn load_error_rows(&self) -> Vec<Value> {
+        self.load_errors
+            .iter()
+            .map(|error| {
+                json!({
+                    "source_workspace": error.source_workspace,
+                    "path": error.path.as_ref().map(|path| path.display().to_string()),
+                    "message": error.message,
+                })
+            })
+            .collect()
     }
 }
 
@@ -453,24 +662,85 @@ pub(crate) fn toggle_checkout_routine(
         runtime.ensure_coordination_task_write_permitted()?;
     }
     let report = checkout_routine_statuses(runtime)?;
+    match toggle_listed_routine(&report, name, None, target, expected_enabled, enabled)? {
+        Ok(outcome) => Ok(outcome),
+        Err(RoutineToggleRefusal::OwnerAuthority { reason, .. }) => {
+            Err(OrbitError::CapabilityRefused(reason))
+        }
+        Err(RoutineToggleRefusal::NotFound | RoutineToggleRefusal::WorkspaceMismatch { .. }) => {
+            Err(OrbitError::InvalidInput(
+                "routine unavailable in this workspace".into(),
+            ))
+        }
+    }
+}
+
+/// Why a toggle selection was refused before any definition was read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoutineToggleRefusal {
+    /// A replica lists the routine, but only its owner may change it.
+    OwnerAuthority {
+        /// Operator-facing explanation naming the owner.
+        reason: String,
+        /// The machine that owns the workspace's coordination store.
+        owner_machine: String,
+    },
+    /// The report lists no schedulable routine of that name.
+    NotFound,
+    /// The routine comes from another source workspace than the caller's.
+    WorkspaceMismatch {
+        /// The routine's actual source workspace name.
+        source_workspace: String,
+    },
+}
+
+/// Select routine `name` from `report` and toggle its versioned `enabled`.
+///
+/// The one selection every toggle surface runs: an owner-only definition is
+/// refused with the owner named, an unlisted name is not found, `source`
+/// (workspace name and `.orbit` directory, when the report spans more than
+/// the caller's checkout) must match the routine's, and the caller's
+/// `target` must still be the definition's before [`set_routine_enabled`]
+/// writes. The outer error is a failed write.
+pub fn toggle_listed_routine(
+    report: &RoutineStatusReport,
+    name: &str,
+    source: Option<(&str, &Path)>,
+    target: &str,
+    expected_enabled: bool,
+    enabled: bool,
+) -> Result<Result<RoutineToggleOutcome, RoutineToggleRefusal>, OrbitError> {
     if let Some(owned) = report
         .owner_only
         .iter()
         .find(|owned| owned.routine.definition.name == name)
     {
-        return Err(OrbitError::CapabilityRefused(owned.reason.clone()));
+        return Ok(Err(RoutineToggleRefusal::OwnerAuthority {
+            reason: owned.reason.clone(),
+            owner_machine: owned.owner_machine.clone(),
+        }));
     }
-    let status = report
+    let Some(status) = report
         .statuses
         .iter()
         .find(|status| status.routine.definition.name == name)
-        .ok_or_else(|| OrbitError::InvalidInput("routine unavailable in this workspace".into()))?;
-    if status.routine.definition.target.as_ref_string() != target {
-        return Ok(RoutineToggleOutcome::TargetConflict {
-            actual_target: status.routine.definition.target.clone(),
-        });
+    else {
+        return Ok(Err(RoutineToggleRefusal::NotFound));
+    };
+    let routine = &status.routine;
+    if source.is_some_and(|(workspace, orbit_dir)| {
+        routine.source_workspace != workspace || routine.source_orbit_dir != orbit_dir
+    }) {
+        return Ok(Err(RoutineToggleRefusal::WorkspaceMismatch {
+            source_workspace: routine.source_workspace.clone(),
+        }));
     }
-    set_routine_enabled(&status.routine, expected_enabled, enabled)
+    if routine.definition.target.as_ref_string() != target {
+        return Ok(Ok(RoutineToggleOutcome::TargetConflict {
+            actual_target: routine.definition.target.clone(),
+        }));
+    }
+    set_routine_enabled(routine, expected_enabled, enabled).map(Ok)
 }
 
 /// The routine's next scheduled occurrence, rendered host-local.

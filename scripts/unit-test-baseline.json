@@ -14,6 +14,7 @@
     },
     "orbit-cli": {
       "test_function_paths": [
+        "command/clock/tests/command.rs::clock_status_state_token_for_each_status_combination",
         "command/clock/tests/tick.rs::deadline_failure_returns_nonzero_with_deferred_workspaces_in_both_views",
         "command/init/tests/linux_host.rs::an_installed_binary_that_differs_from_the_signed_digest_is_removed",
         "command/init/tests/linux_host.rs::an_old_host_bwrap_gets_the_bundled_one_and_its_failures_stop_before_sudo",
@@ -541,6 +542,7 @@
     },
     "orbit-web": {
       "test_function_paths": [
+        "api/tests/handlers.rs::routine_health_clock_token_for_each_status_combination",
         "api/tests/handlers.rs::successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown",
         "api/tests/log.rs::over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline",
         "api/tests/workspaces.rs::stale_build_during_rebind_never_republishes_as_current",

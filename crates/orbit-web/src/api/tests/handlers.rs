@@ -109,3 +109,62 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
     assert_eq!(clock_audits[0].status, AuditEventStatus::Success);
     assert_eq!(clock_audits[0].error_message, None);
 }
+
+#[tokio::test]
+async fn routine_health_clock_token_for_each_status_combination() {
+    if !enter_isolated_child(
+        module_path!(),
+        "routine_health_clock_token_for_each_status_combination",
+    ) {
+        return;
+    }
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "clock-fixture".to_string(),
+            task_prefix: "CF".to_string(),
+        })
+    })
+    .expect("ensure machine identity");
+    // (enabled, running, schedulable, issue, health): a reported issue alone
+    // does not change the dashboard's token.
+    for (enabled, running, schedulable, issue, health) in [
+        (true, Some(true), true, false, "healthy"),
+        (true, Some(true), true, true, "healthy"),
+        (true, Some(false), false, true, "missed"),
+        (true, None, false, false, "missed"),
+        (false, Some(false), false, false, "paused"),
+        (false, None, false, true, "paused"),
+        (false, Some(true), true, true, "unhealthy"),
+    ] {
+        let status = ClockStatus {
+            configured_cadence_seconds: 60,
+            effective_cadence_seconds: schedulable.then_some(60),
+            enabled,
+            loaded: enabled,
+            running,
+            schedulable,
+            health_issue: issue.then(|| "fixture issue".to_string()),
+            last_tick_at: None,
+            next_tick_at: None,
+            platform: "test",
+        };
+        let case = format!("{status:?}");
+        // A fresh state per case: the routine read is memoized per server.
+        let state = DashboardState::single(runtime.clone());
+        state.set_clock_status_hook(Arc::new(move || Ok(status.clone())));
+        let request = Request::builder()
+            .uri("/routines?workspace=default")
+            .header(header::HOST, "localhost:7878")
+            .body(Body::empty())
+            .expect("request");
+        let response = router()
+            .with_state(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK, "{case}");
+        let report = body_json(response).await;
+        assert_eq!(report["clock"]["health"], health, "{case}");
+    }
+}
