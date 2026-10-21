@@ -292,7 +292,10 @@ job, activity, or job run is created, and fires do not appear on
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields (on a managed shipped
+checks for duplicate names, clears stale settings, and writes the definition
+under the cursor sidecar lock shared with the other writers. A settings failure
+leaves no definition behind, so the same add can be retried after repair.
+Update patches present fields (on a managed shipped
 default, settings fields go to the settings table, §5c); toggle (the CLI command,
 or `orbit.auto_task.update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
@@ -319,7 +322,9 @@ default also records it under `optedOut` in the auto-task managed-asset
 manifest. Reconciliation then leaves it absent and doctor does not report it
 missing. `orbit auto-task restore` writes the shipped content back and clears
 the opt-out under the same cursor lock, from the existence check through the
-definition write and manifest update. The opt-out and cursor removal come before
+manifest update and definition write. Restore clears stale settings and updates
+the manifest before publishing the definition, so a manifest failure leaves the
+name available for retry. The opt-out and cursor removal come before
 the reset because they can be undone: a failed delete puts the definition,
 cursor and manifest back.
 The reset cannot be, so a ref release failing after it leaves only that
