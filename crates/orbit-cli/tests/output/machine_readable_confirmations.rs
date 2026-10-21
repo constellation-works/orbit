@@ -82,6 +82,8 @@ impl Fixture {
                      else\n\
                        printf 'LoadState=loaded\\nActiveState=inactive\\nNextElapseUSecMonotonic=\\n'\n\
                      fi; exit 0 ;;\n\
+                   *\"disable --now orbit-sweep.timer\"*)\n\
+                     rm -f \"$HOME/.fake-clock-enabled\"; exit 0 ;;\n\
                    *\"enable orbit-sweep.timer\"*|*\"restart orbit-sweep.timer\"*)\n\
                      touch \"$HOME/.fake-clock-enabled\"; exit 0 ;;\n\
                    *) exit 0 ;;\n\
@@ -257,6 +259,39 @@ fn config_path_and_set_print_json_documents() {
         "json",
     ]);
     assert_eq!(value["value"], 45);
+}
+
+/// The fake manager's paused state is only modelled for systemd.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn clock_cadence_change_keeps_a_paused_clock_paused() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    // An earlier install left the timer unit behind; the operator then paused it.
+    let unit_dir = fixture.home.join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("create user unit directory");
+    fs::write(unit_dir.join("orbit-sweep.timer"), "OnUnitActiveSec=60s\n")
+        .expect("write installed timer");
+    fixture.json_with_fake_clock_manager(&["clock", "enable", "--json"]);
+    fixture.json_with_fake_clock_manager(&["clock", "pause", "--json"]);
+
+    let set = fixture.json_with_fake_clock_manager(&[
+        "clock",
+        "set",
+        "--cadence-seconds",
+        "300",
+        "--json",
+    ]);
+    assert_eq!(set["configured_cadence_seconds"], 300);
+    assert_eq!(set["paused"], true);
+    assert_eq!(set["activated"], false);
+
+    let status = fixture.json_with_fake_clock_manager(&["clock", "status", "--json"]);
+    assert_eq!(status["enabled"], false, "cadence change resumed the clock");
+    assert_eq!(status["configured_cadence_seconds"], 300);
+    let timer = fs::read_to_string(fixture.home.join(".config/systemd/user/orbit-sweep.timer"))
+        .expect("timer unit is rewritten");
+    assert!(timer.contains("OnUnitActiveSec=300s"), "{timer}");
 }
 
 #[cfg(unix)]

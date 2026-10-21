@@ -34,7 +34,7 @@ scheduled until the clock runs.
 orbit clock status
 orbit clock pause                       # stop scheduled ticks
 orbit clock enable
-orbit clock set --cadence-seconds 300   # whole minutes only
+orbit clock set --cadence-seconds 300   # whole minutes only; a paused clock stays paused
 ```
 
 A paused clock still allows a manual `orbit clock tick`, and pausing it leaves
