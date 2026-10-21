@@ -17,8 +17,10 @@ const RUNTIME_KEY: &str = "pi";
 /// Credentials cross the cleared child environment only when an operator names
 /// them in `[execution.env].pass`; otherwise Pi uses the login state under its
 /// own agent directory (`$PI_CODING_AGENT_DIR`, default `$HOME/.pi/agent`).
-/// [ORB-11296]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+/// That override is forwarded here because the sandbox grants exactly the
+/// directory it names; dropping it would make the CLI resolve the HOME
+/// default while the profile granted the override. [ORB-11296]
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "PI_CODING_AGENT_DIR"];
 
 pub(crate) struct PiRuntime {
     command: String,

@@ -9,7 +9,10 @@ use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 
 const RUNTIME_KEY: &str = "grok";
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+/// `GROK_HOME` is non-secret state-root context: the sandbox grants exactly
+/// the directory it names, so dropping it would make the CLI resolve
+/// `$HOME/.grok` while the profile granted the override.
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "GROK_HOME"];
 
 pub(crate) struct GrokRuntime {
     command: String,
