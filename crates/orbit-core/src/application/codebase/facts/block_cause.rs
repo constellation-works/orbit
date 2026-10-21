@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::{ClaimFailedNote, ClaimSettlementEvidence, ExecutionClaimPhase};
+use orbit_store::contracts::{
+    ClaimFailedNote, ClaimSettlementEvidence, ClaimSettlementKind, ExecutionClaimPhase,
+};
 use orbit_types::identity::all_agent_families;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
@@ -13,6 +15,7 @@ use orbit_types::workflow::{
 
 use super::types::{Anchor, BlockCause};
 use crate::OrbitRuntime;
+use crate::application::distributed::LeafSettlement;
 
 /// Status events that put a task in `blocked` because a run judged the work:
 /// the failure is attributed to the task's footprint unless its text names an
@@ -90,23 +93,33 @@ pub(in crate::application) fn failed_claim_settlements(
             tracing::warn!(%error, "codebase analytics: claim settlements unreadable");
             Vec::new()
         });
+    failed_claim_settlements_of(&settlements)
+}
+
+/// [`failed_claim_settlements`] of settlements already read. A typed
+/// handoff is never a failure, whatever its claim's phase now.
+pub(in crate::application) fn failed_claim_settlements_of(
+    settlements: &[LeafSettlement],
+) -> BTreeMap<String, Vec<SettledFailure>> {
     let mut by_task: BTreeMap<String, Vec<SettledFailure>> = BTreeMap::new();
     for settlement in settlements {
-        if settlement.phase != ExecutionClaimPhase::Failed {
+        if settlement.phase != ExecutionClaimPhase::Failed
+            || settlement.kind == Some(ClaimSettlementKind::Handoff)
+        {
             continue;
         }
         let Ok(settled_at) = DateTime::parse_from_rfc3339(&settlement.settled_at) else {
             continue;
         };
         by_task
-            .entry(settlement.task_id)
+            .entry(settlement.task_id.clone())
             .or_default()
             .push(SettledFailure {
                 settled_at: Some(settled_at.with_timezone(&Utc)),
                 evidence: settlement.evidence.to_string(),
                 failure_class: settlement.failure_class,
                 leaf_run: settlement.leaf_run_id.is_some(),
-                reason: settlement.reason.unwrap_or_default(),
+                reason: settlement.reason.clone().unwrap_or_default(),
             });
     }
     by_task

@@ -36,7 +36,9 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::WorkerLaunchError;
-use crate::application::pull_drain::drain::{PullLauncher, PullPeer, recorded_base_no_longer_red};
+use crate::application::pull_drain::drain::{
+    PullLauncher, PullPeer, leaf_attribution, recorded_base_no_longer_red,
+};
 
 impl OrbitRuntime {
     /// The follower's peer for a pull drain: every owner call goes over
@@ -160,15 +162,32 @@ impl PullPeer for RoutedPullPeer<'_> {
                 "only a typed handoff, a failure or a release settles a claimed leaf",
             ));
         }
-        self.call(
-            &admission.destination,
-            "orbit.drain.claim.settle",
-            json!({
-                "claim_id": claim.claim_id,
-                "run_id": admission.leaf_run_id,
-                "settlement": encode(settlement)?,
-            }),
-        )?;
+        let mut input = json!({
+            "claim_id": claim.claim_id,
+            "run_id": admission.leaf_run_id,
+            "settlement": encode(settlement)?,
+        });
+        // The leaf's crew and model ride beside the settlement, since a typed
+        // handoff carries no evidence to hold them. An owner that predates
+        // the fields warns and ignores them. Attribution only: an unreadable
+        // leaf run sends none rather than failing the delivery.
+        let leaf = admission
+            .leaf_run_id
+            .as_deref()
+            .and_then(|run_id| self.runtime.stores().jobs().get_job_run(run_id).ok())
+            .flatten();
+        if let (Some(leaf), Some(object)) = (leaf, input.as_object_mut()) {
+            let attribution = leaf_attribution(&leaf);
+            for (key, value) in [
+                ("crew", attribution.crew),
+                ("crew_model", attribution.crew_model),
+            ] {
+                if let Some(value) = value {
+                    object.insert(key.into(), Value::String(value));
+                }
+            }
+        }
+        self.call(&admission.destination, "orbit.drain.claim.settle", input)?;
         Ok(())
     }
 

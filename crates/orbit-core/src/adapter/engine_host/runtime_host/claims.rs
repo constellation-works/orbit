@@ -53,7 +53,7 @@ pub(super) fn update_task_from_activity(
             "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                 status: Some(update.status), expected_status: Some(update.expected_status),
                 status_note: update.note,
-                evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None},
+                evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None},
                 ..Default::default()
             }
         }))?;

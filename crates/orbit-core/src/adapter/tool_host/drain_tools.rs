@@ -9,7 +9,7 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_store::contracts::{AdmissionRequest, ClaimMutation};
+use orbit_store::contracts::{AdmissionRequest, ClaimAttribution, ClaimMutation};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -150,7 +150,17 @@ fn claim_settle(
     let claim_id = orbit_tools::require_str(input, "claim_id")?;
     let run_id = optional_string(input, "run_id");
     let settlement: ClaimMutation = parse_field(input, "settlement")?;
-    let result = runtime.serve_claim_settle(session, &claim_id, run_id.as_deref(), settlement)?;
+    let attribution = ClaimAttribution {
+        crew: optional_string(input, "crew"),
+        crew_model: optional_string(input, "crew_model"),
+    };
+    let result = runtime.serve_claim_settle(
+        session,
+        &claim_id,
+        run_id.as_deref(),
+        settlement,
+        attribution,
+    )?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 

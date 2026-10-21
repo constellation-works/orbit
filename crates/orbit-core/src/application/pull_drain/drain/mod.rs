@@ -24,8 +24,8 @@ pub(crate) use breaker::{
 #[cfg(test)]
 pub(crate) use failure::release_settlement;
 pub(crate) use failure::{
-    attach_claimed_review, leaf_failure_settlement, operator_cancel_release,
-    recorded_base_no_longer_red,
+    attach_claimed_review, attach_leaf_attribution, leaf_attribution, leaf_failure_settlement,
+    operator_cancel_release, recorded_base_no_longer_red,
 };
 
 /// Settlement callback that carries no review ledger. Tests pass this.

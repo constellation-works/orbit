@@ -1137,6 +1137,15 @@ the probe reports the first refusal admission would raise by running the same or
   ([ORB-13625]). MCP and `orbit tool run` reach them through one registry and
   `application::distributed`. All six are `control_plane`, so a replica refuses them. Approval,
   revocation and recovery stay dashboard-only owner-operator actions.
+- Each settlement reports the crew and model its leaf run resolved, for attribution only
+  ([ORB-17292]): a failure or release in its evidence's `crew` and `crew_model`, and every
+  settlement, a typed handoff included, as the same two optional fields on the
+  `orbit.drain.claim.settle` call, since the strict typed handoff has no room for them. The owner
+  keeps them on the claim's settlement record, which a typed handoff now writes too (kind
+  `handoff`; `orbit run settlements` still lists only failures and releases), and the agent
+  scorecards read them. They are not part of the mutation's identity, and nothing that validates
+  or decides a settlement reads them. An owner that predates them ignores the evidence fields and
+  warns on the call fields; a follower that predates them leaves the record without a model.
 - Their governed-operation rows allow `agent` or `operator` — an identification floor, not an
   operator gate ([ORB-12582]). Cross-attempt receipt inspection requires `operator`, resolved by
   `runtime::authorization::resolved_caller_capabilities`, not read off the session.
@@ -1493,5 +1502,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
 - [ORB-17304] — plans the scarcity-aware admission order against the live executor census (§2, §9).
+- [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

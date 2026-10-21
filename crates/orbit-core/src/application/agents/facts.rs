@@ -27,7 +27,7 @@ use super::records::{
 };
 use super::roles::pilots::{Graded, grade_all};
 use crate::OrbitRuntime;
-use crate::application::codebase::{PilotEvidence, failed_claim_settlements, pilot_evidence};
+use crate::application::codebase::{PilotEvidence, failed_claim_settlements_of, pilot_evidence};
 use crate::application::task::{
     FindingSeverity, FindingVerdict, is_review_finding, latest_verification,
 };
@@ -390,7 +390,22 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
 
     let mut runs = implementation_runs(runtime, horizon);
     let run_costs = run_costs(runtime, horizon, computed_at);
-    let settlements = failed_claim_settlements(runtime);
+    let leaves = runtime.settled_leaves(false).unwrap_or_else(|error| {
+        tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
+        Vec::new()
+    });
+    let settlements = failed_claim_settlements_of(&leaves);
+    let pulled: HashMap<&str, Runner> = leaves
+        .iter()
+        .map(|leaf| {
+            let runner = Runner {
+                crew: leaf.crew.clone(),
+                model: leaf.crew_model.clone(),
+                run_id: None,
+            };
+            (leaf.claim_id.as_str(), runner)
+        })
+        .collect();
     let candidates = Candidates::open(runtime);
     let mut facts = Vec::new();
     for task in tasks {
@@ -414,6 +429,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
             &history,
             &comments,
             &task_runs,
+            &pulled,
             &classify,
             computed_at,
         );
@@ -555,10 +571,29 @@ fn runner(runs: &[RunRecord], start: DateTime<Utc>, end: Option<DateTime<Utc>>) 
 }
 
 /// Who worked an attempt with no local job run, as a pull from another
-/// machine is: the crew task history had assigned by its start (else the
-/// task's crew when history records no assignment) and the pulling run the
-/// `pulled_by` note names. No model is recorded, so the row is `model unknown`.
-fn assigned_runner(task: &Task, history: &[TaskHistoryEntry], start: DateTime<Utc>) -> Runner {
+/// machine is: the crew and model on the settlement record of the claim the
+/// `pulled_by` note names, from `pulled` by claim, and the pulling run that
+/// note names. Without a record, or a field it lacks, the crew falls back to
+/// the one task history had assigned by the attempt's start (else the task's
+/// crew when history records no assignment) and the model stays unknown.
+fn assigned_runner(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    pulled: &HashMap<&str, Runner>,
+    start: DateTime<Utc>,
+) -> Runner {
+    let note = history
+        .iter()
+        .find(|entry| entry.at == start && entry.event == "pulled_by")
+        .and_then(|entry| entry.note.as_deref())
+        .and_then(|note| serde_json::from_str::<Value>(note).ok());
+    let field = |pointer: &str| {
+        note.as_ref()
+            .and_then(|note| note.pointer(pointer))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let settled = field("/claim_id").and_then(|claim| pulled.get(claim.as_str()));
     let assignments = || {
         history
             .iter()
@@ -569,20 +604,10 @@ fn assigned_runner(task: &Task, history: &[TaskHistoryEntry], start: DateTime<Ut
         None if assignments().next().is_none() => task.crew.clone(),
         None => None,
     };
-    let run_id = history
-        .iter()
-        .find(|entry| entry.at == start && entry.event == "pulled_by")
-        .and_then(|entry| entry.note.as_deref())
-        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-        .and_then(|note| {
-            note.pointer("/run_context/run_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
     Runner {
-        crew,
-        model: None,
-        run_id,
+        crew: settled.and_then(|runner| runner.crew.clone()).or(crew),
+        model: settled.and_then(|runner| runner.model.clone()),
+        run_id: field("/run_context/run_id"),
     }
 }
 
@@ -601,6 +626,7 @@ fn task_facts(
     history: &[TaskHistoryEntry],
     comments: &[TaskComment],
     runs: &[RunRecord],
+    pulled: &HashMap<&str, Runner>,
     classify: &dyn Fn(&TaskHistoryEntry) -> Cause,
     now: DateTime<Utc>,
 ) -> TaskFacts {
@@ -611,7 +637,7 @@ fn task_facts(
             start: span.start,
             end: span.end,
             runner: runner(runs, span.start, span.end.or(Some(now)))
-                .unwrap_or_else(|| assigned_runner(task, history, span.start)),
+                .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
         })
         .collect();
     let landed = landed(task.status, history);

@@ -4,8 +4,8 @@ use orbit_types::task::TaskStatus;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdmissionShipContract, ClaimEvidence, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
+    AdmissionShipContract, ClaimAttribution, ClaimEvidence, ClaimRun, ExecutionClaim,
+    ExecutionClaimPhase, ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
 };
 
 /// A typed release the owner applied, kept on the claim's lifecycle state so
@@ -46,11 +46,12 @@ impl ClaimReleaseRecord {
     }
 }
 
-/// What a claimed leaf's failure or release settlement told the owner, kept
-/// on the claim's lifecycle state [ORB-14439]. The leaf ran on another host,
-/// so the owner's run history never records it; this is the owner's only
-/// durable account of why it ended. Claims settled before the record existed
-/// carry none.
+/// What a claimed leaf's settlement told the owner, kept on the claim's
+/// lifecycle state [ORB-14439]. The leaf ran on another host, so the owner's
+/// run history never records it; this is the owner's only durable account of
+/// why it ended and of the crew and model it ran as. Claims settled before
+/// the record existed carry none, and a typed handoff records one only since
+/// the record kept the leaf's crew and model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimSettlementRecord {
     /// The settlement the leaf sent. A release the owner turned into a
@@ -62,8 +63,14 @@ pub struct ClaimSettlementRecord {
     pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
     /// The typed failure's reason, else the settlement summary; bounded.
     pub reason: String,
+    /// The crew the leaf ran as: the settlement's own report, else the crew
+    /// its typed failure or unusable provider named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// The model the leaf's crew resolved to, when its follower reported it.
+    /// Absent for a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,8 +82,17 @@ pub struct ClaimSettlementRecord {
 const MAX_SETTLEMENT_REASON_BYTES: usize = 1024;
 
 impl ClaimSettlementRecord {
+    /// The record of `evidence`. Crew and model come from the evidence's own
+    /// report first, then from what the follower `reported` beside it, and
+    /// the crew last from the typed failure or unusable provider.
     #[must_use]
-    pub fn of(kind: ClaimSettlementKind, evidence: &ClaimEvidence, settled_at: String) -> Self {
+    pub fn of(
+        kind: ClaimSettlementKind,
+        evidence: &ClaimEvidence,
+        reported: &ClaimAttribution,
+        settled_at: String,
+    ) -> Self {
+        let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
         let failure = evidence.failure.as_ref();
         let reason = failure
             .map(|failure| failure.reason.as_str())
@@ -89,14 +105,16 @@ impl ClaimSettlementRecord {
             evidence: ClaimSettlementEvidence::of(evidence),
             failure_class: failure.map(|failure| failure.class),
             reason: reason[..cut].to_string(),
-            crew: failure
-                .and_then(|failure| failure.crew.clone())
+            crew: named(&evidence.crew)
+                .or_else(|| named(&reported.crew))
+                .or_else(|| failure.and_then(|failure| failure.crew.clone()))
                 .or_else(|| {
                     evidence
                         .provider_unavailable
                         .as_ref()
                         .and_then(|provider| provider.crew.clone())
                 }),
+            crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),
@@ -207,6 +225,9 @@ pub enum ClaimSettlementKind {
     Fail,
     /// The leaf gave its claim back unfinished.
     Release,
+    /// The leaf handed off its typed candidate; the record keeps its crew and
+    /// model, and its execution summary as the reason.
+    Handoff,
 }
 
 /// The evidence class of a claimed leaf's settlement, most specific first.
@@ -226,7 +247,7 @@ pub enum ClaimSettlementEvidence {
     /// Only a typed [`ClaimEvidence::failure`].
     Failure,
     /// Only a summary: an untyped settlement, such as a leaf that never
-    /// launched because the owner refused its bind.
+    /// launched because the owner refused its bind, or a typed handoff.
     Summary,
 }
 
@@ -441,7 +462,8 @@ pub struct ClaimInspection {
     /// offered to the task's next claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserved_candidate: Option<PreservedClaimCandidate>,
-    /// [ORB-14439] The failure or release settlement the claim's leaf sent.
+    /// [ORB-14439] The settlement the claim's leaf sent: its failure, its
+    /// release or its typed handoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ClaimSettlementRecord>,
     /// Mid-run steering's watermark for the claim's bound leaf run, recorded

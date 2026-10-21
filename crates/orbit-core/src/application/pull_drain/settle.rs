@@ -53,8 +53,8 @@ use std::time::Duration;
 
 use super::candidate::stopping_candidate;
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, attach_claimed_review, leaf_failure_settlement,
-    operator_cancel_release, recorded_base_no_longer_red,
+    PullDrain, RefusedDelivery, SettleScope, attach_claimed_review, attach_leaf_attribution,
+    leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -120,6 +120,7 @@ impl OrbitRuntime {
                 recorded_base_no_longer_red(self, repo, hold)
             });
         let settlement = attach_claimed_review(settlement, self.claimed_review_carry(run_id));
+        let settlement = attach_leaf_attribution(settlement, Some(&run));
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -237,7 +238,10 @@ impl OrbitRuntime {
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
-            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why, candidate))),
+            &LocalPullMutation::Settle(Box::new(attach_leaf_attribution(
+                operator_cancel_release(record, why, candidate),
+                Some(leaf),
+            ))),
         ) {
             Ok(settling) => Ok(settling),
             Err(error) => {
