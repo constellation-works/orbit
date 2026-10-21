@@ -90,6 +90,118 @@ fn denial(
         .unwrap();
 }
 
+/// A pilot's task crew is not the pilot: use the frozen activity draw and
+/// invocation, including legacy and missing evidence, at the HTTP boundary.
+#[test]
+fn pilots_attribute_assessments_to_recorded_activity() {
+    isolated(
+        "agents_pilots::pilots_attribute_assessments_to_recorded_activity",
+        || {
+            let fixture = Fixture::new();
+            let repo = init_repo(&fixture);
+            let now = Utc::now();
+            let purpose = "workflow.purpose_crews.task_pilot";
+            let legacy = "workflow.low_complexity_crews";
+            for (index, key, crew, model) in [
+                (0, Some(purpose), "haiku", Some("actual-pilot-model")),
+                (1, Some(legacy), "luna", Some("legacy-pilot-model")),
+                (2, Some(purpose), "haiku", None),
+                (3, None, "ignored", Some("unattributed-pilot-model")),
+                (4, Some(purpose), "haiku", Some("actual-pilot-model")),
+            ] {
+                let run_id = format!("jrun-pilot-attribution-{index}");
+                seed_pilot_run(
+                    &fixture,
+                    &run_id,
+                    "sol",
+                    "task-model",
+                    now - Duration::minutes(2),
+                    now,
+                );
+                let mut state = fixture.runtime.read_run_state(&run_id).unwrap().unwrap();
+                state.activity_crew_draws.clear();
+                if let Some(key) = key {
+                    state.activity_crew_draws.insert(
+                        key.into(),
+                        orbit_types::workflow::ActivityCrewDraw {
+                            crew: crew.into(),
+                            source: key.into(),
+                            eligible_pool: Vec::new(),
+                        },
+                    );
+                }
+                if index == 4 {
+                    // The purpose draw wins when both keys survived a migration.
+                    state.activity_crew_draws.insert(
+                        legacy.into(),
+                        orbit_types::workflow::ActivityCrewDraw {
+                            crew: "wrong-legacy-crew".into(),
+                            source: legacy.into(),
+                            eligible_pool: Vec::new(),
+                        },
+                    );
+                }
+                fixture.runtime.write_run_state(&run_id, &state).unwrap();
+                // The latest task-pilot invocation, even with no model, wins over
+                // older evidence. Other activities on the run must not supply it.
+                for (activity, model) in [
+                    ("task_pilot", model),
+                    ("prepare_task_pilot", Some("wrong-activity-model")),
+                ] {
+                    fixture
+                        .runtime
+                        .insert_invocation_trace_record(&InvocationInsertParams {
+                            job_run_id: run_id.clone(),
+                            activity_id: activity.into(),
+                            agent: "fixture".into(),
+                            provider: None,
+                            model: model.map(str::to_string),
+                            task_ids: Vec::new(),
+                            trace: Default::default(),
+                        })
+                        .unwrap();
+                }
+                let task = add_with_status(
+                    &fixture,
+                    &format!("piloted {index}"),
+                    &[],
+                    vec![],
+                    TaskStatus::Done,
+                );
+                pilot_receipt(
+                    &fixture,
+                    &task,
+                    now,
+                    Some(&run_id),
+                    &[],
+                    &["file:src/pilot.rs"],
+                );
+                land(&fixture, &repo, &task, &["src/pilot.rs"], now);
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/pilots/scorecard?{WS}&window=7d&min_support=1"
+            )));
+            assert_eq!(
+                row(&card, "haiku", "actual-pilot-model")["units"],
+                2,
+                "pilot assessments follow the drawn crew, never the piloted task's crew: {card}"
+            );
+            assert_eq!(row(&card, "luna", "legacy-pilot-model")["units"], 1);
+            assert_eq!(row(&card, "haiku", "model unknown")["units"], 1);
+            assert_eq!(
+                row(&card, "crew unknown", "unattributed-pilot-model")["units"],
+                1
+            );
+            assert_eq!(
+                card["rows"].as_array().unwrap().len(),
+                4,
+                "no task-crew or other-activity rows: {card}"
+            );
+        },
+    );
+}
+
 /// Each pilot crew and model is graded against the landed diffs of the tasks
 /// it assessed, with the recall, precision and F1 the Codebase ranking gave
 /// the same fixture: dir and wildcard selectors cover the files beneath

@@ -357,8 +357,8 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
             input: None,
             retry_source_run_id: None,
             knowledge_metrics: None,
-            resolved_crew: Some("luna".into()),
-            crew_model: Some("luna-model".into()),
+            resolved_crew: Some("sol".into()),
+            crew_model: Some("task-model".into()),
             steps: Vec::new(),
             executed_on: None,
         };
@@ -366,6 +366,33 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
             .sqlite_store()
             .unwrap()
             .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        // The piloted task's crew is distinct from the pilot activity's draw.
+        let key = orbit_types::workflow::CrewPurpose::TaskPilot.config_key();
+        let mut state = orbit_types::workflow::PipelineState::new(
+            run.run_id.clone(),
+            run.job_id.clone(),
+            json!({}),
+        );
+        state.activity_crew_draws.insert(
+            key.into(),
+            orbit_types::workflow::ActivityCrewDraw {
+                crew: "luna".into(),
+                source: key.into(),
+                eligible_pool: Vec::new(),
+            },
+        );
+        runtime.write_run_state(&run.run_id, &state).unwrap();
+        runtime
+            .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                job_run_id: run.run_id.clone(),
+                activity_id: "task_pilot".into(),
+                agent: "fixture".into(),
+                provider: None,
+                model: Some("luna-model".into()),
+                task_ids: Vec::new(),
+                trace: Default::default(),
+            })
             .unwrap();
         runtime
             .add_task(TaskAddParams {

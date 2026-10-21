@@ -16,6 +16,41 @@ use crate::contracts::{
 };
 
 impl Store {
+    /// Latest invocation model for each requested run, scoped to the workspace
+    /// and activity. One indexed batch; no steps, traces or tool calls loaded.
+    pub fn latest_activity_models(
+        &self,
+        workspace_id: &str,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Option<String>>, OrbitError> {
+        let mut models = std::collections::HashMap::new();
+        if run_ids.is_empty() {
+            return Ok(models);
+        }
+        let ids =
+            serde_json::to_string(run_ids).map_err(|error| OrbitError::Store(error.to_string()))?;
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT job_run_id, model FROM invocations
+             WHERE workspace_id = ?1 AND activity_id = ?2
+               AND job_run_id IN (SELECT value FROM json_each(?3))
+             ORDER BY ts DESC, id DESC",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(rusqlite::params![workspace_id, activity_id, ids], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(sqlite_store_error)?;
+        for row in rows {
+            let (run, model) = row.map_err(sqlite_store_error)?;
+            models.entry(run).or_insert(model);
+        }
+        Ok(models)
+    }
+
     pub fn list_invocation_records(
         &self,
         filter: &InvocationQuery,
