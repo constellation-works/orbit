@@ -128,14 +128,33 @@ async fn routine_health_clock_token_for_each_status_combination() {
     .expect("ensure machine identity");
     // (enabled, running, schedulable, issue, health): a reported issue alone
     // does not change the dashboard's token.
+    // Cover the full product, including synthetic combinations such as an
+    // enabled, schedulable clock with an issue, which native probes don't emit.
     for (enabled, running, schedulable, issue, health) in [
         (true, Some(true), true, false, "healthy"),
         (true, Some(true), true, true, "healthy"),
+        (true, Some(true), false, false, "missed"),
+        (true, Some(true), false, true, "missed"),
+        (true, Some(false), true, false, "healthy"),
+        (true, Some(false), true, true, "healthy"),
+        (true, Some(false), false, false, "missed"),
         (true, Some(false), false, true, "missed"),
+        (true, None, true, false, "healthy"),
+        (true, None, true, true, "healthy"),
         (true, None, false, false, "missed"),
-        (false, Some(false), false, false, "paused"),
-        (false, None, false, true, "paused"),
+        (true, None, false, true, "missed"),
+        (false, Some(true), true, false, "unhealthy"),
         (false, Some(true), true, true, "unhealthy"),
+        (false, Some(true), false, false, "unhealthy"),
+        (false, Some(true), false, true, "unhealthy"),
+        (false, Some(false), true, false, "paused"),
+        (false, Some(false), true, true, "paused"),
+        (false, Some(false), false, false, "paused"),
+        (false, Some(false), false, true, "paused"),
+        (false, None, true, false, "paused"),
+        (false, None, true, true, "paused"),
+        (false, None, false, false, "paused"),
+        (false, None, false, true, "paused"),
     ] {
         let status = ClockStatus {
             configured_cadence_seconds: 60,
