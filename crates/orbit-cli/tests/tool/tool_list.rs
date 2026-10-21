@@ -334,23 +334,36 @@ fn tool_run_rejects_inactive_tools() {
         .assert()
         .success();
     // Exercise both registry refusal sites through their real CLI callers.
-    for args in [
-        vec![
+    let refused = orbit_at_home(&work, &home)
+        .args([
             "tool",
             "run",
             "orbit.friction.list",
             "--input",
             "{\"model\":\"codex\"}",
-        ],
-        vec!["tool", "enable", "orbit.friction.list"],
-    ] {
-        orbit_at_home(&work, &home)
-            .args(args)
-            .assert()
-            .failure()
-            .stdout(predicate::str::is_empty())
-            .stderr(predicate::str::contains("policy denied"));
-    }
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"))
+        .get_output()
+        .stderr
+        .clone();
+    let refusal = String::from_utf8_lossy(&refused);
+    assert!(
+        refusal.contains("orbit.search"),
+        "the refusal must name the supported agent listing:\n{refusal}"
+    );
+    assert!(
+        !refusal.contains("operator"),
+        "the refusal must not offer a capability override:\n{refusal}"
+    );
+    orbit_at_home(&work, &home)
+        .args(["tool", "enable", "orbit.friction.list"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"));
     let output = orbit_at_home(&work, &home)
         .args(["audit", "list", "--json"])
         .assert()
@@ -376,6 +389,45 @@ fn tool_run_rejects_inactive_tools() {
             "inactive {subcommand} is a policy denial"
         );
     }
+
+    // The listing the refusal names answers the same agent: a friction filed
+    // here comes back from `orbit.search` with no query.
+    let filed = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.friction.add",
+            "--input",
+            "{\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let filed: Value = serde_json::from_slice(&filed).unwrap();
+    let listed = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            "{\"kind\":\"friction\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listing: Value = serde_json::from_slice(&listed).unwrap();
+    assert!(
+        listing["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["id"] == filed["id"]),
+        "the search the refusal names must list the friction just filed:\n{listing}"
+    );
 }
 
 /// [ORB-12581] `orbit.drain.claims` is off the MCP surface and has no
