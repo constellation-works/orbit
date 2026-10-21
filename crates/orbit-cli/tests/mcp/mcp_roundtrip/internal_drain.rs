@@ -127,41 +127,14 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
 
 /// Run the fixture's Rust transport client in a clean child as well as its
 /// server processes: SshDestinationProbe reads the client's PATH and identity.
+/// Returns true inside that child, where the body runs.
 fn isolated(test: &str) -> bool {
-    const MARKER: &str = "ORBIT_TEST_INTERNAL_DRAIN_CHILD";
-    if std::env::var(MARKER).as_deref() == Ok(test) {
-        return true;
-    }
-    let home = tempdir().unwrap();
     // libtest names a test by its module path below the crate root.
     let qualified = format!(
         "{}::{test}",
         module_path!().split_once("::").expect("test module").1
     );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
-    let output = command
-        .args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
-        .env(MARKER, test)
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
-        "child test `{qualified}` did not execute: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    false
+    !crate::isolated_test::run_in_child(&qualified)
 }
 
 #[cfg(unix)]
