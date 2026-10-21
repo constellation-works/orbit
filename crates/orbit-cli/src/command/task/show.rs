@@ -270,10 +270,17 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         ("Implemented By:", "implemented_by"),
         ("Execution Crew:", "crew"),
         ("Orchestrator:", "orchestrator"),
+        ("Orchestrator Model:", "orchestrator_model"),
         ("Origin:", "origin"),
     ] {
-        if let Some(value) = field(key) {
-            let _ = writeln!(out, "{} {}", bold(label), value);
+        let Some(value) = field(key) else { continue };
+        match field("orchestrator_model_source").filter(|_| key == "orchestrator_model") {
+            Some(source) => {
+                let _ = writeln!(out, "{} {} ({source})", bold(label), value);
+            }
+            None => {
+                let _ = writeln!(out, "{} {}", bold(label), value);
+            }
         }
     }
     let history = sidecar::<TaskHistoryEntry>(task.get("history"))?;

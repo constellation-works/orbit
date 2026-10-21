@@ -4232,6 +4232,8 @@ fn task(id: &str, status: TaskStatus) -> Task {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
         origin: None,
         created_at: now,
         updated_at: now,

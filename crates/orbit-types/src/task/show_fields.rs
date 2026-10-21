@@ -24,7 +24,7 @@ use crate::task::{
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, origin, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, pilot_warnings, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -64,6 +64,8 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "readiness",
     "pilot_warnings",
     "orchestrator",
+    "orchestrator_model",
+    "orchestrator_model_source",
     "origin",
     "created_at",
     "updated_at",
@@ -107,6 +109,8 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "crew",
     "crew_source",
     "orchestrator",
+    "orchestrator_model",
+    "orchestrator_model_source",
     "origin",
     "created_at",
     "updated_at",
@@ -194,6 +198,10 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "os_requirement" => Some(task_os_requirement_json(task).unwrap_or(Value::Null)),
         "readiness" => Some(task_readiness_json(task).unwrap_or(Value::Null)),
         "orchestrator" => Some(json!(task.orchestrator)),
+        "orchestrator_model" => Some(json!(task.orchestrator_model)),
+        "orchestrator_model_source" => Some(json!(
+            task.orchestrator_model_source.map(|source| source.as_str())
+        )),
         "origin" => Some(json!(task.origin.map(|value| value.as_str()))),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),

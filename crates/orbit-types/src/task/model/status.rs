@@ -471,3 +471,32 @@ impl FromStr for TaskOrigin {
         }
     }
 }
+
+/// Which rule supplied a task's `orchestrator_model` when it was created.
+///
+/// Persisted `Task.orchestrator_model_source` stays `Option`: a task without
+/// an orchestrator model, including every task filed before the field
+/// existed, has none.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorModelSource {
+    /// The creating call named the model explicitly.
+    Explicit,
+    /// Snapshotted from the orchestrator crew's configured model.
+    CrewConfig,
+}
+
+impl OrchestratorModelSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OrchestratorModelSource::Explicit => "explicit",
+            OrchestratorModelSource::CrewConfig => "crew_config",
+        }
+    }
+}
+
+impl Display for OrchestratorModelSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}

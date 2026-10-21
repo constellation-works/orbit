@@ -5,9 +5,8 @@
 //! model from a cheaper "implementation" helper makes execution mode
 //! deterministic per agent family rather than depending on per-prompt edits.
 //!
-//! Activities reference the resolved pair via the `{{orchestrator_model}}`,
-//! `{{helper_model}}`, and `{{agent_family}}` placeholders, which the runtime
-//! substitutes into the instruction text before invoking the agent.
+//! The pair's judgment model is unrelated to a task's `orchestrator_model`,
+//! which records the model of the crew attributed with orchestrating it.
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -172,6 +172,7 @@ pub(super) fn add(
             source_task_id: optional_string(options, "source_task_id")?,
             crew: optional_string(input, "crew")?,
             orchestrator: optional_string(input, "orchestrator")?,
+            orchestrator_model: optional_string(input, "orchestrator_model")?,
             origin: parse_optional_task_origin(input, "origin")?,
             context_creation: ContextCreationAuthorization::default(),
         },

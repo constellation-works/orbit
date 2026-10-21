@@ -62,6 +62,16 @@ pub struct Task {
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// The orchestrator's model, snapshotted when the task was created with
+    /// an orchestrator: an explicit creation input, else that crew's
+    /// configured model. Never rewritten afterwards, so a later orchestrator
+    /// change or crew-config edit leaves it as recorded. Absent on tasks
+    /// created without an orchestrator and on tasks filed before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    /// Which rule supplied `orchestrator_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<OrchestratorModelSource>,
     /// Why the task was filed. Absent on tasks filed before origins were
     /// recorded and on interactive filings that did not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +164,8 @@ impl Task {
             crew: envelope.crew,
             crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
+            orchestrator_model: envelope.orchestrator_model,
+            orchestrator_model_source: envelope.orchestrator_model_source,
             origin: envelope.origin,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,

@@ -64,6 +64,8 @@ pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        orchestrator_model: None,
+        orchestrator_model_source: None,
         origin: None,
         comments: vec![TaskComment {
             at: now,

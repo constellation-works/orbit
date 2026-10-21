@@ -68,7 +68,6 @@ type Key = (String, String);
 
 fn key(attempt: &Attempt) -> Key {
     row_key(
-        AgentRole::Implementers,
         attempt.runner.crew.as_deref(),
         attempt.runner.model.as_deref(),
     )
@@ -186,11 +185,7 @@ fn row_input<'a>(
             .flatten()
             .filter(|credit| {
                 credit.anchor >= since
-                    && row_key(
-                        AgentRole::Implementers,
-                        credit.crew.as_deref(),
-                        credit.model.as_deref(),
-                    ) == row
+                    && row_key(credit.crew.as_deref(), credit.model.as_deref()) == row
             })
         {
             weighted += credit.weight as f64;
@@ -206,11 +201,7 @@ fn row_input<'a>(
             .filter(|charge| {
                 charge.anchor >= since
                     && charge.owner == Owner::Role(AgentRole::Implementers)
-                    && row_key(
-                        AgentRole::Implementers,
-                        charge.crew.as_deref(),
-                        charge.model.as_deref(),
-                    ) == row
+                    && row_key(charge.crew.as_deref(), charge.model.as_deref()) == row
             })
         {
             let term = match charge.problem {

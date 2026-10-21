@@ -20,10 +20,10 @@ use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 
 use super::RoleSpec;
+use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::row_key;
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -298,7 +298,6 @@ impl Graded {
     pub(in crate::application::agents) fn key(&self) -> (String, String) {
         let run = self.run.as_ref();
         row_key(
-            AgentRole::Pilots,
             run.and_then(|run| run.crew.as_deref()),
             run.and_then(|run| run.model.as_deref()),
         )

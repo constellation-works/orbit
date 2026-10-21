@@ -1,5 +1,6 @@
-//! Orchestrators: ranked by the tasks' `orchestrator` attribution, with
-//! `model unknown`, over the tasks each one owns that were created in the
+//! Orchestrators: ranked by the tasks' `orchestrator` attribution and the
+//! `orchestrator_model` recorded when each was created (`model unknown` for a
+//! task without one), over the tasks each row owns that were created in the
 //! window. Credit is one point per landed task, whatever its complexity:
 //! complexity is assessed when the task is filed or piloted, so weighting by
 //! it would let the ranked party set its own credit. Problems are only those
@@ -51,14 +52,17 @@ const TERMS: &[Term] = &[
     },
 ];
 
-/// One row per orchestrator that owns a task created since `since`.
+/// One row per orchestrator and recorded orchestrator model that owns a task
+/// created since `since`; a task without a recorded model counts under
+/// `model unknown`.
 fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
-    let mut owned: BTreeMap<&str, Vec<&TaskFacts>> = BTreeMap::new();
+    let mut owned: BTreeMap<(&str, &str), Vec<&TaskFacts>> = BTreeMap::new();
     for task in &facts.tasks {
         if let Some(name) = task.orchestrator.as_deref()
             && task.created_at >= since
         {
-            owned.entry(name).or_default().push(task);
+            let model = task.orchestrator_model.as_deref().unwrap_or(MODEL_UNKNOWN);
+            owned.entry((name, model)).or_default().push(task);
         }
     }
     let mut charges: HashMap<&str, Vec<&Charge>> = HashMap::new();
@@ -70,12 +74,13 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     }
     owned
         .into_iter()
-        .map(|(name, tasks)| row(name, &tasks, &charges, facts.computed_at))
+        .map(|((name, model), tasks)| row(name, model, &tasks, &charges, facts.computed_at))
         .collect()
 }
 
 fn row<'a>(
     name: &str,
+    model: &str,
     tasks: &[&'a TaskFacts],
     charges: &HashMap<&str, Vec<&Charge>>,
     now: DateTime<Utc>,
@@ -170,7 +175,7 @@ fn row<'a>(
     ];
     RowInput {
         crew: name.to_string(),
-        model: MODEL_UNKNOWN.to_string(),
+        model: model.to_string(),
         units: tasks.len(),
         runs_without_model: 0,
         provisional: None,

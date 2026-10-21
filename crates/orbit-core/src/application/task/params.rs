@@ -126,6 +126,10 @@ pub struct TaskAddParams {
     pub crew_source: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
+    /// The orchestrator's model when the session runs one other than the
+    /// `orchestrator` crew's configured model. Omitted, creation snapshots
+    /// the crew's configured model; it requires an orchestrator.
+    pub orchestrator_model: Option<String>,
     /// Why the task was filed, as the caller stated it. `None` stays unset
     /// for an interactive filing; a `system_created` filing or a sweep finding
     /// its provenance tag marks records [`TaskOrigin::Automation`] instead.
@@ -161,6 +165,7 @@ impl Default for TaskAddParams {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            orchestrator_model: None,
             origin: None,
             context_creation: ContextCreationAuthorization::default(),
         }

@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-19
+last_updated: 2026-10-21
 last_validated: 2026-10-19
 status: Draft
 feature: agent-scorecards
@@ -49,7 +49,7 @@ A row is a **crew and model**: for implementers, the `resolved_crew` and `crew_m
 
 - An implementation run with no `crew_model` is ranked as `model unknown` under its crew. It is never assigned a model guessed from the crew's configuration, because configuration changes over time and a guess would quietly merge different models into one row. The payload reports, per row, how many of its runs had no model.
 - An attempt that no local job run records, such as one another machine pulled, is charged to the crew its task history had assigned when the attempt started, with `model unknown`. The run is the one the `pulled_by` entry names. An attempt with neither a run nor an assignment is `crew unknown`.
-- **Orchestrators are the exception.** Orchestrator sessions are not job runs, so their row is keyed by the task's `orchestrator` attribution, and the model is `model unknown` unless the attribution comes to carry one (§11).
+- **Orchestrators are the exception.** Orchestrator sessions are not job runs, so their row is keyed by the task's `orchestrator` attribution and its `orchestrator_model`. That model is recorded once, when the task is created with an orchestrator: an explicit `orchestrator_model` input, else the orchestrator crew's configured model snapshotted at that moment (`orchestrator_model_source` is `explicit` or `crew_config`). It is never read from configuration at scan time, so a later crew-config change does not move old tasks between rows. A task without one, including every task filed before the field existed, ranks under `model unknown` (§5.1).
 
 ## 3. Attribution: Each Problem Has One Owner
 
@@ -151,6 +151,8 @@ Today's per-8-active-hours rate toggle is dropped: active hours mean something o
 **Current.**
 
 Unit: **owned tasks**, meaning tasks whose `orchestrator` attribution names the row, created in the window (unchanged).
+
+Rows are keyed by `(orchestrator, orchestrator_model)`: the crew the task names and the model recorded when it was created (§2). A task with no recorded model counts in the orchestrator's `model unknown` row, so an orchestrator whose older tasks predate the field has two rows until those tasks leave the window. Orchestrator problems are charged to the same row as the task they fall on.
 
 | Term | Weight | Definition |
 |---|---|---|
@@ -307,7 +309,7 @@ GET /api/agents/{role}/detail?window=&min_support=&crew=&model=
 GET /api/agents/attribution?window=
 ```
 
-`{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several.
+`{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution and `model` the task's recorded `orchestrator_model`. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several.
 
 **Scorecard** answers:
 
@@ -407,7 +409,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - **Reviewer false alarms are proxies.** The review gate records no verdict on whether its own findings were right. `Disposed` findings and the false-reject rule (§5.3) stand in for that. The rule compares file contents, not intent: a cited file the next run changed for an unrelated reason, or that changed on the base between the two candidates, counts as addressed, and a finding fixed in a file it did not cite is not credited. A dedicated record of an implementer disputing a finding would be exact, but would change the review flow to serve a dashboard. It is deferred until the proxies prove noisy.
 - **Open tasks lower an orchestrator's land rate.** A task created in the window earns nothing until it lands, so an orchestrator that filed many tasks recently reads lower until they land. Every row is measured the same way, and a longer window reduces the effect.
 - **Orchestrator credit ignores how hard the work was.** One landing counts the same at every complexity, because the ranked orchestrator sets complexity. A complexity assessed independently of the orchestrator could weigh landings again.
-- **Orchestrator rows have no model.** Orchestrator sessions are not job runs, so orchestrators rank by attribution name with `model unknown` until the attribution records a model.
+- **Orchestrator models are recorded, not observed.** Orchestrator sessions are not job runs, so a row's model is what the task recorded at creation: the orchestrator crew's configured model unless the filer passed `orchestrator_model`. A session that runs another model without saying so is ranked under its crew's model. The field is set once, so changing a task's `orchestrator` later keeps the model recorded for the original crew, and a task that gains its orchestrator after creation stays `model unknown`. Tasks filed before the field existed are never backfilled.
 - **The observed tier inherits cost differences between crews.** Work routed to a costlier crew looks harder. Ranking by cost within the window reduces this but does not remove it, so calibration should be read as a comparison between pilots on similar work.
 - **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be an orchestrator spec defect, but nothing records whether the file was in scope.
 - **The escape decides the owner.** An implementer whose visible defects pass a weak reviewer is not charged for them; the reviewer is. Reading the Implementers and Reviewers tabs together is part of the design, not an accident.
@@ -425,5 +427,6 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
 - ORB-16957 — track G: CLI and MCP (planned).
 - ORB-17118 — Orchestrators credit one point per landed task instead of weighting by self-assessed complexity, drop landed initiative and show unclassified rework and regressions beside the score; smoothing only lowers a score, with K raised from 10 to 30.
+- ORB-17291 — orchestrator rows keyed by the task's `orchestrator_model`, recorded at creation from an explicit input or the orchestrator crew's configured model.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

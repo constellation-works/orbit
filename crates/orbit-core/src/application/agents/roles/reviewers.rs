@@ -199,11 +199,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         for review in task.reviews.iter().filter(|review| review.at >= since) {
             let runner = &review.reviewer;
             let row = rows
-                .entry(row_key(
-                    AgentRole::Reviewers,
-                    runner.crew.as_deref(),
-                    runner.model.as_deref(),
-                ))
+                .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
                 .or_default();
             row.unit(review.at, runner.model.as_deref(), lookback);
             row.verdicts
@@ -268,11 +264,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         }
         let runner = &attempt.runner;
         let row = rows
-            .entry(row_key(
-                AgentRole::Reviewers,
-                runner.crew.as_deref(),
-                runner.model.as_deref(),
-            ))
+            .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
             .or_default();
         row.unit(attempt.start, runner.model.as_deref(), lookback);
         row.review_jobs += 1;
@@ -319,22 +311,18 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         let Some(task) = by_id.get(charge.task_id.as_str()) else {
             continue;
         };
-        rows.entry(row_key(
-            AgentRole::Reviewers,
-            charge.crew.as_deref(),
-            charge.model.as_deref(),
-        ))
-        .or_default()
-        .add(
-            key,
-            task,
-            1.0,
-            Occurrence {
-                at: charge.at,
-                detail: format!("{}: {}", charge.problem.as_str(), charge.detail),
-                run_id: charge.run_id.clone(),
-            },
-        );
+        rows.entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
+            .or_default()
+            .add(
+                key,
+                task,
+                1.0,
+                Occurrence {
+                    at: charge.at,
+                    detail: format!("{}: {}", charge.problem.as_str(), charge.detail),
+                    run_id: charge.run_id.clone(),
+                },
+            );
     }
 
     let peers = PeerRates::new(&rows);

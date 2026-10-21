@@ -72,6 +72,10 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    `xhard`). An orchestrator also sets `origin`: `operator_request` when a human
    asked for the work (in chat or elsewhere outside Orbit), or
    `orchestrator_initiative` when you decided on your own that it is needed.
+   An orchestrator passes `orchestrator` (its own crew) on every create, so the
+   task records that crew's configured model as `orchestrator_model`. Pass
+   `orchestrator_model` only when your session runs a different model than that
+   crew is configured with; it is recorded once and never updated.
    Use the advertised schema; detailed `plan` belongs to pickup, not task creation.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
@@ -88,7 +92,7 @@ orbit tool run orbit.task.add --input '{
   "context_files": ["file:<verified-modification-target>"],
   "workspace": "<discovered-selector>",
   "complexity": "medium", "type": "feature", "model": "<agent-family>",
-  "origin": "operator_request",
+  "origin": "operator_request", "orchestrator": "<your-crew>",
   "fields": ["id"]
 }'
 ```
@@ -106,6 +110,8 @@ chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
 `model` is tool-call provenance (agent family), while `orchestrator` identifies
 who prepared/supervised the work; neither substitutes for execution `crew`.
+`model` never sets `orchestrator_model`: that comes from the `orchestrator`
+crew's configuration unless you override it.
 
 Task IDs come from the store. Use task tools to change records, never edit their
 filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
