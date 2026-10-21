@@ -48,15 +48,16 @@ to the task pane when a task opens.
 The Drain page shows the fleet drains, including in **All workspaces** mode,
 grouped under one heading per host: one line per workspace with its drain
 phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most
-common wait reason and admission/provider holds add a second line only when
-present. Selecting a row switches host and workspace using the dashboard scope
+common wait reason, admission/provider holds and queued windows (naming any
+Claude crew a queued window would run without a credential) add a second line
+only when present. Selecting a row switches host and workspace using the dashboard scope
 controls. The top-bar fleet indicator remains visible when an idle
 workspace is selected; opening it selects the fleet overview.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
 workspace on the addressed host. Each row includes `workspace_id`, `workspace_name`,
-`phase`, `slots_used`, `slots_ceiling`, `eligible_count`, `top_wait_reason`, and
-`holds`. Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
+`phase`, `slots_used`, `slots_ceiling`, `eligible_count`, `top_wait_reason`,
+`holds`, and `queued_drains` (readiness's windows waiting for the live one). Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
 `error`, and null counts. Counts use the read-only readiness snapshot (up to 500
 tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
 is the most frequent reason among those tasks, with alphabetical ties. Slots

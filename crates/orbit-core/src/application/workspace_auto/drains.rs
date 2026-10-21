@@ -1,11 +1,13 @@
+use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
+use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::admission::pass_error::PassError;
 use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::runtime::engine::crew::crew_allowlist_names_from_input;
 
 /// The job that ships loose leaves. Its live runs are read for two things at
 /// once: how many slots are occupied, and which backlog tasks are already
@@ -82,8 +84,9 @@ impl ActiveDrain {
     }
 }
 
-/// Report the running coordinator separately from runs waiting for its slot.
-/// The job's active-run limit permits one running drain and pending successors.
+/// Report the running coordinator separately from runs waiting for its slot,
+/// oldest first. The job's active-run limit permits one running drain and
+/// pending successors.
 pub(super) fn workspace_drains(
     runtime: &OrbitRuntime,
 ) -> Result<(Option<ActiveDrain>, Vec<Value>), OrbitError> {
@@ -106,14 +109,10 @@ pub(super) fn workspace_drains(
     let mut active = None;
     for run in runs {
         if run.state == orbit_types::workflow::JobRunState::Pending {
-            let input = run.input.as_ref();
-            queued.push(json!({
-                "run_id": run.run_id,
-                "completion": input.and_then(|input| input.get("completion"))
-                    .and_then(Value::as_str).unwrap_or("review"),
-                "max_active_leaf_runs": input.and_then(|input| input.get("max_active_leaf_runs"))
-                    .and_then(json_u32).unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32),
-            }));
+            queued.push((
+                (run.scheduled_at, run.created_at, run.run_id.clone()),
+                queued_drain(runtime, &run),
+            ));
             continue;
         }
         if !matches!(
@@ -149,7 +148,47 @@ pub(super) fn workspace_drains(
             stop,
         });
     }
-    Ok((active, queued))
+    // In the order the job's queue starts them.
+    queued.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Ok((active, queued.into_iter().map(|(_, drain)| drain).collect()))
+}
+
+/// One drain waiting for the live one's slot, with what its window will do
+/// once it starts: the ceiling, completion policy, crews and window length it
+/// was submitted with, the `execution.env.pass` names its submission did not
+/// hold (names only), and the Claude crews in its window that will start
+/// without a worker credential.
+fn queued_drain(runtime: &OrbitRuntime, run: &JobRun) -> Value {
+    let input = run.input.as_ref();
+    let field = |key: &str| input.and_then(|input| input.get(key));
+    // An unreadable allowlist is reported as unrestricted; the drain itself
+    // refuses it when it starts.
+    let allowed_crews = input
+        .and_then(|input| crew_allowlist_names_from_input(input).ok())
+        .unwrap_or_default();
+    let env_pass_unset = runtime
+        .stores()
+        .jobs()
+        .read_run_state(&run.run_id)
+        .ok()
+        .flatten()
+        .map(|state| state.env_pass_unset)
+        .unwrap_or_default();
+    json!({
+        "run_id": run.run_id,
+        "completion": field("completion").and_then(Value::as_str).unwrap_or("review"),
+        "max_active_leaf_runs": field("max_active_leaf_runs")
+            .and_then(json_u32)
+            .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32),
+        // `null` when the window admits every crew.
+        "allowed_crews": (!allowed_crews.is_empty()).then_some(&allowed_crews),
+        // `0` is a single pass.
+        "for_seconds": field("for_seconds").and_then(json_u32).unwrap_or(0),
+        "submitted_at": run.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "uncredentialed_crews": runtime
+            .claude_crews_without_recorded_credential(&allowed_crews, &env_pass_unset),
+        "env_pass_unset": env_pass_unset,
+    })
 }
 
 /// The live pull-drain run on a replica checkout, with its admissions stop

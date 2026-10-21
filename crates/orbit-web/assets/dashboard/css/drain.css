@@ -246,6 +246,19 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-stop-note.disabled-reason { color: var(--warn-fg); }
 .drain-stop-note[hidden] { display: none; }
 
+/* Windows waiting for the live one's slot, listed under its footer. */
+.drain-queued { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.drain-queued-title { margin: 0; color: var(--fg-mute); font: 500 12px/1.4 var(--font-sans); letter-spacing: 0.02em; text-transform: uppercase; }
+.drain-queued-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.drain-queued-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg-well); }
+.drain-queued-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.drain-queued-head a { font-family: var(--font-mono); font-size: 12px; }
+.drain-queued-state { color: var(--fg-dim); font-size: 12px; }
+.drain-queued-head > .drain-queued-cancel { flex: 0 0 auto; margin-left: auto; font-size: 12px; min-height: 26px; padding: 2px 12px; }
+.drain-queued-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.drain-queued-start, .drain-queued-env { color: var(--fg-mute); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-queued-flag { margin: 0; padding: 7px 10px; border: 1px solid var(--warn-line); border-radius: 6px; background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+
 /* Why tasks are waiting: a stacked bar by pool with its legend, then one row
    per wait — its count, its pool's colour, the wait and a detail line. */
 #drain-waits-body { display: flex; flex-direction: column; gap: 4px; padding: 16px 0 8px; }

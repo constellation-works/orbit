@@ -33,6 +33,10 @@ const requests = [];
 const calls = [];
 const row = (name, phase, eligible) => ({ workspace_id: name, workspace_name: name, phase,
   slots_used: 1, slots_ceiling: 4, eligible_count: eligible, top_wait_reason: 'context_lock_conflict', holds: ['codex usage limit'] });
+// A second window waiting behind the remote drain, started without a Claude
+// credential while its window names a Claude crew.
+const queuedWindow = { run_id: 'jrun-queued', completion: 'review', max_active_leaf_runs: 5, allowed_crews: ['opus'],
+  for_seconds: 28800, env_pass_unset: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'], uncredentialed_crews: ['opus'] };
 const common = new vm.SyntheticModule(['el', 'fetchJson', 'getRegisteredHosts', 'getHost'], function () {
   this.setExport('el', (tag, attrs, children) => new Node(tag, attrs, children));
   this.setExport('getRegisteredHosts', () => hosts);
@@ -43,7 +47,7 @@ const common = new vm.SyntheticModule(['el', 'fetchJson', 'getRegisteredHosts', 
     await new Promise(resolve => setImmediate(resolve));
     inFlight--;
     if (path.includes('offline')) throw new Error('Host unreachable');
-    return { items: [path.includes('remote') ? row('remote-work', 'draining', 0) : row('idle-ready', 'idle', 4)] };
+    return { items: [path.includes('remote') ? { ...row('remote-work', 'draining', 0), queued_drains: [queuedWindow] } : row('idle-ready', 'idle', 4)] };
   });
 }, { context: undefined });
 // Use the same realm so payload comparisons do not depend on VM prototypes.
@@ -68,6 +72,11 @@ try {
   assert.equal(shown(fieldOf(ready, 'top-wait')), 'top wait: context lock conflict');
   assert.equal(shown(fieldOf(ready, 'holds')), 'held: codex usage limit');
   assert.equal(fieldOf(ready, 'slots').children[0].textContent, 'Slots ', 'slots keep their field name for assistive tech');
+  assert.equal(fieldOf(ready, 'queued'), undefined, 'a workspace with nothing queued adds no queued field');
+  const queued = fieldOf(rows[1], 'queued');
+  assert.equal(shown(queued), '1 queued window', 'a queued window behind a live drain is visible');
+  assert.equal(queued.title, 'jrun-queued · 5 parallel · review · opus · 8h 00m window', 'its run, ceiling, completion, crews and window are named');
+  assert.equal(shown(fieldOf(rows[1], 'queued-credential')), 'queued without Claude credential: opus', 'a queued window without a Claude credential is flagged');
   ready.events.click();
   rows[1].events.click();
   assert.deepEqual(calls, [['owner', 'idle-ready'], ['remote', 'remote-work']], 'rows carry host and workspace to the dashboard scope switch');

@@ -7,11 +7,16 @@
 //! from a shell that skips `~/.zprofile` would keep claiming Claude work into
 //! those failures. Its window therefore excludes the Claude crews, and its
 //! submission names the remediation once.
+//!
+//! A drain queued behind a live one is read back the same way: when its
+//! submission recorded every listed Claude credential name as unset, readiness
+//! names the Claude crews in its window so the dashboard can flag it before it
+//! starts.
 
 use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
 use orbit_engine::activity_job::cli_runner::{
-    CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
+    CLAUDE_WORKER_CREDENTIAL_ENV, CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
 };
 use orbit_types::identity::{Crew, resolve_crew};
 use orbit_types::workflow::activity_job::Provider;
@@ -82,6 +87,40 @@ impl OrbitRuntime {
             )));
         }
         Ok(names)
+    }
+
+    /// The Claude crews in a submitted drain's window (`window`, canonical
+    /// names, empty for every enabled crew) that it will start with no worker
+    /// credential, judged from the names its submission recorded as unset
+    /// (`env_pass_unset`). Empty unless a Claude credential name is among them
+    /// and no other one is still listed in `execution.env.pass`. Only names are
+    /// compared, never values.
+    pub(crate) fn claude_crews_without_recorded_credential(
+        &self,
+        window: &[String],
+        env_pass_unset: &[String],
+    ) -> Vec<String> {
+        let unset = |name: &str| env_pass_unset.iter().any(|unset| unset == name);
+        let pass = self.execution_env_policy().pass_names();
+        let still_passed = CLAUDE_WORKER_CREDENTIAL_ENV
+            .iter()
+            .any(|name| !unset(name) && pass.iter().any(|passed| passed == name));
+        if still_passed || !CLAUDE_WORKER_CREDENTIAL_ENV.iter().any(|name| unset(name)) {
+            return Vec::new();
+        }
+        let crews = self.context.settings().crews();
+        if window.is_empty() {
+            return crews
+                .values()
+                .filter(|crew| crew.enabled && is_claude(crew))
+                .map(|crew| crew.name.clone())
+                .collect();
+        }
+        window
+            .iter()
+            .filter(|name| resolve_crew(name, crews).is_ok_and(|crew| is_claude(&crew)))
+            .cloned()
+            .collect()
     }
 
     /// The submission warning for a drain whose window excludes Claude crews

@@ -104,7 +104,23 @@ function detailLine(row) {
   if (row.eligible_count) parts.push(field('eligible', 'Eligible', `${row.eligible_count}${row.counts_truncated ? '+' : ''} eligible`, 'fleet-eligible'));
   if (row.top_wait_reason) parts.push(field('top-wait', 'Top wait', `top wait: ${row.top_wait_reason.replaceAll('_', ' ')}`));
   if (row.holds?.length) parts.push(field('holds', 'Holds', `held: ${row.holds.join('; ')}`, 'fleet-holds'));
+  const queued = Array.isArray(row.queued_drains) ? row.queued_drains.filter(drain => drain?.run_id) : [];
+  if (queued.length) {
+    const node = field('queued', 'Queued', `${queued.length} queued window${queued.length === 1 ? '' : 's'}`, 'fleet-queued');
+    node.title = queued.map(queuedSummary).join('\n');
+    parts.push(node);
+    const uncredentialed = [...new Set(queued.flatMap(drain => drain.uncredentialed_crews || []))];
+    if (uncredentialed.length) parts.push(field('queued-credential', 'Queued window', `queued without Claude credential: ${uncredentialed.join(', ')}`, 'fleet-holds'));
+  }
   return parts.length ? el('div', { class: 'fleet-detail' }, parts) : null;
+}
+
+// One queued window in a line: its run, ceiling, completion, crews and length.
+function queuedSummary(drain) {
+  const crews = drain.allowed_crews?.length ? drain.allowed_crews.join(', ') : 'all crews';
+  const seconds = Number(drain.for_seconds) || 0;
+  const window = seconds > 0 ? `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m window` : 'single pass';
+  return `${drain.run_id} · ${drain.max_active_leaf_runs} parallel · ${drain.completion || 'review'} · ${crews} · ${window}`;
 }
 
 function workspaceRow(row, selectScope) {
