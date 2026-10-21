@@ -510,6 +510,32 @@ struct OwnerLocal {
     workers: LandingWorkers,
 }
 
+/// The owner's route to its own tools, as `federated_membership` gives a
+/// host for its own machine: a local session, so the owner admits under its
+/// trusted local identity.
+fn to_itself(owner: &OrbitRuntime) -> Arc<Wire> {
+    Arc::new(Wire {
+        owner: owner.clone(),
+        caller: OWNER.to_string(),
+        calls: Mutex::default(),
+        lose: Mutex::default(),
+        task_reads: Mutex::default(),
+        task_reads_fail: Mutex::default(),
+        task_reads_remote_error: Mutex::default(),
+        unreachable: Mutex::default(),
+        protocol: Mutex::default(),
+        fingerprint: Mutex::default(),
+        gateless: Mutex::default(),
+        refuse_settle: Mutex::default(),
+        accept_handoffs: Mutex::default(),
+        local: Mutex::new(true),
+        prefix_hosts: Mutex::default(),
+        by_id_reads: Mutex::default(),
+        before_settle: Mutex::default(),
+        before_pull: Mutex::default(),
+    })
+}
+
 impl OwnerLocal {
     fn new() -> Self {
         Self::requiring(CHECK, "")
@@ -571,26 +597,7 @@ impl OwnerLocal {
         // No provider runs here, but the drain's window preflight still
         // refuses a host whose crews have no launchable provider.
         launchable_providers(&owner);
-        let wire = Arc::new(Wire {
-            owner: owner.clone(),
-            caller: OWNER.to_string(),
-            calls: Mutex::default(),
-            lose: Mutex::default(),
-            task_reads: Mutex::default(),
-            task_reads_fail: Mutex::default(),
-            task_reads_remote_error: Mutex::default(),
-            unreachable: Mutex::default(),
-            protocol: Mutex::default(),
-            fingerprint: Mutex::default(),
-            gateless: Mutex::default(),
-            refuse_settle: Mutex::default(),
-            accept_handoffs: Mutex::default(),
-            local: Mutex::new(true),
-            prefix_hosts: Mutex::default(),
-            by_id_reads: Mutex::default(),
-            before_settle: Mutex::default(),
-            before_pull: Mutex::default(),
-        });
+        let wire = to_itself(&owner);
         let jobs = orbit_store::compose::workspace_job_run_store(
             owner.sqlite_store().unwrap(),
             workspace_id.clone(),
@@ -1127,3 +1134,6 @@ mod retry;
 
 #[path = "requeued_claim.rs"]
 mod requeued;
+
+#[path = "owner_repair_fallback.rs"]
+mod owner_fallback;

@@ -150,6 +150,15 @@ pub trait TaskStoreBackend: Send + Sync {
             .map(|candidate| crate::contracts::OwnerWaveAdmission::admitted(&candidate.task_id))
             .collect())
     }
+    /// Every stopped landing's repair still waiting for its repair leaf, with
+    /// whether `owner`, the owner's own local drain identity, may take it now.
+    /// A store without a claim journal holds no claim to repair.
+    fn pending_repairs(
+        &self,
+        _owner: &crate::contracts::AdmissionIdentity,
+    ) -> Result<Vec<crate::contracts::PendingRepair>, OrbitError> {
+        Ok(Vec::new())
+    }
     /// Read-only receipt reconciliation. Creates no receipt, binds no run, and
     /// grants no execution authority; the caller authorizes the identity.
     fn lookup_admission(

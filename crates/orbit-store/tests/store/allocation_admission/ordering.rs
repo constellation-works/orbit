@@ -117,6 +117,7 @@ fn affinity_respects_priority_expiry_and_os_eligibility() {
             gates: None,
             tag_instructions: None,
             executor_host_os: Default::default(),
+            repairs_only: false,
         };
         let mut request = owner_request("order");
         request.os = case.requester;

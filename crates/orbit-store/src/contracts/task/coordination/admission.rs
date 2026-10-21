@@ -26,6 +26,10 @@ pub struct AdmissionOrdering {
     /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
     /// the follower's request, so it does not change the request fingerprint.
     pub executor_host_os: BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+    /// Offer only a pending landing repair, never a backlog task: the
+    /// owner's own repair pull, which its `orbit run auto` drain starts once
+    /// a repair's fallback window has passed.
+    pub repairs_only: bool,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -589,6 +593,19 @@ pub struct OwnerWaveAdmission {
     /// footprint, or `None` once the candidate is admitted and its footprint
     /// is visible to every later pull grant.
     pub blocked_by: Option<Box<ExecutionClaim>>,
+}
+
+/// A stopped landing's repair awaiting its one automatic repair leaf, as the
+/// owner's local drain sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRepair {
+    pub task_id: String,
+    pub claim_id: String,
+    /// The executor of the stopped delivery, which the repair waits for.
+    pub original_executor: ExecutionLocation,
+    /// Why the owner may not take the repair yet, naming that executor and
+    /// when the owner may, or `None` once the owner may take it.
+    pub wait: Option<String>,
 }
 
 impl OwnerWaveAdmission {

@@ -18,6 +18,7 @@ use crate::application::admission::gap_fit::{GapFit, GapFitMode};
 use crate::application::admission::pass_error::PassError;
 use crate::application::admission::stuck_head::report_stuck_head;
 use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
+use crate::application::distributed::OwnerRepairDrain;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
 use super::super::drains::{
@@ -205,6 +206,24 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     );
     let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
     let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
+    // [ORB-17303] A stopped landing's repair is offered to its original
+    // executor first. Once the fallback window has passed, this owner pulls
+    // it into one of these slots; until then the pass names who it waits on.
+    let repairs = runtime
+        .owner_repair_fallback(&OwnerRepairDrain {
+            drain_run_id: drain_run_id(input),
+            action,
+            held: if admissions_stopped {
+                Some("admissions_stopped")
+            } else if host_shutdown_holding.is_some() {
+                Some(HOST_SHUTDOWN_SCHEDULED)
+            } else {
+                None
+            },
+            free_slots,
+        })
+        .map_err(|error| PassError::store(action, "read pending landing repairs", error))?;
+    let free_slots = free_slots.saturating_sub(repairs.reserved_slots);
     // Priority/age order is the snapshot's, and everything below preserves it:
     // the slots are scarce, so they go to the front of the queue rather than to
     // whichever tasks happen to sort last.
@@ -350,7 +369,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // "there is nothing to do": a saturated drain with a full backlog behind
     // it is idle in this sense and waits the short poll, while a genuinely
     // empty workspace waits the long one.
-    let idle = !has_leaves;
+    let idle = !has_leaves && repairs.started.is_none();
     // A throttled drain polls for recovery rather than settling into the
     // long wait an empty backlog gets, and so does one whose candidates gap
     // fit refused: they are still pending. The forecast is per minute, so no
@@ -369,10 +388,11 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             max_active_leaf_runs,
         }),
         queued: (pending.len() - admitted.len()) as u64,
-        deferred: selection
-            .deferred
+        deferred: repairs
+            .waiting
             .iter()
-            .map(|deferred| {
+            .cloned()
+            .chain(selection.deferred.iter().map(|deferred| {
                 let blocked_by = deferred.blocking_task_ids();
                 DrainWaitingTask {
                     task_id: deferred.task_id.clone(),
@@ -384,10 +404,11 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
                     blocked_by,
                     findings: Vec::new(),
                 }
-            })
+            }))
             .chain(gap_fit_waiting.iter().cloned())
             .collect(),
-        deferred_total: (selection.deferred.len() + gap_fit_waiting.len()) as u64,
+        deferred_total: (repairs.waiting.len() + selection.deferred.len() + gap_fit_waiting.len())
+            as u64,
         excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
         excluded_total: snapshot.excluded.len() as u64,
         waiting_recorded_at: None,
@@ -402,7 +423,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         admission_forecast,
     };
     let observation = LocalPass {
-        admitted: !admitted.is_empty(),
+        admitted: !admitted.is_empty() || repairs.started.is_some(),
         admissions_stopped,
         host_shutdown_holding: host_shutdown_holding.is_some(),
         throttle: resource.throttle.as_ref(),
@@ -423,6 +444,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             .chain(
                 gap_fit_waiting
                     .iter()
+                    .chain(&repairs.waiting)
                     .filter_map(|task| task.reason.clone()),
             )
             .collect(),
@@ -477,6 +499,9 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         // that looks under-filled can be read as contention rather than as an
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
+        // [ORB-17303] The repair-only pull this pass started for pending
+        // landing repairs past their fallback window.
+        "owner_repair_pull": repairs.started,
         // Gap fit's decisions under `shadow` or `enforce`; absent with `off`.
         "admission_forecast": pass.admission_forecast,
         "candidate_pool_size": examined.len(),

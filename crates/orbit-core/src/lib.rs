@@ -94,6 +94,9 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Treat every pending landing repair's owner fallback window as passed
+    /// on this thread, for tests of the owner drain taking a repair.
+    pub use orbit_store::test_support::with_repair_owner_fallback_elapsed;
     /// Shorten the task-commit lock deadline of the boundary sections entered
     /// on this thread, for tests of what follows a lock timeout.
     pub use orbit_store::test_support::with_task_commit_lock_timeout;

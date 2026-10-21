@@ -292,7 +292,8 @@ impl TaskCommitBoundary {
     /// passes on a new base tip, as it would be on the owner's own drain.
     ///
     /// `ordering` supplies the owner's OS, expiring frozen-batch tasks and the
-    /// validation gates every receipt captures [ORB-15622].
+    /// validation gates every receipt captures [ORB-15622]. With
+    /// `repairs_only` it offers a pending landing repair and no backlog task.
     /// Candidates share local dispatch's band, priority and expiry order,
     /// then prefer work this executor can run but the owner cannot.
     #[allow(clippy::too_many_arguments)]
@@ -309,7 +310,10 @@ impl TaskCommitBoundary {
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
-        let snapshot = self.admission_snapshot(request, ordering)?;
+        let mut snapshot = self.admission_snapshot(request, ordering)?;
+        if ordering.repairs_only {
+            snapshot.backlog.clear();
+        }
         #[cfg(test)]
         super::selection::after_selection::run();
         let admit = |reach| {

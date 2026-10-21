@@ -777,6 +777,10 @@ impl crate::OrbitRuntime {
                 gates: Some(self.owner_validation_gates()),
                 tag_instructions: Some(self.captured_tag_instructions(&request.ship)),
                 executor_host_os: self.executor_host_os_limits()?,
+                // The owner's own repair pull takes a stopped landing's
+                // repair and nothing from the backlog, which its local drain
+                // admits through the owner wave [ORB-17303].
+                repairs_only: self.is_owner_repair_pull(identity, request)?,
             },
             owner_binary_version(),
             &self.paths().repo_root,

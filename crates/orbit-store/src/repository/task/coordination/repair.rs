@@ -9,9 +9,15 @@
 //! same task. The superseded claim settles as `revoked` in the same commit.
 //!
 //! The original executor is preferred: it already holds the candidate's
-//! objects and ran its implementation. The owner's own local drain takes the
-//! repair once [`REPAIR_OWNER_FALLBACK_SECONDS`] have passed without that
-//! executor pulling it. Any other follower never does.
+//! objects and ran its implementation. Any other follower never takes the
+//! repair. The owner may, once [`REPAIR_OWNER_FALLBACK_SECONDS`] have passed
+//! since the landing stopped without that executor pulling it: its
+//! `orbit run auto` drain reads [`TaskCommitBoundary::pending_repairs`] each
+//! pass, reports a repair still inside the window as waiting on the named
+//! executor, and for one past it starts a repair-only pull against itself
+//! ([`AdmissionOrdering::repairs_only`]). That pull is admitted here like any
+//! other, with the same crew, OS, browser-kit and capacity screens, under the
+//! owner's local identity.
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -32,6 +38,16 @@ use crate::contracts::*;
 /// How long a pending repair waits for its original executor before the
 /// owner's local drain may take it.
 const REPAIR_OWNER_FALLBACK_SECONDS: i64 = 30 * 60;
+
+/// The fallback window as this thread sees it: a test may treat it as
+/// already passed.
+fn repair_owner_fallback_seconds() -> i64 {
+    #[cfg(feature = "test-support")]
+    if fallback_hook::elapsed() {
+        return 0;
+    }
+    REPAIR_OWNER_FALLBACK_SECONDS
+}
 
 /// A `repair_pending` claim this pull may take, with what its repair carries.
 struct RepairCandidate<'a> {
@@ -75,6 +91,28 @@ impl TaskCommitBoundary {
             }
         }
         Ok(false)
+    }
+
+    /// Every `repair_pending` claim, with its original executor and why
+    /// `owner`, the owner's local identity, may not take it yet (`None`
+    /// once it may). Read-only; admission judges it again in its section.
+    pub fn pending_repairs(
+        &self,
+        owner: &AdmissionIdentity,
+    ) -> Result<Vec<PendingRepair>, OrbitError> {
+        self.enter_ordinary(|| {
+            Ok(self
+                .claim_states_locked()?
+                .into_iter()
+                .filter(|state| state.claim.phase == ExecutionClaimPhase::RepairPending)
+                .map(|state| PendingRepair {
+                    wait: repair_executor_wait(owner, &state),
+                    task_id: state.claim.task_id,
+                    claim_id: state.claim.claim_id,
+                    original_executor: state.claim.executed_on,
+                })
+                .collect())
+        })
     }
 
     fn repair_candidates<'a>(
@@ -323,22 +361,67 @@ impl TaskCommitBoundary {
 /// the claim's original executor always may, and the owner's local drain once
 /// the fallback window has passed since the landing stopped.
 fn repair_executor_wait(identity: &AdmissionIdentity, state: &ClaimInspection) -> Option<String> {
-    let original = &state.claim.executed_on.machine_id;
-    if identity.location().machine_id == *original {
+    let original = &state.claim.executed_on;
+    if identity.location().machine_id == original.machine_id {
         return None;
     }
-    let waited = chrono::DateTime::parse_from_rfc3339(&state.updated_at)
+    let window = repair_owner_fallback_seconds();
+    let stopped = chrono::DateTime::parse_from_rfc3339(&state.updated_at)
         .ok()
-        .map(|stopped| (Utc::now() - stopped.with_timezone(&Utc)).num_seconds());
-    if !identity.is_remote() && waited.is_some_and(|waited| waited >= REPAIR_OWNER_FALLBACK_SECONDS)
+        .map(|stopped| stopped.with_timezone(&Utc));
+    if !identity.is_remote()
+        && stopped.is_some_and(|stopped| (Utc::now() - stopped).num_seconds() >= window)
     {
         return None;
     }
+    let executor = match &original.machine_name {
+        Some(name) if *name != original.machine_id => format!("{name} ({})", original.machine_id),
+        _ => original.machine_id.clone(),
+    };
+    let fallback =
+        match stopped.and_then(|at| at.checked_add_signed(chrono::Duration::seconds(window))) {
+            Some(at) => format!(
+                "the owner's local drain takes it at {}",
+                at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            ),
+            None => format!(
+                "the owner's local drain takes it after {} minutes",
+                window / 60
+            ),
+        };
     Some(format!(
-        "a repair of its stopped landing is reserved for its original executor {original}; the \
-         owner's local drain takes it after {} minutes",
-        REPAIR_OWNER_FALLBACK_SECONDS / 60
+        "a repair of its stopped landing is reserved for its original executor {executor}; \
+         {fallback}"
     ))
+}
+
+/// Treat [`REPAIR_OWNER_FALLBACK_SECONDS`] as already passed on one thread,
+/// so a test of the owner's fallback need not wait half an hour.
+#[cfg(feature = "test-support")]
+pub(crate) mod fallback_hook {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ELAPSED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn elapsed() -> bool {
+        ELAPSED.with(Cell::get)
+    }
+
+    /// Run `operation` with every pending repair's owner fallback window
+    /// passed on this thread, restoring the previous setting on return or
+    /// unwind. Other threads keep the production window.
+    pub fn with_repair_owner_fallback_elapsed<T>(operation: impl FnOnce() -> T) -> T {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ELAPSED.with(|elapsed| elapsed.set(self.0));
+            }
+        }
+        let _restore = Restore(ELAPSED.with(|elapsed| elapsed.replace(true)));
+        operation()
+    }
 }
 
 /// Why this pull's ship contract cannot carry the preserved candidate, or
