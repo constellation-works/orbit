@@ -633,12 +633,17 @@ fn run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint() {
 
 /// A skipped step's condition is not the failure a cascaded parent reports.
 fn run_show_reports_the_failed_step_before_a_later_skip() {
+    const SUCCESS_CHILD: &str = "jrun-20261018-skipped-root-cause-success-child";
     const CHILD: &str = "jrun-20261018-skipped-root-cause-child";
     const PARENT: &str = "jrun-20261018-skipped-root-cause-parent";
     let fixture = Fixture::terminal();
     let workspace_id = fixture.workspace_id();
     let db = fixture.db();
-    for (run_id, state) in [(CHILD, "failed"), (PARENT, "failed")] {
+    for (run_id, state) in [
+        (SUCCESS_CHILD, "success"),
+        (CHILD, "failed"),
+        (PARENT, "failed"),
+    ] {
         db.execute(
             "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
                  input_json, scheduled_at, started_at, finished_at, created_at)
@@ -718,16 +723,40 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
         &fixture.work.join(".orbit"),
     )
     .expect("open runtime");
+    let mut parent_state = orbit_types::workflow::PipelineState::new(
+        PARENT.to_string(),
+        "fixture_job".to_string(),
+        serde_json::json!({}),
+    );
+    let now = chrono::Utc::now();
+    parent_state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+        SUCCESS_CHILD.into(),
+        "fixture_job".into(),
+        "invoke_and_wait".into(),
+        true,
+        false,
+        now,
+    ));
+    parent_state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+        CHILD.into(),
+        "fixture_job".into(),
+        "invoke_and_wait".into(),
+        true,
+        false,
+        now,
+    ));
     runtime
-        .write_run_state(
-            PARENT,
-            &orbit_types::workflow::PipelineState::new(
-                PARENT.to_string(),
-                "fixture_job".to_string(),
-                serde_json::json!({}),
-            ),
-        )
+        .write_run_state(PARENT, &parent_state)
         .expect("seed parent state");
+    seed_audit_steps(&fixture, PARENT, &["dispatch_children", "pipeline_guard"]);
+    seed_provider_process(
+        &fixture,
+        PARENT,
+        "invocation-parent",
+        "2026-10-18T00:00:01+00:00",
+        4242,
+        Default::default(),
+    );
     let failure = orbit_engine::RuntimeHost::run_deterministic(
         &runtime,
         "pipeline_success_guard",
@@ -735,11 +764,17 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
         &serde_json::json!({
             "run_id": PARENT,
             "context": "fixture child run",
-            "results": [{
-                "status": "failed",
-                "run_id": CHILD,
-                "error": "fixture child failed",
-            }],
+            "results": [
+                {
+                    "status": "success",
+                    "run_id": SUCCESS_CHILD,
+                },
+                {
+                    "status": "failed",
+                    "run_id": CHILD,
+                    "error": "fixture child failed",
+                },
+            ],
         }),
         orbit_tools::ToolContext::default(),
     )
@@ -750,9 +785,117 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
             .contains("fixture child run did not succeed")
     );
 
-    let json = fixture.json(&["run", "show", PARENT, "--no-reconcile", "--json"]);
+    for child_id in [SUCCESS_CHILD, CHILD] {
+        db.execute(
+            "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+             VALUES (?1, ?2, '{')",
+            params![workspace_id, child_id],
+        )
+        .expect("corrupt child checkpoint");
+    }
+
+    let runs_before: Vec<(String, String)> = db
+        .prepare("SELECT run_id, state FROM job_runs ORDER BY run_id")
+        .expect("prepare select runs")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query runs")
+        .collect::<Result<_, _>>()
+        .expect("collect runs");
+    let states_before: Vec<(String, String)> = db
+        .prepare("SELECT run_id, pipeline_state_json FROM job_run_states ORDER BY run_id")
+        .expect("prepare select states")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query states")
+        .collect::<Result<_, _>>()
+        .expect("collect states");
+
+    let output = fixture
+        .orbit()
+        .env_remove("RUST_LOG")
+        .args(["run", "show", PARENT, "--no-reconcile", "--json"])
+        .output()
+        .expect("show parent run with malformed descendant checkpoints");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "malformed descendant checkpoints must not fail run show\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: pipeline checkpoint unreadable for {CHILD}"
+        )),
+        "stderr must warn on failed child unreadable checkpoint: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: pipeline checkpoint unreadable for {SUCCESS_CHILD}"
+        )),
+        "stderr must warn on successful child unreadable checkpoint: {stderr}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("parse run show JSON");
+    assert_eq!(json["run"]["run_id"], PARENT, "{json}");
+    assert_eq!(json["run"]["state"], "failed", "{json}");
+    assert!(
+        !json["pipeline_state"].is_null(),
+        "parent pipeline_state must remain readable: {json}"
+    );
+    assert_eq!(json["steps"][0]["target_id"], "dispatch_children", "{json}");
+    assert_eq!(json["provider_processes"][0]["pid"], 4242, "{json}");
     assert_eq!(json["run"]["root_cause"]["leaf_run_id"], CHILD, "{json}");
     assert_eq!(json["run"]["root_cause"]["step"], "commit_task", "{json}");
+    assert_eq!(json["root_cause"]["run_id"], CHILD, "{json}");
+    assert_eq!(json["root_cause"]["step"], "commit_task", "{json}");
+
+    let runs_after: Vec<(String, String)> = db
+        .prepare("SELECT run_id, state FROM job_runs ORDER BY run_id")
+        .expect("prepare select runs")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query runs")
+        .collect::<Result<_, _>>()
+        .expect("collect runs");
+    let states_after: Vec<(String, String)> = db
+        .prepare("SELECT run_id, pipeline_state_json FROM job_run_states ORDER BY run_id")
+        .expect("prepare select states")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query states")
+        .collect::<Result<_, _>>()
+        .expect("collect states");
+    assert_eq!(
+        runs_before, runs_after,
+        "--no-reconcile must leave persisted job_runs unchanged"
+    );
+    assert_eq!(
+        states_before, states_after,
+        "--no-reconcile must leave persisted job_run_states unchanged"
+    );
+
+    let human_parent = fixture
+        .orbit()
+        .env_remove("RUST_LOG")
+        .args(["run", "show", PARENT, "--no-reconcile"])
+        .output()
+        .expect("show parent run in human mode");
+    assert!(human_parent.status.success(), "{human_parent:?}");
+    let human_parent_stdout = String::from_utf8_lossy(&human_parent.stdout);
+    let human_parent_stderr = String::from_utf8_lossy(&human_parent.stderr);
+    assert!(
+        human_parent_stderr.contains(&format!(
+            "warning: pipeline checkpoint unreadable for {CHILD}"
+        )),
+        "{human_parent_stderr}"
+    );
+    assert!(
+        human_parent_stderr.contains(&format!(
+            "warning: pipeline checkpoint unreadable for {SUCCESS_CHILD}"
+        )),
+        "{human_parent_stderr}"
+    );
+    assert!(
+        human_parent_stdout.contains(&format!("Root cause: run={CHILD} step=commit_task")),
+        "{human_parent_stdout}"
+    );
 
     const FAILED: &str = "jrun-root-cause-logs";
     seed_run_with_state(&fixture, FAILED, "failed");
