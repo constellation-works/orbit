@@ -1013,7 +1013,7 @@ input.field-editor-input {
   font-variant-numeric: tabular-nums;
 }
 
-/* A long description opens clamped behind a fade, with a toggle below. */
+/* Long description or acceptance criteria open clamped behind a fade, with a toggle below. */
 .description-block .markdown-body { color: var(--fg-soft); line-height: 1.7; }
 .task-detail .markdown-body :not(pre) > code,
 .task-detail .ac-list code {
@@ -1023,13 +1023,15 @@ input.field-editor-input {
   color: var(--fg-soft);
   font-size: 12px;
 }
-.description-block.clamped .markdown-body {
+.description-block.clamped .markdown-body,
+.criteria-block.clamped .ac-list {
   max-height: 13.5em;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent);
   mask-image: linear-gradient(to bottom, #000 65%, transparent);
 }
-.description-toggle {
+.description-toggle,
+.ac-toggle {
   margin-top: 12px;
   height: 30px;
   padding: 0 12px;
@@ -1042,9 +1044,12 @@ input.field-editor-input {
   font-weight: 500;
   cursor: pointer;
 }
-.description-toggle:hover { border-color: var(--fg-mute); color: var(--fg-strong); }
-.description-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-.task-detail[data-editing*="description"] .description-toggle { display: none; }
+.description-toggle:hover,
+.ac-toggle:hover { border-color: var(--fg-mute); color: var(--fg-strong); }
+.description-toggle:focus-visible,
+.ac-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.task-detail[data-editing*="description"] .description-toggle,
+.task-detail[data-editing*="acceptance_criteria"] .ac-toggle { display: none; }
 .row-detail .file-list {
   margin: 0;
   padding: 0;

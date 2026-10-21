@@ -30,10 +30,22 @@ const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
   { at: '2026-10-18T11:30:00Z', by: 'claude', message: 'Done: the detail now opens in a side panel.' },
 ];
+const sampleCriteria = [
+  'Task detail opens a long Acceptance criteria list collapsed, showing its count and the leading criteria, with a Show full AC button that expands it and a Show less button that collapses it again; a short list shows in full with no toggle.',
+  'The toggle is a keyboard-reachable button whose aria-expanded reflects its state, and an expanded list stays expanded when the detail panel rebuilds for the same task.',
+  'The Edit action on Acceptance criteria still edits every criterion whether the list is collapsed or expanded.',
+  'Dark-theme screenshots of the task detail at 1440px and 375px, collapsed and expanded, plus a before shot from the base revision, are attached as task artifacts.',
+  'All criteria are cited by number and rendered with inline Markdown formatting preserved.',
+  'The count indicator in the field header accurately reflects the total number of acceptance criteria.',
+  'Keyboard navigation via Tab reaches the toggle button and Enter/Space triggers the expand/collapse action.',
+  'The collapsed mask smoothly fades out the bottom of the list without clipping the field header or count.',
+  'Detail panel refresh preserves the expanded state across periodic background polls.',
+  'Inline field editor remains fully usable without horizontal overflow or clipped textareas.'
+];
 const full = task => ({
   ...task, projection: undefined,
   description: '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
-  acceptance_criteria: ['The list keeps its scroll position', 'The panel opens beside the list'],
+  acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
   created_by: 'operator', created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
   history: Array.from({ length: 6 }, (_, i) => ({ at: '2026-10-18T1' + i + ':00:00Z', by: 'operator', event: 'updated', note: 'edit ' + (i + 1) })),
@@ -41,7 +53,7 @@ const full = task => ({
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
 });
 globalThis.panelFixture = {
-  tasks, reads: [], writes: [], patches: [],
+  tasks, reads: [], writes: [], patches: [], sampleCriteria,
   holdCommentPost: false, releaseCommentPost: null, failCommentPost: false,
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false,
@@ -112,6 +124,7 @@ globalThis.fetch = async (input, options = {}) => {
       const body = JSON.parse(options.body);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       task.crew = body.crew;
+      if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
     }
     return task ? json(full(task)) : json({ error: 'not found' }, 404);
   }
@@ -618,6 +631,129 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     results.draftHeldCrewRevert = true;
+  }
+
+  // Long acceptance criteria open collapsed behind a Show full AC toggle,
+  // while short criteria show in full with no toggle. The toggle reflects
+  // aria-expanded, toggles via click and keyboard, preserves expanded state
+  // across detail rebuilds, and editing criteria shows all criteria in full.
+  {
+    const { page, errors, context } = await openPage();
+    // Short criteria (PANEL-1)
+    await row(page, 'PANEL-1').locator('.title').click();
+    await waitShown(page, 'PANEL-1');
+    const shortDetail = pane(page).locator('#detail-PANEL-1');
+    const shortCriteriaBlock = shortDetail.locator('.criteria-block');
+    await shortCriteriaBlock.waitFor({ state: 'visible' });
+    assert.equal(await shortCriteriaBlock.evaluate(node => node.classList.contains('clamped')), false, 'Short criteria list does not open clamped');
+    assert.equal(await shortCriteriaBlock.locator('.ac-toggle').count(), 0, 'Short criteria list has no toggle button');
+    assert.equal(await shortCriteriaBlock.locator('.ac-list > li').count(), 2, 'Short criteria list shows all criteria in full');
+
+    // Long criteria (PANEL-15)
+    await page.evaluate(() => {
+      const task = globalThis.panelFixture.tasks.find(item => item.id === 'PANEL-15');
+      if (task) task.acceptance_criteria = globalThis.panelFixture.sampleCriteria;
+    });
+
+    await row(page, 'PANEL-15').locator('.title').click();
+    await waitShown(page, 'PANEL-15');
+    const detail = pane(page).locator('#detail-PANEL-15');
+    const criteriaBlock = detail.locator('.criteria-block');
+    await criteriaBlock.waitFor({ state: 'visible' });
+    assert.equal(await criteriaBlock.evaluate(node => node.classList.contains('clamped')), true, 'Long criteria list opens clamped');
+    assert.equal(await criteriaBlock.locator('.field-count').innerText(), '10', 'Long criteria shows total count in header');
+    assert.equal(await criteriaBlock.locator('.ac-list > li').count(), 10, 'Long criteria renders leading and remaining list elements');
+
+    const toggle = criteriaBlock.locator('.ac-toggle');
+    await toggle.waitFor({ state: 'visible' });
+    assert.equal(await toggle.evaluate(node => node.tagName), 'BUTTON', 'Toggle is a button element');
+    assert.equal(await toggle.innerText(), 'Show full AC', 'Collapsed toggle button reads "Show full AC"');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'Collapsed toggle button has aria-expanded="false"');
+
+    await capture(page, 'task-detail-collapsed-dark-1440.png');
+
+    // Edit action while collapsed: editor shows every criterion and hides toggle
+    const editBtn = criteriaBlock.locator('.field-edit');
+    await editBtn.click();
+    const textarea = criteriaBlock.locator('.field-editor-input');
+    await textarea.waitFor({ state: 'visible' });
+    assert.equal(await toggle.isVisible(), false, 'Toggle button is hidden while editing');
+    const textareaLines = (await textarea.inputValue()).split('\n').filter(Boolean);
+    assert.equal(textareaLines.length, 10, 'Editor includes all 10 criteria while collapsed');
+    await criteriaBlock.locator('button.action.cancel').click();
+    await textarea.waitFor({ state: 'hidden' });
+    assert.equal(await toggle.isVisible(), true, 'Toggle button reappears after cancelling edit');
+    assert.equal(await toggle.innerText(), 'Show full AC', 'Toggle button still reads "Show full AC"');
+
+    // Expanding via click
+    await toggle.click();
+    assert.equal(await criteriaBlock.evaluate(node => node.classList.contains('clamped')), false, 'Clicking toggle expands the criteria list');
+    assert.equal(await toggle.innerText(), 'Show less', 'Expanded toggle button reads "Show less"');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'Expanded toggle button has aria-expanded="true"');
+
+    await capture(page, 'task-detail-expanded-dark-1440.png');
+
+    // Edit action while expanded: editor still shows all criteria
+    await editBtn.click();
+    await textarea.waitFor({ state: 'visible' });
+    assert.equal(await toggle.isVisible(), false, 'Toggle button is hidden while editing expanded criteria');
+    assert.equal((await textarea.inputValue()).split('\n').filter(Boolean).length, 10, 'Editor shows all 10 criteria while expanded');
+    await criteriaBlock.locator('button.action.cancel').click();
+    await textarea.waitFor({ state: 'hidden' });
+    assert.equal(await toggle.innerText(), 'Show less', 'Toggle button still reads "Show less" after cancel');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'Toggle button still has aria-expanded="true" after cancel');
+
+    // Collapsing via keyboard (Enter on focused button)
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await criteriaBlock.evaluate(node => node.classList.contains('clamped')), true, 'Pressing Enter collapses the list');
+    assert.equal(await toggle.innerText(), 'Show full AC', 'Toggle reads "Show full AC" after keyboard collapse');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'Toggle has aria-expanded="false" after keyboard collapse');
+
+    // Expanding via keyboard (Space on focused button)
+    await page.keyboard.press('Space');
+    assert.equal(await criteriaBlock.evaluate(node => node.classList.contains('clamped')), false, 'Pressing Space expands the list');
+    assert.equal(await toggle.innerText(), 'Show less', 'Toggle reads "Show less" after keyboard expand');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'Toggle has aria-expanded="true" after keyboard expand');
+
+    // Expanded state survives detail rebuild for the same task
+    await page.locator('#refresh-btn').click();
+    await waitShown(page, 'PANEL-15');
+    const rebuiltDetail = pane(page).locator('#detail-PANEL-15');
+    const rebuiltBlock = rebuiltDetail.locator('.criteria-block');
+    await rebuiltBlock.waitFor({ state: 'visible' });
+    assert.equal(await rebuiltBlock.evaluate(node => node.classList.contains('clamped')), false, 'Expanded criteria list stays expanded after detail refresh');
+    const rebuiltToggle = rebuiltBlock.locator('.ac-toggle');
+    assert.equal(await rebuiltToggle.innerText(), 'Show less', 'Rebuilt toggle reads "Show less"');
+    assert.equal(await rebuiltToggle.getAttribute('aria-expanded'), 'true', 'Rebuilt toggle has aria-expanded="true"');
+
+    // Clicking another row and clicking back keeps expanded state for PANEL-15
+    await row(page, 'PANEL-1').locator('.title').click();
+    await waitShown(page, 'PANEL-1');
+    await row(page, 'PANEL-15').locator('.title').click();
+    await waitShown(page, 'PANEL-15');
+    const reopenedBlock = pane(page).locator('#detail-PANEL-15 .criteria-block');
+    await reopenedBlock.waitFor({ state: 'visible' });
+    assert.equal(await reopenedBlock.evaluate(node => node.classList.contains('clamped')), false, 'Expanded criteria stays expanded when returning to task');
+    assert.equal(await reopenedBlock.locator('.ac-toggle').innerText(), 'Show less', 'Toggle button stays "Show less" when returning to task');
+
+    // 375px responsive phone captures
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'task-detail-expanded-dark-375.png');
+    await reopenedBlock.locator('.ac-toggle').click();
+    assert.equal(await reopenedBlock.evaluate(node => node.classList.contains('clamped')), true, 'Clicking toggle at 375px collapses the list');
+    await capture(page, 'task-detail-collapsed-dark-375.png');
+
+    // Copy shots to screenshots directory
+    const screenshotDir = path.resolve('.orbit/tmp/screenshots');
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    for (const name of ['task-detail-collapsed-dark-1440.png', 'task-detail-expanded-dark-1440.png', 'task-detail-collapsed-dark-375.png', 'task-detail-expanded-dark-375.png']) {
+      fs.copyFileSync(path.join(evidence, name), path.join(screenshotDir, name));
+    }
+
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.criteriaCollapse = true;
   }
 
   // Filter membership must not change the full-page crew's label, position,
