@@ -16,6 +16,45 @@ use super::*;
 /// passed starts one repair-only pull against itself, which takes the repair
 /// as a pull would and revokes the superseded claim.
 fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
+    owner_fallback(false, false);
+}
+
+fn the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full() {
+    owner_fallback(true, false);
+}
+
+fn repair_and_backlog_share_the_owner_ceiling_with_other_pulls() {
+    owner_fallback(true, true);
+}
+
+/// A live worker holds each unrelated delivery until the scenario ends.
+fn hold_owner_leaf(owner: &OrbitRuntime, task: &str) -> Worker {
+    let worker = Worker::spawn();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [task]})),
+            None,
+        )
+        .unwrap();
+    owner
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), worker.pid)
+        .unwrap();
+    worker
+}
+
+fn owner_fallback(busy: bool, with_backlog: bool) {
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     *pair.wire.accept_handoffs.lock().unwrap() = true;
@@ -109,12 +148,24 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
         )
         .unwrap();
     let auto = auto.run_id;
-    let auto_pass = || {
+    let mut held_workers = Vec::new();
+    if busy {
+        let unrelated = backlog_task(&owner, &pair.owner_repo, "src/unrelated.rs", None);
+        owner
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": unrelated, "status": "in-progress", "model": "codex"}),
+            )
+            .unwrap();
+        held_workers.push(hold_owner_leaf(&owner, &unrelated));
+        assert_eq!(owner_jobs.drain_leaf_occupancy().unwrap().occupied, 1);
+    }
+    let auto_pass = |ceiling| {
         let wave = owner
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),
-                &json!({"run_id": auto, "max_active_leaf_runs": 4}),
+                &json!({"run_id": auto, "max_active_leaf_runs": ceiling}),
                 ToolContext::default(),
             )
             .expect("classify");
@@ -134,7 +185,7 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
         (wave, waiting)
     };
 
-    let (wave, waiting) = auto_pass();
+    let (wave, waiting) = auto_pass(4);
     assert_eq!(
         waiting.reason.as_deref(),
         Some("repair_reserved"),
@@ -155,7 +206,34 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
     );
 
     orbit_core::test_support::with_repair_owner_fallback_elapsed(|| {
-        let (wave, waiting) = auto_pass();
+        if busy {
+            // A due repair starts nothing when the unrelated leaf fills the
+            // entire owner ceiling; no retry delay or child is created.
+            let (full, _) = auto_pass(1);
+            assert_eq!(full["free_slots"], 0, "{full}");
+            assert!(full["owner_repair_pull"].is_null(), "{full}");
+            assert!(
+                owner_jobs
+                    .list_job_runs("workspace_pull_pipeline")
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                pair.owner_claim(&delivered.claim_id)["claim"]["phase"],
+                "repair_pending"
+            );
+        }
+        if with_backlog {
+            for n in 0..3 {
+                backlog_task(
+                    &owner,
+                    &pair.owner_repo,
+                    &format!("src/backlog{n}.rs"),
+                    None,
+                );
+            }
+        }
+        let (wave, waiting) = auto_pass(4);
         let pull = wave["owner_repair_pull"]
             .as_str()
             .unwrap_or_else(|| panic!("the window passed, so a repair pull starts: {waiting:?}"))
@@ -174,9 +252,20 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
             "{waiting:?}"
         );
         workers.own(&pull).expect("the repair pull's worker");
-        // A pull already taking it is not started twice.
-        let (again, _) = auto_pass();
-        assert!(again["owner_repair_pull"].is_null(), "{again}");
+        if with_backlog {
+            // Interleave the owner's selected backlog wave before the repair
+            // pull allocates. One slot remains reserved for the repair.
+            let selected = wave["loose_task_ids"].as_array().unwrap();
+            assert_eq!(selected.len(), 2, "{wave}");
+            for task in selected {
+                held_workers.push(hold_owner_leaf(&owner, task.as_str().unwrap()));
+            }
+            assert_eq!(owner_jobs.drain_leaf_occupancy().unwrap().occupied, 3);
+        } else {
+            // A pull already taking it is not started twice.
+            let (again, _) = auto_pass(4);
+            assert!(again["owner_repair_pull"].is_null(), "{again}");
+        }
         assert_eq!(
             owner_jobs
                 .list_job_runs("workspace_pull_pipeline")
@@ -216,6 +305,44 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
             )
             .expect("a pass reports its errors instead of failing the drain");
         assert!(error_of(&pass).contains("dropped"), "{pass}");
+        assert_eq!(
+            owner_jobs.drain_leaf_occupancy().unwrap().occupied,
+            if with_backlog {
+                4
+            } else if busy {
+                2
+            } else {
+                1
+            },
+            "the repair occupies one shared slot beside the held deliveries"
+        );
+        if with_backlog {
+            // Another pull races for the remaining backlog after the repair
+            // bound its leaf: the same atomic workspace ceiling refuses it.
+            let competitor = owner_jobs
+                .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), None, None)
+                .unwrap();
+            owner
+                .write_run_state(
+                    &competitor.run_id,
+                    &PipelineState::new(competitor.run_id.clone(), competitor.job_id, json!({})),
+                )
+                .unwrap();
+            let claims_before = pair.owner_claims().len();
+            let full = owner
+                .run_deterministic(
+                    "pull_refill",
+                    &json!({}),
+                    &json!({"run_id": competitor.run_id, "destination": input["destination"],
+                    "window_expired": true, "for_seconds": 0, "max_active_leaf_runs": 4}),
+                    ToolContext::default(),
+                )
+                .unwrap();
+            assert!(error_of(&full).is_empty(), "{full}");
+            assert_eq!(full["admitted"], 0, "{full}");
+            assert_eq!(pair.owner_claims().len(), claims_before);
+            assert_eq!(owner_jobs.drain_leaf_occupancy().unwrap().occupied, 4);
+        }
         workers
             .release(&pull)
             .expect("release the repair pull's worker");
@@ -238,5 +365,7 @@ fn the_owner_drain_takes_a_repair_its_original_executor_never_pulls() {
 
 crate::scenario_table!(
     the_owner_drain_takes_a_repair_its_original_executor_never_pulls_scenarios,
-    the_owner_drain_takes_a_repair_its_original_executor_never_pulls
+    the_owner_drain_takes_a_repair_its_original_executor_never_pulls,
+    the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full,
+    repair_and_backlog_share_the_owner_ceiling_with_other_pulls
 );

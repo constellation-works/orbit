@@ -1500,7 +1500,12 @@ one. From then on:
     The owner wave admits the backlog.
   - The repair takes one of the drain's free slots. It passes the same
     crew screen as the drain's `--allow-crew` list, and the same OS,
-    browser-kit and capacity screens as any pull. The superseded claim
+    browser-kit and capacity screens as any pull. The repair pull inherits
+    the owner drain's total workspace leaf ceiling, so unrelated active
+    leaves count once against that ceiling. The owner reserves the due
+    repairs' free slots separately from its backlog wave, and each pull
+    allocation atomically checks shared occupancy before admitting work.
+    The superseded claim
     settles `revoked` in the same commit, and the repair leaf runs on the
     owner as a claimed leaf.
   - An owner drain whose admissions are stopped, or that is held by a

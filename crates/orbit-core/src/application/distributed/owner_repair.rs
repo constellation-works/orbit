@@ -59,6 +59,9 @@ pub(crate) struct OwnerRepairDrain<'a> {
     pub(crate) action: &'a str,
     /// Why the drain admits nothing at all this pass, if it does not.
     pub(crate) held: Option<&'a str>,
+    /// Total shared workspace ceiling, including leaves already running.
+    pub(crate) max_active_leaf_runs: u64,
+    /// Additional slots available to this pass, after occupancy and throttle.
     pub(crate) free_slots: usize,
 }
 
@@ -115,7 +118,7 @@ impl OrbitRuntime {
         }
         let detail = match self.repair_pull_wait(drain)? {
             Some(wait) => wait,
-            None => match self.submit_owner_repair_pull(drain, &location.machine_id, due.len()) {
+            None => match self.submit_owner_repair_pull(drain, &location.machine_id) {
                 Ok(Some(run_id)) => {
                     pass.reserved_slots = due.len().min(drain.free_slots);
                     let detail = format!(
@@ -221,7 +224,6 @@ impl OrbitRuntime {
         &self,
         drain: &OwnerRepairDrain<'_>,
         machine_id: &str,
-        repairs: usize,
     ) -> Result<Option<String>, OrbitError> {
         let Some(parent) = drain.drain_run_id else {
             return Ok(None);
@@ -241,7 +243,9 @@ impl OrbitRuntime {
             "destination": serde_json::to_value(&destination)
                 .map_err(|error| OrbitError::Store(error.to_string()))?,
             "owner_validation_gates": self.owner_validation_gates(),
-            "max_active_leaf_runs": repairs.min(drain.free_slots).max(1),
+            // Pull allocation compares against all workspace occupancy. The
+            // pass reserves repair slots from its backlog wave separately.
+            "max_active_leaf_runs": drain.max_active_leaf_runs,
             OWNER_REPAIR_PULL_INPUT_KEY: true,
         });
         if let Some(crews) = self
