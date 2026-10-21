@@ -80,9 +80,9 @@ compatibility.
 
 `orbit friction list` lists open and triaged records, newest first, in every
 output format. `--status` takes one status, several comma-separated, or `all`
-for the whole corpus; `--order oldest` restores creation order. The dashboard
-and `orbit.friction.list` tool calls that omit `status` and `order` still list
-every status, oldest first. Over a pipe, `--header` labels the plain columns.
+for the whole corpus; `--order oldest` restores creation order. The dashboard's
+status filter also starts on open and triaged records, and its `all` choice
+lists every status. Over a pipe, `--header` labels the plain columns.
 
 ## Tags
 
