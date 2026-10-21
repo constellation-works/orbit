@@ -228,6 +228,8 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `crates/orbit-core/src/application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit` (criterion 3, fail-closed replay identity). A real Git divergence is replayed through the source adapter, using a provider lookup that panics. The test proves that a retained certificate exclusion is restated from its own record, so no fresh provider proof is needed. The store then accepts it onto its canonical commit with the certificate intact. The public `auto-task recover --replay-history` path cannot swap in that lookup without a live GitHub provider. The evaluator and store outcomes are covered at the public boundary in `crates/orbit-automation/tests/scheduling/delivery_recovery.rs`.
+
 - `crates/orbit-core/src/application/pull_drain/tests/drain.rs::claimed_leaf_settlement_carries_its_review_ledger` and `claimed_review_import_keeps_an_operator_decision` (criterion 3, durable review-state safety). The first exercises the production settlement path and proves an exhausted follower ledger reaches the owner under the claim lineage; the public escalation-and-requeue scenario starts from a prepared settlement and cannot prove that producer path. The second replays exhausted claim evidence after an operator reset and proves it cannot erase the reset decision; the public command scenario covers the escalation's requeue, not a later stale receipt.
 
 - `orbit-common/src/process/tests/ancestry.rs::native_tree_cpu_counts_reaped_descendants_once`

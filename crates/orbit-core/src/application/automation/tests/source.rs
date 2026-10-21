@@ -20,7 +20,8 @@ use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
 };
 use orbit_types::workflow::automation::{
-    AutomationState, CoverageClass, DeliveryTrigger, SourcePage,
+    AutomationState, CoverageClass, Delivery, DeliveryExclusion, DeliveryTrigger, ExcludedDelivery,
+    SourcePage,
 };
 
 use super::super::source::{
@@ -660,6 +661,119 @@ fn back_merge_with_a_different_first_parent_patch_is_not_mapped() {
         ),
         other => panic!("expected history_mapping_ambiguous, got {other:?}"),
     }
+}
+
+/// An unresolved commit ahead of a certificate-excluded landing, rebased: the
+/// exclusion is restated from its own record, without a provider lookup, and
+/// moves onto its canonical commit with its certificate intact.
+#[test]
+fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
+    let history = diverged(2, 2);
+    let (source, mut state) = state_for(history.root.path(), &history.old[1]);
+    let trigger = DeliveryTrigger {
+        owner_machine: Some("fixture-machine".into()),
+        branch: "main".into(),
+        threshold: 2,
+        max_wait_minutes: 60,
+        coverage: CoverageClass::LandedCodeReviewV1,
+        max_items: 50,
+        retries: 0,
+    };
+    let landed_at = chrono::DateTime::UNIX_EPOCH;
+    let excluded = ExcludedDelivery {
+        delivery: Delivery {
+            key: "pr:example/repo:main:2".into(),
+            repository: state.repository.clone(),
+            branch: "main".into(),
+            before: source.revision(&history.old[0]).expect("before"),
+            after: source.revision(&history.old[1]).expect("after"),
+            commits: vec![history.old[1].clone()],
+            task_ids: vec!["task-e".into()],
+            unattributed: None,
+            evidence_reference: "https://github.com/example/repo/pull/2".into(),
+            evidence_digest: "evidence-2".into(),
+            landed_at,
+        },
+        exclusion: DeliveryExclusion {
+            attempt_id: "certificate-attempt".into(),
+            assurance: "reviewed".into(),
+            task_meaning_digest: "meaning".into(),
+            final_candidate_tree: "reviewed-tree".into(),
+        },
+        decided_at: landed_at,
+    };
+    state.trigger = Some(trigger.clone());
+    state.pending_commits = history.old.clone();
+    state.unresolved = [(history.old[0].clone(), "provider_identity_missing".into())].into();
+    state.excluded = vec![excluded.clone()];
+
+    let (page, record) =
+        replay(&source, &state).expect("a retained exclusion needs no fresh provider proof");
+
+    let store = compose::automation_store(Store::open_in_memory().expect("store"))
+        .expect("automation store");
+    let baseline = AutomationState {
+        observed: state.baseline.clone(),
+        generation: 0,
+        pending_commits: vec![],
+        unresolved: Default::default(),
+        excluded: vec![],
+        ..state.clone()
+    };
+    assert!(store.automation_initialize(&baseline).expect("initialize"));
+    assert!(
+        store
+            .automation_commit(&baseline, &state, None)
+            .expect("observe orphans")
+    );
+    let request = RecoveryRequest {
+        replay_history: true,
+        reason: "reconcile the content-preserving rebase".into(),
+        ..RecoveryRequest::default()
+    };
+    recovery::apply(
+        store.as_ref(),
+        &Recovery {
+            consumer: &state.consumer,
+            epoch: &state.epoch,
+            trigger: &trigger,
+            repository: &state.repository,
+            host_refusal: None,
+            request: &request,
+            by: "operator",
+            now: landed_at,
+            replay: Some(HistoryReplayInput { page, record }),
+            resolved_action_id: None,
+            expected_generation: Some(state.generation),
+            action_terminal: false,
+            action_failed_without_evidence: false,
+        },
+    )
+    .expect("the replay applies");
+
+    let checkpoint = store
+        .automation_state(&state.consumer)
+        .expect("state")
+        .expect("checkpoint");
+    assert_eq!(checkpoint.pending_commits, history.new);
+    assert_eq!(
+        checkpoint.unresolved,
+        [(history.new[0].clone(), "provider_identity_missing".into())].into()
+    );
+    let [moved] = checkpoint.excluded.as_slice() else {
+        panic!("one retained exclusion: {:?}", checkpoint.excluded);
+    };
+    assert_eq!(moved.delivery.commits, [history.new[1].clone()]);
+    assert_eq!(moved.delivery.after.commit, history.new[1]);
+    assert_eq!(moved.delivery.task_ids, excluded.delivery.task_ids);
+    assert_eq!(
+        (&moved.exclusion, moved.decided_at),
+        (&excluded.exclusion, excluded.decided_at)
+    );
+    assert!(
+        checkpoint.pending.is_empty(),
+        "an exclusion is not new debt"
+    );
 }
 
 #[test]
