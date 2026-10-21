@@ -502,7 +502,7 @@ impl ManagedAssetOptOut {
 }
 
 /// Clear an operator opt-out and record `digest` as the provenance of the
-/// shipped content just written back for `name`.
+/// shipped content for `name`.
 /// The caller holds the workspace cursor sidecar across the definition write
 /// and this manifest update, excluding reconciliation, delete and rollback.
 pub(crate) fn restore_managed_asset(

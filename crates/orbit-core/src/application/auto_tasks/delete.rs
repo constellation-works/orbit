@@ -178,6 +178,8 @@ impl OrbitRuntime {
     /// opt-out a delete recorded for it. Refuses a name Orbit does not ship
     /// and a definition that already exists. The existence check, definition
     /// write and manifest update share the cursor lock with delete and sync.
+    /// Settings and manifest updates precede the definition write, so their
+    /// failure leaves the name available for retry.
     pub fn auto_task_restore(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
@@ -207,14 +209,9 @@ impl OrbitRuntime {
 
             let rendered = render_default_auto_task(embedded, self.workspace_base_branch());
             let definition = parse_auto_task_yaml(&rendered)?;
+            let actor = self.actor().resolve_write_label(None, None)?;
             // Restore means the shipped definition, without earlier settings.
             self.drop_auto_task_settings(name)?;
-            atomic_write_text(&path, &rendered).map_err(|error| {
-                OrbitError::Io(format!(
-                    "restore auto-task '{name}' at {}: {error}",
-                    path.display()
-                ))
-            })?;
             restore_managed_asset(
                 &auto_tasks_dir(&self.paths().local_dir),
                 ASSET_KIND,
@@ -223,7 +220,12 @@ impl OrbitRuntime {
                 sha256_hex(rendered.as_bytes()),
             )?;
 
-            let actor = self.actor().resolve_write_label(None, None)?;
+            atomic_write_text(&path, &rendered).map_err(|error| {
+                OrbitError::Io(format!(
+                    "restore auto-task '{name}' at {}: {error}",
+                    path.display()
+                ))
+            })?;
             self.record_auto_task_audit(
                 "restore",
                 name,
