@@ -252,6 +252,20 @@ in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
+For substantive source targets, inspect the repository's generator or
+synchronization evidence at the revision being scoped. Declare each exact
+generated companion that the planned source change is expected to alter
+alongside its canonical source, and record the source-to-output mapping and
+generator evidence in the description. Edit canonical sources and regenerate
+through the repository's generator; declaring a companion does not authorize
+hand-editing derived files. Do not sweep a generated tree, add unrelated
+goldens, or attach outputs of read-only evidence sources. Add no companion
+without evidence that it will change. Existing selector checks and creation
+authorization still apply: use the supported creation-intent path below for a
+known missing companion; a generator relationship alone grants no creation
+intent. Task-pilot records an expected missing output without authorization
+as an evidence gap rather than proposing an undeclared missing selector.
+
 For review-filed tasks, task-pilot keeps selectors the finding names as change
 targets. It may omit a selector it verifies as read-only evidence or an
 incidental shared-doc touch by recording its exact selector and inspection

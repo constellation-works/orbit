@@ -320,6 +320,21 @@ spec:
        Omit `context_evidence_dropped` or use [] when no verified drops apply.
        Apply uses the host's prepared snapshot as `context_files_before`;
        do not echo that list in your assessment.
+       For substantive source targets, inspect the repository's generator or
+       synchronization evidence at `source_revision` (or in the supplied
+       filesystem for a non-Git workspace). When that evidence establishes
+       an exact derived companion that the planned source change will alter,
+       include its exact file selector alongside the source in
+       `context_files_after`. Record the source-to-output mapping and the
+       generator evidence in `assessment_rationale`. Edit canonical sources
+       and regenerate their companions through the repository's generator;
+       companion declaration does not authorize hand-editing derived files.
+       Do not add a whole generated tree, unrelated goldens, or outputs of
+       sources consulted only as evidence. If no changed companion is
+       established, add none. The existence and operator-declared creation
+       rules above apply to companions too: generator evidence alone does
+       not authorize a missing selector. Report an expected missing output
+       without creation authorization as an evidence gap instead.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the
        files that actually reference the symbol — enumerate them
