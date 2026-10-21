@@ -527,10 +527,15 @@ orbit auto-task recover delivery-code-review --replay-history \
 ```
 
 Replay never rewrites Git. It preserves the baseline, covered cursor, accepted
-receipts, waivers, exclusions, and the complete active batch/action/input digest.
+receipts, waiver records, and the complete active batch/action/input digest.
 Pending deliveries, unresolved commits, and provider associations are replaced
 only through stable delivery keys and exact commit mapping; inserted commits use
-the normal provider association path. A mapped unresolved-only orphan keeps its
+the normal provider association path. A retained waived or excluded landing
+stays waived or excluded, keeping its certificate and decision time, and moves
+onto exactly the mapped images of its commits. That lets an excluded prefix
+retire, and lets an accepted batch clear waivers and exclusions, against
+canonical commits. A replay that cannot restate such a landing over that exact
+mapping is refused. A mapped unresolved-only orphan keeps its
 exact reason on the canonical commit without acquiring a fabricated provider
 association. Retained provider associations keep their PR identity and map
 their shared delivery anchor through the complete proven commit mapping;

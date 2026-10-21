@@ -165,6 +165,7 @@
         "application/automation/tests/source.rs::held_fetch_lock_consumes_only_the_remaining_source_deadline",
         "application/automation/tests/source.rs::missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence",
         "application/automation/tests/source.rs::recorded_associations_survive_observation_and_missing_identities_back_off",
+        "application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit",
         "application/automation/tests/source.rs::replay_provider_lookups_use_a_fresh_source_after_the_initial_head",
         "application/automation/tests/source.rs::timed_out_source_reaps_its_leader_and_kills_the_grandchild",
         "application/automation/tests/stall.rs::concurrent_reporters_for_one_divergence_persist_one_friction",
