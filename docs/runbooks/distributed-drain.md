@@ -631,7 +631,13 @@ The dashboard's **Drain** › **Start a window** offers the pull on a replica:
 `POST /api/workflows/auto`, and refuses the options `--pull` refuses in the
 command line's words. On a replica running a pull window, the Drain page's
 **Pulling from the owner** card shows the claim budget, the claims by stage and
-any refused settlement from the run's detail.
+any refused settlement from the run's detail. Its budget uses the allocator's
+workspace-wide `pull_occupancy` reading (`occupied` and `reviewing`), counting
+launching admissions, terminal leaves awaiting settlement and other workspace
+leaves once each. Review credit is capped at the live concurrency ceiling:
+`occupied − min(reviewing, N) < N`. An unavailable reading shows an unknown
+budget. The claims-by-stage table separately lists only this drain's running
+claimed leaves; an empty table does not mean capacity is free.
 
 `<selector>` is the owner's host-qualified selector from federated discovery
 (`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no host entry
