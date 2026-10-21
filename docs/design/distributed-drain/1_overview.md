@@ -129,7 +129,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
 - [ORB-12492] — retired terminal failed-run triage (§7.2).
-- [ORB-12491] — retired epic execution and added the isolated retirement check (§7.1).
+- [ORB-12491] — retired epic execution (§7.1).
 - [ORB-12490] — replaced context pruning with `declared_context_files`.
 - [ORB-12495] — added the probe, receipt lookup and claim listing.
 - [ORB-12500] — added published-PR observation and the shared entry-point admission decision.

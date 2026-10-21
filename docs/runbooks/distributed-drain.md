@@ -1927,8 +1927,8 @@ the `epic` tag except for roots that declared **no** own `context_files` while
 a descendant did. Those inherited-only roots are withheld until an operator
 supplies own context or retires them. Do not guess the union.
 
-There is no public `epic retirement` command. Gather the same evidence the
-read-only readiness check uses:
+There is no public `epic retirement` command. Gather the reconciliation evidence
+manually using standard inspection commands:
 
 ```bash
 orbit run history -j epic_pipeline --limit 50

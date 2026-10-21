@@ -1265,11 +1265,10 @@ Kept:
 - **`workspace_auto_pipeline`'s drain window, slot refill and detached leaves**
   (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`).
 
-**Migration check.** `assess_epic_retirement` in `crates/orbit-core/src/application/epic_retirement.rs`
-is a pure decision over a tasks/runs/reservations snapshot; `OrbitRuntime::epic_retirement_readiness`
-is its read-only gatherer. It refuses while any old epic execution, child execution, reservation or
-uncertain landing is unreconciled, regardless of root status (a root in `review` can still have a
-live `complete_pr` step), and reports inherited-only roots and the historical runs GC must still find.
+**Migration.** There is no automated migration command or code readiness check. Operators
+reconcile leftover epic executions, child executions, reservations, and uncertain landings
+manually before treating a workspace as migrated (see the runbook checklist in
+[`distributed-drain.md`](../../runbooks/distributed-drain.md#migration-recipe-leftover-epic-child-review-and-reservations)).
 
 **Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
 withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
@@ -1421,7 +1420,7 @@ Acceptance criteria, not reported as passing.
 | Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |
 | Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
-| Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
+| Epic retirement with active old runs, including roots in review | Operator reconciles execution and reservations before migration following the runbook checklist |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
 | `review.timing` `off`, `before_pr` or `before_landing`, after-landing auto-task on or off | With `off`, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with either timing, admit only a PR-mode executor declaring `review_gate` and require typed review evidence for the captured timing: before-PR evidence before the PR opens, or before-landing evidence for the settled head after `pr_open`. After-landing does not affect admission |
