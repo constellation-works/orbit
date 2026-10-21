@@ -290,8 +290,13 @@ dashboard needs no field-name check of its own.
 
 ### Step 9. Verify contract stability
 
-Run the gates in [CLAUDE.md](../../../../CLAUDE.md#gates) (`make ci-fast`,
-`make ci-test-affected`, `make ci-lint`, `make goldens`), sequentially, then:
+Follow the current [workspace gate guidance](../../../../CLAUDE.md#gates) for
+delivery validation. Run focused checks for the changed behavior and Clippy on
+the changed crates. Run `make goldens` when CLI help, MCP text or another
+golden surface changes; use `make goldens UPDATE=1` to regenerate and review
+those changes. Whole-workspace commands are not blanket local pre-handoff
+gates; the delivery pipeline owns required PR checks and any configured final
+validation. Then:
 
 ```sh
 git diff --stat crates/orbit-cli/tests/snapshots/mcp_tools_list.json   # empty, or explained
