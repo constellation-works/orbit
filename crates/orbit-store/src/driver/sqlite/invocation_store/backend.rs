@@ -36,9 +36,10 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
     fn list_provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<crate::contracts::ProviderLedgerEntry>, orbit_common::OrbitError> {
-        Self::list_provider_ledger_entries(self, provider_names, since)
+        Self::list_provider_ledger_entries(self, provider_names, account, since)
     }
 
     fn list_activity_invocation_metrics(

@@ -10,7 +10,7 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
+use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
     DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
     TagInstruction,
@@ -21,7 +21,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::activity_job::{
-    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
+    DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
+    ResolvedShellExecutor,
 };
 
 use super::super::{
@@ -851,10 +852,8 @@ pub trait NullRuntimeHost: Send + Sync {
         &self,
         _job_run_id: &str,
         _activity_id: &str,
-        _provider: &str,
-        _model: Option<&str>,
         _input: &Value,
-        _trace: &InvocationTrace,
+        _invocation: &DispatchInvocationTrace,
     ) -> Result<(), DispatchError> {
         Ok(())
     }

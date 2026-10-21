@@ -9,6 +9,7 @@ use orbit_types::workflow::activity_job::Provider;
 pub(crate) fn typed_crew_config(crew: &Crew) -> CrewConfig {
     CrewConfig {
         env: crew.env.clone(),
+        account: crew.account().map(ToOwned::to_owned),
         ..typed_crew_config_from_assignment(&crew.assignment)
     }
 }
@@ -51,5 +52,6 @@ fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewConfig {
         model,
         reasoning_effort: raw.effort,
         env: Vec::new(),
+        account: None,
     }
 }

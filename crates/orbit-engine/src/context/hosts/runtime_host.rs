@@ -11,7 +11,7 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
+use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
     DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
     TagInstruction,
@@ -22,7 +22,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::activity_job::{
-    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
+    DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
+    ResolvedShellExecutor,
 };
 
 use super::{
@@ -1003,14 +1004,14 @@ pub trait RuntimeHost: Send + Sync {
         proc_allowed_programs: Option<&[String]>,
     ) -> ToolContext;
 
+    /// Record one dispatch's invocation: its provider, model, crew account
+    /// and trace.
     fn persist_invocation_trace(
         &self,
         job_run_id: &str,
         activity_id: &str,
-        provider: &str,
-        model: Option<&str>,
         input: &Value,
-        trace: &InvocationTrace,
+        invocation: &DispatchInvocationTrace,
     ) -> Result<(), DispatchError>;
 
     /// Resolve the crew selected for an activity dispatch. The engine passes

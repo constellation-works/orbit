@@ -156,6 +156,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 

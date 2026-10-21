@@ -48,8 +48,8 @@ pub use implementer_findings::{normalize_unfiled_findings, unfiled_findings_shap
 pub use implementer_regression::{REGRESSION_FROM_FIELD, implementer_regression_from};
 pub use provider_hold::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderCrewOutage,
-    ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, failed_provider,
-    provider_failure_text,
+    ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, failed_account,
+    failed_provider, provider_account_label, provider_failure_text, with_failed_account,
 };
 pub use root_cause::{
     CHILD_CANCELLED_ERROR_CODE, CHILD_TIMEOUT_ERROR_CODE, HeldFailure,

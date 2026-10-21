@@ -78,16 +78,19 @@ impl Store {
         Ok(records)
     }
 
-    /// Every invocation of the provider since `since`, oldest first, on any
-    /// workspace of this host [ORB-14699].
+    /// Every invocation of the provider account since `since`, oldest
+    /// first, on any workspace of this host [ORB-14699].
     ///
     /// A row's provider is its `provider` column, else its `agent` for a row
-    /// recorded without one. The timestamps are text of varying fractional
-    /// width, so the query reads a second early and the cut is made on the
-    /// parsed time.
+    /// recorded without one. [ORB-17288] `account` names a crew account: only
+    /// its rows count. `None` is the provider's default login: rows recorded
+    /// without an account, every row recorded before accounts were named
+    /// included. The timestamps are text of varying fractional width, so the
+    /// query reads a second early and the cut is made on the parsed time.
     pub fn list_provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
         if provider_names.is_empty() {
@@ -107,6 +110,10 @@ impl Store {
         filters
             .conditions
             .push(format!("COALESCE(i.provider, LOWER(i.agent)) IN ({names})"));
+        match account {
+            Some(account) => filters.push_filter("i.account = ?", account.to_string()),
+            None => filters.conditions.push("i.account IS NULL".to_string()),
+        }
         let sql = format!(
             "SELECT i.ts, i.input_tokens, i.output_tokens, i.provider_cost_usd \
              FROM invocations i {} ORDER BY i.ts ASC, i.id ASC",
@@ -253,7 +260,7 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
     let sql = format!(
         "SELECT i.id, i.ts, i.job_run_id, i.activity_id, i.agent, i.model, i.duration_ms, \
          i.input_tokens, i.cache_read_tokens, i.cache_create_tokens, i.cache_create_1h_tokens, \
-         i.output_tokens, i.tool_call_count, i.provider_cost_usd \
+         i.output_tokens, i.tool_call_count, i.provider_cost_usd, i.account \
          FROM invocations i {} ORDER BY i.ts DESC, i.id DESC LIMIT ?{}",
         query.where_clause(),
         query.len()

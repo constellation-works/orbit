@@ -28,8 +28,10 @@ pub enum CrewExclusionSource {
     /// provider CLI cannot be found or resolved here.
     Preflight,
     /// A claimed leaf failed because the provider could not be used.
-    /// Authentication excludes every configured crew of that provider for
-    /// the window; a capacity failure excludes only the leaf's crew, and only
+    /// Authentication excludes every configured crew of that provider
+    /// account for the window: the leaf's crew alone when it sets `env` and
+    /// so is its own account, else the provider's crews without `env`
+    /// [ORB-17288]. A capacity failure excludes only the leaf's crew, and only
     /// until the exclusion's `until`: a bounded backoff that doubles with each
     /// repeat in the window [ORB-15791].
     ProviderUnavailable,
@@ -58,10 +60,18 @@ pub struct CrewExclusion {
     pub until: Option<DateTime<Utc>>,
 }
 
-/// Operator-visible authentication exclusion for one provider on this host.
+/// Operator-visible authentication exclusion for one provider account on
+/// this host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PullAuthExclusion {
     pub provider: String,
+    /// The crew whose `env` names the failing credential, when that crew is
+    /// its own account; the exclusion and its probe then cover only it.
+    /// `None` for the provider's default login, which every crew without
+    /// `env` shares, and for every exclusion recorded before accounts were
+    /// named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub host: String,
     pub excluded_at: DateTime<Utc>,
     pub error_class: String,
@@ -78,7 +88,7 @@ impl PullAuthExclusion {
     pub fn describe(&self) -> String {
         format!(
             "{} auth failed on {} at {} ({}; credentials: {}); {}; next probe: {}",
-            self.provider,
+            crate::workflow::provider_account_label(&self.provider, self.account.as_deref()),
             self.host,
             self.excluded_at.to_rfc3339(),
             self.error_class,

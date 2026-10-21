@@ -55,6 +55,7 @@ fn minted_review(
         runtime
             .record_provider_limit(&ProviderLimitObservation {
                 provider: provider.into(),
+                account: None,
                 model: None,
                 window: None,
                 exhausted: true,

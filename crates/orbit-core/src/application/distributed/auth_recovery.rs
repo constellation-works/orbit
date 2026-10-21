@@ -1,4 +1,10 @@
 //! Delayed recovery of a pull drain's released authentication incidents.
+//!
+//! [ORB-17288] An incident belongs to one provider account: the crew that
+//! reported it when that crew sets `env` and so runs on its own credential,
+//! else the provider's default login. Incidents are probed once per account,
+//! the probe runs with that account's crew environment, and a passing probe
+//! re-admits only that account's crews.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +35,12 @@ impl OrbitRuntime {
             }
         }
         exclusions.sort_by(|a, b| {
-            (&a.host, &a.provider, a.excluded_at).cmp(&(&b.host, &b.provider, b.excluded_at))
+            (&a.host, &a.provider, &a.account, a.excluded_at).cmp(&(
+                &b.host,
+                &b.provider,
+                &b.account,
+                b.excluded_at,
+            ))
         });
         exclusions.dedup();
         Ok(exclusions)
@@ -78,9 +89,18 @@ impl OrbitRuntime {
             .and_then(|run| run.finished_at)
             .or_else(|| leaf.as_ref().map(|run| run.created_at))
             .unwrap_or_else(Utc::now);
+        let account = crew.account().map(ToOwned::to_owned);
+        let relogin_hint = match &account {
+            Some(account) => self.account_relogin_hint(account),
+            None => probe.as_ref().map_or_else(
+                || relogin_hint(&provider),
+                |probe| probe.relogin_hint.clone(),
+            ),
+        };
         Ok(Some(PullAuthRecovery {
             exclusion: PullAuthExclusion {
                 provider: provider.clone(),
+                account,
                 host: record
                     .request
                     .run_context
@@ -89,10 +109,7 @@ impl OrbitRuntime {
                     .unwrap_or_else(|| record.destination.execution_machine_id.clone()),
                 excluded_at: at,
                 error_class: "provider_unavailable/auth".into(),
-                relogin_hint: probe.as_ref().map_or_else(
-                    || relogin_hint(&provider),
-                    |probe| probe.relogin_hint.clone(),
-                ),
+                relogin_hint,
                 credential_source: auth_credential_source(self, &provider, &crew.env),
                 next_probe_at: probe.as_ref().map(|_| at + INITIAL_DELAY),
                 attempts: 0,
@@ -102,25 +119,17 @@ impl OrbitRuntime {
         }))
     }
 
-    /// Probe due auth exclusions once per provider. Reserving the backoff before
-    /// spawn makes a crash/retry wait too; capacity and refusal never enter here.
+    /// Probe due auth exclusions once per provider account. Reserving the
+    /// backoff before spawn makes a crash/retry wait too; capacity and
+    /// refusal never enter here.
     pub(crate) fn recover_pull_auth_exclusions(&self, run_id: &str) -> Result<(), OrbitError> {
         let stored = self
             .read_run_state(run_id)?
             .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut incidents = BTreeMap::new();
-        let mut incident_crews = BTreeMap::new();
         for record in self.stores().jobs().local_pull_claims_admitted_by(run_id)? {
             if let Some(incident) = self.pull_auth_incident(&record, &stored)? {
-                if let Some(ClaimMutation::Release(evidence)) = &record.settlement
-                    && let Some(crew) = evidence
-                        .provider_unavailable
-                        .as_ref()
-                        .and_then(|unavailable| unavailable.crew.clone())
-                {
-                    incident_crews.insert(record.request.request_id.clone(), crew);
-                }
                 incidents.insert(record.request.request_id, incident);
             }
         }
@@ -140,15 +149,20 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         let now = Utc::now();
-        let due: BTreeSet<String> = incidents
+        let due: BTreeSet<(String, Option<String>)> = incidents
             .values()
             .filter(|incident| {
                 incident.recovered_at.is_none()
                     && incident.exclusion.next_probe_at.is_some_and(|at| at <= now)
             })
-            .map(|incident| incident.exclusion.provider.clone())
+            .map(|incident| {
+                (
+                    incident.exclusion.provider.clone(),
+                    incident.exclusion.account.clone(),
+                )
+            })
             .collect();
-        for provider in due {
+        for (provider, account) in due {
             // An operator may remove the declaration; retain the exclusion.
             let Some(probe) = self
                 .get_executor_def(&provider)?
@@ -159,7 +173,9 @@ impl OrbitRuntime {
             let ids: Vec<String> = incidents
                 .iter()
                 .filter(|(_, incident)| {
-                    incident.recovered_at.is_none() && incident.exclusion.provider == provider
+                    incident.recovered_at.is_none()
+                        && incident.exclusion.provider == provider
+                        && incident.exclusion.account == account
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
@@ -206,8 +222,7 @@ impl OrbitRuntime {
             if !reserved {
                 continue;
             }
-            let crew_env =
-                self.auth_probe_crew_env(ids.iter().filter_map(|id| incident_crews.get(id)));
+            let crew_env = self.auth_probe_crew_env(account.as_deref());
             let outcome = run_auth_probe(
                 self,
                 &provider,
@@ -238,9 +253,10 @@ impl OrbitRuntime {
                     }
                     Ok(())
                 })?;
-            tracing::info!(target: "orbit.core.pull", run_id, %provider, passed, at = %finished, "authentication recovery probe completed");
+            let account = account.as_deref().unwrap_or("default");
+            tracing::info!(target: "orbit.core.pull", run_id, %provider, account, passed, at = %finished, "authentication recovery probe completed");
             if let Err(error) = outcome {
-                tracing::warn!(target: "orbit.core.pull", run_id, %provider, %error, "authentication probe failed; exclusion retained with backoff");
+                tracing::warn!(target: "orbit.core.pull", run_id, %provider, account, %error, "authentication probe failed; exclusion retained with backoff");
             }
         }
         Ok(())
@@ -248,30 +264,38 @@ impl OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    /// The `[crews.<name>] env` a provider's probe runs with: that of the
-    /// crews whose leaves reported the incidents, when they agree, so a
-    /// probe checks the credential those leaves used. Exclusions are still
-    /// keyed by provider, so incidents from crews with different `env` probe
-    /// with the provider's shared environment.
-    fn auth_probe_crew_env<'a>(
-        &self,
-        crews: impl Iterator<Item = &'a String>,
-    ) -> Vec<orbit_types::identity::CrewEnvVar> {
-        let registry = self.context.settings().crews();
-        let mut envs = crews
-            .map(|name| {
-                registry
-                    .get(name)
-                    .map(|crew| crew.env.clone())
-                    .unwrap_or_default()
+    /// The `[crews.<name>] env` a provider account's probe runs with: the
+    /// crew account's own, so the probe checks the credential its leaves
+    /// used, or none for the provider's default login, which runs on the
+    /// shared environment. A crew account this host no longer defines probes
+    /// with none.
+    fn auth_probe_crew_env(&self, account: Option<&str>) -> Vec<orbit_types::identity::CrewEnvVar> {
+        account
+            .and_then(|account| self.context.settings().crews().get(account))
+            .map(|crew| crew.env.clone())
+            .unwrap_or_default()
+    }
+
+    /// What renews a crew account's credential: the variables its
+    /// `[crews.<name>] env` passes, by name only.
+    pub(crate) fn account_relogin_hint(&self, account: &str) -> String {
+        let entries = self
+            .context
+            .settings()
+            .crews()
+            .get(account)
+            .map(|crew| {
+                crew.env
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             })
-            .collect::<Vec<_>>();
-        envs.sort();
-        envs.dedup();
-        match envs.as_slice() {
-            [env] => env.clone(),
-            _ => Vec::new(),
-        }
+            .unwrap_or_default();
+        format!(
+            "Renew the credential crew `{account}` runs on: the variables its \
+             `[crews.{account}] env` passes ({entries}) on this host."
+        )
     }
 }
 

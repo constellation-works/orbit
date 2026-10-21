@@ -28,6 +28,7 @@ fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_i
             workspace_id,
             &InvocationInsertParams {
                 job_run_id: run_id.to_string(),
+                account: None,
                 activity_id: activity_id.to_string(),
                 agent: "claude".to_string(),
                 provider: None,

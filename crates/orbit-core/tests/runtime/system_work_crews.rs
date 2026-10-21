@@ -185,6 +185,7 @@ fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews(
     fx.runtime
         .record_provider_limit(&ProviderLimitObservation {
             provider: "claude".into(),
+            account: None,
             model: None,
             window: Some("five_hour".into()),
             exhausted: true,

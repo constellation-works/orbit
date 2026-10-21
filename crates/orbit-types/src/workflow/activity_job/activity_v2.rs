@@ -176,6 +176,12 @@ pub struct AgentLoopSpec {
     /// supply it.
     #[serde(skip)]
     pub crew_env: Vec<crate::identity::CrewEnvVar>,
+    /// The dispatching crew's name when it sets `env` and so is its own
+    /// provider account ([`crate::identity::Crew::account`]), set with
+    /// `crew_env`. A failure, a usage reading and an invocation of this
+    /// dispatch are attributed to that account. Never persisted.
+    #[serde(skip)]
+    pub crew_account: Option<String>,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].

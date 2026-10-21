@@ -3,7 +3,9 @@
 //! A usage limit belongs to the provider login on one host, so each host keeps
 //! its own record. Every limit failure writes an observation, and so does
 //! every Codex or Claude run that reported its usage windows [ORB-14696]; the
-//! latest per provider, model scope and window stands. A provider that reports
+//! latest per provider account, model scope and window stands. A crew that
+//! sets `env` is its own account, so its readings are kept apart from its
+//! provider's default login's. A provider that reports
 //! nothing can instead be given an operator-declared budget, which the host
 //! reads from its invocation ledger as a `ledger` observation [ORB-14699];
 //! those are computed when asked for and never stored.
@@ -61,6 +63,12 @@ impl ProviderLimitSource {
 pub struct ProviderLimitObservation {
     /// The provider whose account the limit belongs to (`codex`, `claude`).
     pub provider: String,
+    /// The crew account the reading was taken under: a crew that sets `env`
+    /// runs on its own credential, so its readings limit only it. `None` for
+    /// the provider's default login, whose readings limit every crew without
+    /// `env`, and for every reading stored before accounts were named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// The model or model family the limit covers, when the provider named
     /// one; `None` covers the whole account.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -276,6 +276,7 @@ impl BrokerHost {
             proc_disallowed_programs: None,
             trusted_host_execution: false,
             crew_env: Vec::new(),
+            crew_account: None,
         };
         run_cli_backend(
             self,

@@ -12,7 +12,8 @@ use super::entries::RefusedPullSettlement;
 ///
 /// The window's provider preflight, taken once when it opened, minus every
 /// crew a claimed leaf of this drain found unusable since — an authentication
-/// failure excludes every configured crew of that provider for the window, a
+/// failure excludes every configured crew of that provider account for the
+/// window (a crew that sets `env` is an account of its own [ORB-17288]), a
 /// capacity failure only the leaf's crew and only for a bounded backoff
 /// [ORB-15791] — and, when the drain was submitted with `--allow-crew`,
 /// outside that restriction [ORB-14174]. Derived from the drain's run input

@@ -9,7 +9,7 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
+use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
     DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
     TagInstruction,
@@ -20,7 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::activity_job::{
-    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
+    DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
+    ResolvedShellExecutor,
 };
 
 use super::super::RuntimeHost;
@@ -713,20 +714,10 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         &self,
         job_run_id: &str,
         activity_id: &str,
-        provider: &str,
-        model: Option<&str>,
         input: &Value,
-        trace: &InvocationTrace,
+        invocation: &DispatchInvocationTrace,
     ) -> Result<(), DispatchError> {
-        NullRuntimeHost::persist_invocation_trace(
-            self,
-            job_run_id,
-            activity_id,
-            provider,
-            model,
-            input,
-            trace,
-        )
+        NullRuntimeHost::persist_invocation_trace(self, job_run_id, activity_id, input, invocation)
     }
     fn agent_crew_config_for_input(
         &self,

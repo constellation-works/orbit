@@ -192,6 +192,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name,

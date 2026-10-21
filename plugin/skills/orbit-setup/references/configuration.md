@@ -59,7 +59,7 @@ assuming a value.
 | `workflow.provider_limit_max_used_pct` | Skip a crew while a live usage window of its provider or model is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion). |
 | `workflow.provider_limit_overrides` | Per-provider replacement for that percent: `provider:percent` (1..=100) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
-| `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider. Spend is this host's invocation ledger. None by default. |
+| `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider, or for a crew that sets `env`, its own account (`opus-credits:200usd/30d`). Spend is this host's invocation ledger. None by default. |
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
@@ -178,8 +178,10 @@ a workspace `config.toml` that sets it fails to load, and `orbit config set`
 needs `--global`. With the source unset, drain, ship and job starts warn, the
 drain leaves the crew out of its window, the crew's activities are refused
 rather than run on the default login, and `orbit doctor`'s `env-pass` row
-reports it. Usage limits and failure holds still apply per provider. Details:
-`docs/CONFIG.md`, "Per-crew credentials".
+reports it. A crew with `env` is its own account: its usage readings, failure
+holds, pull-drain auth exclusions and probes are its own, and
+`workflow.provider_limit_budgets` / `provider_limit_overrides` may name it
+(`opus-credits:200usd/30d`). Details: `docs/CONFIG.md`, "Per-crew credentials".
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,

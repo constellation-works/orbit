@@ -784,6 +784,7 @@ fn implement_invocation(runtime: &OrbitRuntime, run_id: &str, activity: &str, ms
     runtime
         .insert_invocation_trace_record(&orbit_store::contracts::InvocationInsertParams {
             job_run_id: run_id.to_string(),
+            account: None,
             activity_id: activity.to_string(),
             agent: "claude".to_string(),
             provider: None,

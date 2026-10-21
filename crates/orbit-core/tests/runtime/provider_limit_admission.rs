@@ -113,6 +113,7 @@ impl Fixture {
         self.runtime()
             .record_provider_limit(&ProviderLimitObservation {
                 provider: provider.into(),
+                account: None,
                 model: None,
                 window: Some(window.into()),
                 exhausted,
@@ -147,6 +148,7 @@ impl Fixture {
         self.runtime()
             .record_provider_limit(&ProviderLimitObservation {
                 provider: "antigravity".into(),
+                account: None,
                 model: None,
                 window: None,
                 exhausted: true,

@@ -969,6 +969,7 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     }
 }
 
@@ -1076,6 +1077,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 proc_disallowed_programs: None,
                 trusted_host_execution: false,
                 crew_env: Vec::new(),
+                crew_account: None,
             }),
             activity_name: None,
             input_schema_json: None,

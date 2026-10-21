@@ -22,6 +22,14 @@
 //! pool, then the workspace default — and defers the task when every one is
 //! excluded (`application::task::provider_hold`).
 //!
+//! [ORB-17288] A crew that sets `env` is its own provider account. A failure
+//! names that account when its crew is one (`account=<crew>` after the
+//! provider), and a usage limit then excludes only that crew, while one on
+//! the provider's default login excludes only the provider's crews without
+//! `env`. A failure that names no account, every one written before accounts
+//! were named included, is the default login's. A stored hold keeps the
+//! crews it excluded, so one placed before this reads as it always did.
+//!
 //! [ORB-16379] Unavailability is the failing host's: an unavailable hold
 //! names this host's machine and excludes its crews only here, so pull
 //! admission still offers the task to a follower on that crew. The failed
@@ -37,7 +45,8 @@ use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     JobRun, PROVIDER_FAILURE_HOLD_EVENT, Provider, ProviderCrewOutage, ProviderFailureClass,
-    ProviderFailureHold, ProviderLimitFailure, failed_provider,
+    ProviderFailureHold, ProviderLimitFailure, failed_account, failed_provider,
+    provider_account_label,
 };
 
 use crate::OrbitRuntime;
@@ -109,9 +118,11 @@ impl OrbitRuntime {
     /// the provider when the failing step ran on a provider other than the
     /// run crew's (a reviewer, say). A usage limit excludes every crew whose
     /// provider parses to the same one, or only those on the model the limit
-    /// names when that matches some of them. A hold that still stands from an
-    /// earlier run keeps its crews excluded, so successive failures narrow
-    /// the draw.
+    /// names when that matches some of them. [ORB-17288] Only crews of the
+    /// failing account count for a limit and for a step on another provider:
+    /// the crew the failure names as its account, else the provider's crews
+    /// without `env`. A hold that still stands from an earlier run keeps its
+    /// crews excluded, so successive failures narrow the draw.
     ///
     /// A usage limit's hold lasts until the reset the provider reported,
     /// clamped to between [`MIN_LIMIT_HOLD`] and [`MAX_LIMIT_HOLD`] from
@@ -221,10 +232,17 @@ impl OrbitRuntime {
             .and_then(failed_provider)
             .map(ToOwned::to_owned)
             .or_else(|| run_provider.clone());
-        let provider_crews = || -> Vec<String> {
+        // [ORB-17288] The account that failed: the crew the failure names,
+        // else the provider's default login.
+        let account = error_message
+            .and_then(failed_account)
+            .map(ToOwned::to_owned);
+        let on_account = |crew: &&Crew| crew.account() == account.as_deref();
+        let provider_crews = |accounts_only: bool| -> Vec<String> {
             registry
                 .values()
                 .filter(|crew| Some(&crew.assignment.provider) == provider.as_ref())
+                .filter(|crew| !accounts_only || on_account(crew))
                 .map(|crew| crew.name.clone())
                 .collect()
         };
@@ -233,13 +251,19 @@ impl OrbitRuntime {
             .flatten()
             .unwrap_or_default();
         let mut excluded = match class {
-            ProviderFailureClass::Refusal => provider_crews(),
+            // A content refusal is the provider's policy, whichever account
+            // asked.
+            ProviderFailureClass::Refusal => provider_crews(false),
             ProviderFailureClass::Limit => provider.as_deref().map_or_else(Vec::new, |provider| {
-                limit_crews(registry.values(), provider, limit.model.as_deref())
+                limit_crews(
+                    registry.values().filter(on_account),
+                    provider,
+                    limit.model.as_deref(),
+                )
             }),
             ProviderFailureClass::Capacity | ProviderFailureClass::Unavailable => {
                 if provider.is_some() && run_provider != provider {
-                    provider_crews()
+                    provider_crews(true)
                 } else {
                     Vec::new()
                 }
@@ -268,6 +292,7 @@ impl OrbitRuntime {
                         .is_some_and(|hold| {
                             hold.class == ProviderFailureClass::Limit
                                 && same_provider(hold.provider.as_deref(), provider.as_deref())
+                                && hold.account == account
                         })
             })
             .count();
@@ -283,6 +308,7 @@ impl OrbitRuntime {
         let failure = ProviderFailureHold {
             class,
             provider,
+            account,
             excluded_crews: excluded,
             machine: machine.map(ToOwned::to_owned),
             carried_crews: Vec::new(),
@@ -311,7 +337,8 @@ pub(crate) fn same_provider(left: Option<&str>, right: Option<&str>) -> bool {
 
 /// [ORB-14695] The configured crews a usage limit on `provider` excludes:
 /// every crew whose provider parses to the same one, or, when the limit names
-/// a model that some of them run, only those.
+/// a model that some of them run, only those. `crews` are those of the
+/// failing account.
 fn limit_crews<'a>(
     crews: impl Iterator<Item = &'a Crew>,
     provider: &str,
@@ -342,7 +369,10 @@ pub(crate) fn provider_failure_hold_update(
     job_id: &str,
     hold: &ProviderFailureHold,
 ) -> TaskAutomationUpdate {
-    let provider = hold.provider.as_deref().unwrap_or("its provider");
+    let provider = hold.provider.as_deref().map_or_else(
+        || "its provider".to_string(),
+        |provider| provider_account_label(provider, hold.account.as_deref()),
+    );
     TaskAutomationUpdate {
         status: Some(TaskStatus::Backlog),
         status_event: Some(PROVIDER_FAILURE_HOLD_EVENT.to_string()),

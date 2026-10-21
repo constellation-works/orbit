@@ -33,6 +33,7 @@ pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
     "output_tokens",
     "tool_call_count",
     "provider_cost_usd",
+    "account",
 ];
 
 /// `INSERT INTO invocations(...) VALUES (?1, ...)` rendered from
@@ -75,6 +76,7 @@ impl Store {
                 params.trace.usage.output as i64,
                 params.trace.tool_calls.len() as i64,
                 params.trace.provider_cost_usd,
+                params.account,
             ],
         )
         .map_err(sqlite_store_error)?;

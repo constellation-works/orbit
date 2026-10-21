@@ -99,6 +99,7 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
             let hold = ProviderFailureHold {
                 class: ProviderFailureClass::Unavailable,
                 provider: Some("codex".into()),
+                account: None,
                 excluded_crews: vec!["held".into()],
                 machine: None,
                 carried_crews: Vec::new(),

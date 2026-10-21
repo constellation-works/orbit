@@ -124,6 +124,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
         tool_calls: Vec::new(),
         provider_cost_usd,
         derived_cost_usd,
+        account: row.get(14)?,
     })
 }
 

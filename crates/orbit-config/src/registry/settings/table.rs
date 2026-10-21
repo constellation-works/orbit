@@ -670,7 +670,7 @@ define_config_settings! {
     },
     workflow_provider_limit_budgets: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_budgets", value_type: "array<string>",
-        description: "Rolling spend budgets for providers that report no usage.",
+        description: "Rolling spend budgets for providers, or crew accounts, that report no usage.",
         section: ConfigSection::Delivery, order: 109,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit_budget::admit_budgets(raw),
@@ -691,7 +691,7 @@ define_config_settings! {
     },
     workflow_provider_limit_overrides: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_overrides", value_type: "array<string>",
-        description: "Per-provider usage thresholds that replace the shared percent.",
+        description: "Per-provider or per-crew-account usage thresholds that replace the shared percent.",
         section: ConfigSection::Delivery, order: 107,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_overrides(raw),
     },

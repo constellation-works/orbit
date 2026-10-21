@@ -226,10 +226,13 @@ pub trait InvocationStoreBackend: Send + Sync {
     /// oldest first, across every workspace on this host [ORB-14699].
     /// `provider_names` are the names the provider goes by: its canonical
     /// name and aliases. An invocation recorded without a provider is
-    /// attributed by its agent.
+    /// attributed by its agent. `account` names a crew account [ORB-17288];
+    /// `None` reads the default login's invocations, those recorded without
+    /// an account.
     fn list_provider_ledger_entries(
         &self,
         provider_names: &[String],
+        account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError>;
     fn list_activity_invocation_metrics(

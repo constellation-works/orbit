@@ -259,6 +259,7 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                     .runtime
                     .insert_invocation_trace_record(&InvocationInsertParams {
                         job_run_id: run,
+                        account: None,
                         activity_id: "implement_one".into(),
                         agent: "codex".into(),
                         provider: None,
@@ -322,6 +323,7 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 .runtime
                 .insert_invocation_trace_record(&InvocationInsertParams {
                     job_run_id: "jrun-model-0".into(),
+                    account: None,
                     activity_id: "implement_one".into(),
                     agent: "codex".into(),
                     provider: None,

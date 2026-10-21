@@ -41,6 +41,13 @@ pub const PROVIDER_FAILURE_HOLD_MARKER: &str = "[provider_failure_hold]";
 /// step failure: `[provider_refusal] provider=codex …`.
 const PROVIDER_TOKEN: &str = "provider=";
 
+/// The token naming the crew account that failed, right after the provider
+/// token, when the failing crew sets `env` and so is its own account:
+/// `[provider_limit] provider=claude account=opus-credits …`. A failure
+/// without it, including every one written before accounts were named, is
+/// the provider's default login's.
+const ACCOUNT_TOKEN: &str = "account=";
+
 /// Which provider failure ended the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,6 +124,62 @@ pub fn failed_provider(message: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
+/// The crew account a step failure names right after its provider, if it
+/// names one; `None` for the provider's default login.
+#[must_use]
+pub fn failed_account(message: &str) -> Option<&str> {
+    let class = ProviderFailureClass::of(None, Some(message))?;
+    let (_, rest) = message.split_once(class.marker())?;
+    let mut tokens = rest.split_whitespace();
+    tokens.next()?.strip_prefix(PROVIDER_TOKEN)?;
+    let name = tokens.next()?.strip_prefix(ACCOUNT_TOKEN)?;
+    let name = name.split(':').next()?;
+    (!name.is_empty()).then_some(name)
+}
+
+/// `message` naming `account` after its provider token, so the hold and
+/// exclusion it places stay on that crew account. A message that is not a
+/// provider failure naming its provider, or already names an account, is
+/// returned as it is.
+#[must_use]
+pub fn with_failed_account(message: &str, account: &str) -> String {
+    let account = account.trim();
+    if account.is_empty()
+        || account.contains(char::is_whitespace)
+        || failed_account(message).is_some()
+        || failed_provider(message).is_none()
+    {
+        return message.to_string();
+    }
+    let Some(class) = ProviderFailureClass::of(None, Some(message)) else {
+        return message.to_string();
+    };
+    let Some(marker_at) = message.find(class.marker()) else {
+        return message.to_string();
+    };
+    let after_marker = marker_at + class.marker().len();
+    let rest = &message[after_marker..];
+    let token_start = after_marker + (rest.len() - rest.trim_start().len());
+    let token_end = message[token_start..]
+        .find(char::is_whitespace)
+        .map_or(message.len(), |end| token_start + end);
+    format!(
+        "{} {ACCOUNT_TOKEN}{account}{}",
+        &message[..token_end],
+        &message[token_end..]
+    )
+}
+
+/// `claude` for a provider's default login, `claude/opus-credits` for a crew
+/// that is its own account: how every surface names a provider account.
+#[must_use]
+pub fn provider_account_label(provider: &str, account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("{provider}/{account}"),
+        None => provider.to_string(),
+    }
+}
+
 /// The tokens a usage-limit failure carries after its provider.
 const LIMIT_MODEL_TOKEN: &str = "model=";
 const LIMIT_WINDOW_TOKEN: &str = "window=";
@@ -190,7 +253,9 @@ impl ProviderLimitFailure {
             return Some(limit);
         }
         for token in tokens {
-            if let Some(model) = token.strip_prefix(LIMIT_MODEL_TOKEN) {
+            if token.starts_with(ACCOUNT_TOKEN) {
+                continue;
+            } else if let Some(model) = token.strip_prefix(LIMIT_MODEL_TOKEN) {
                 limit.model = Some(model.to_string());
             } else if let Some(window) = token.strip_prefix(LIMIT_WINDOW_TOKEN) {
                 limit.window = Some(window.to_string());
@@ -213,6 +278,12 @@ pub struct ProviderFailureHold {
     /// The provider that failed, when the run named it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The crew account that failed: a crew that sets `env` and so is its
+    /// own account. `None` for the provider's default login, and for every
+    /// hold stored before accounts were named, which reads as the
+    /// provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// Crews admission does not draw for the task before `not_before`, on
     /// `machine` when the hold names one.
     pub excluded_crews: Vec<String>,

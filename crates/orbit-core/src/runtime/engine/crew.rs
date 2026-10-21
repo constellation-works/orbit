@@ -66,21 +66,26 @@ pub(crate) const ALLOWED_CREWS_INPUT_KEY: &str = "allowed_crews";
 ///
 /// - by canonical registry name, the ordinary case; and
 /// - by effective configured identity — the `(provider, model)` the crew
-///   resolves to — so a differently-named alias of a permitted crew (for
-///   instance the `system` entry that mirrors `default_crew`) is permitted,
-///   while a permitted-looking wrapper that resolves to a *different* provider
-///   or model is not. Naming a run wrapper is not by itself provider usage.
+///   resolves to, and [ORB-17288] the provider account it runs on — so a
+///   differently-named alias of a permitted crew (for instance the `system`
+///   entry that mirrors `default_crew`) is permitted, while a
+///   permitted-looking wrapper that resolves to a *different* provider, model
+///   or account is not. A crew that sets `env` is its own account, so
+///   permitting the subscription's crew never permits a credits crew on the
+///   same model. Naming a run wrapper is not by itself provider usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CrewAllowlist {
     names: BTreeSet<String>,
-    identities: BTreeSet<(String, String)>,
+    identities: BTreeSet<CrewIdentity>,
 }
+
+/// A crew's provider, model and provider account.
+type CrewIdentity = (String, String, Option<String>);
 
 impl CrewAllowlist {
     /// Whether `crew` — already resolved through the registry — may run.
     pub(crate) fn permits(&self, crew: &Crew) -> bool {
-        self.names.contains(crew.name.trim())
-            || self.identities.contains(&crew_identity(&crew.assignment))
+        self.names.contains(crew.name.trim()) || self.identities.contains(&crew_identity(crew))
     }
 
     /// The permitted names, for operator-facing messages.
@@ -124,10 +129,11 @@ pub(crate) fn enforce_crew_allowlist(
 /// The effective configured identity a crew dispatches as. Provider casing is
 /// normalized because it is matched against typed provider enums downstream;
 /// the model string is compared verbatim.
-fn crew_identity(assignment: &CrewAssignment) -> (String, String) {
+fn crew_identity(crew: &Crew) -> CrewIdentity {
     (
-        assignment.provider.trim().to_ascii_lowercase(),
-        assignment.model.trim().to_string(),
+        crew.assignment.provider.trim().to_ascii_lowercase(),
+        crew.assignment.model.trim().to_string(),
+        crew.account().map(ToOwned::to_owned),
     )
 }
 
@@ -328,7 +334,7 @@ impl OrbitRuntime {
         let mut identities = BTreeSet::new();
         for name in names {
             let crew = resolve_crew(name.trim(), self.context.settings().crews())?;
-            identities.insert(crew_identity(&crew.assignment));
+            identities.insert(crew_identity(&crew));
             allowed_names.insert(crew.name);
         }
         Ok((!allowed_names.is_empty()).then_some(CrewAllowlist {

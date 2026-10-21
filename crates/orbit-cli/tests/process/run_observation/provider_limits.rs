@@ -30,6 +30,7 @@ fn configure_crews(fixture: &Fixture) {
 fn reading(provider: &str, used_percent: f64, resets_in: Duration) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: provider.into(),
+        account: None,
         model: None,
         window: Some("five_hour".into()),
         exhausted: false,

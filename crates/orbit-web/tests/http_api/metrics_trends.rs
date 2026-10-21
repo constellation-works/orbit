@@ -46,6 +46,7 @@ fn record_run(
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
             job_run_id: run.into(),
+            account: None,
             activity_id: "implement_one".into(),
             agent: "codex".into(),
             provider: None,

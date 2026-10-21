@@ -65,6 +65,7 @@ impl OrbitRuntime {
         let mut hold = hold.unwrap_or_else(|| ProviderFailureHold {
             class: ProviderFailureClass::Unavailable,
             provider: latest.provider.clone(),
+            account: None,
             excluded_crews: Vec::new(),
             machine: None,
             carried_crews: Vec::new(),

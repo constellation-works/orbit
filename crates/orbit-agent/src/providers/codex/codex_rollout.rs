@@ -121,6 +121,7 @@ pub(crate) fn codex_usage_windows(
         let used_percent = percent(fields.get("used_percent")?.as_f64()?);
         Some(ProviderLimitObservation {
             provider: "codex".to_string(),
+            account: None,
             // Codex's windows are account-wide.
             model: None,
             window: Some(window.to_string()),

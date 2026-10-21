@@ -96,6 +96,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
         &pair.follower,
@@ -375,9 +376,124 @@ fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
     }
 }
 
+/// Two crews on the Claude subscription and, on the follower, one on its own
+/// API key [ORB-17288]. The owner defines the same crews without `env`,
+/// which only the executing host's global file may set.
+const ACCOUNT_CREWS: &str = r#"
+[workflow]
+default_crew = "opus"
+[crews.opus]
+provider = "claude"
+model = "claude-opus"
+[crews.sonnet]
+provider = "claude"
+model = "claude-sonnet"
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus"
+"#;
+
+/// [ORB-17288] An authentication failure of a crew that sets `env` excludes
+/// that crew alone: the subscription's crews stay runnable. Its probe runs
+/// with that crew's credential and re-admits it, and only it.
+fn a_crew_account_auth_failure_excludes_and_recovers_only_that_crew() {
+    let _env =
+        orbit_common::test_env::scoped([("CREW_ACCOUNT_FIXTURE_KEY", Some("credits-fixture-key"))]);
+    let follower_global = format!(
+        "{ACCOUNT_CREWS}env = [\"ANTHROPIC_API_KEY=CREW_ACCOUNT_FIXTURE_KEY\"]\n\
+         [execution.env]\npass = [\"HOME\", \"PATH\"]\n"
+    );
+    let pair =
+        Pair::with_follower_global_crews(ACCOUNT_CREWS, &follower_global, &[Some("opus-credits")]);
+    let bin = pair.follower_repo.join("claude");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\n\
+             [ \"$1\" = auth-recovery-probe ] || exit 1\n\
+             printf 'probe key=%s\\n' \"${ANTHROPIC_API_KEY:-none}\" >> probe-calls\n\
+             [ -f auth-ok ] || exit 1\n\
+             printf 'ORBIT_AUTH_OK\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    pair.follower_cli("claude", bin.to_str().unwrap());
+    let mut def = pair.follower.get_executor_def("claude").unwrap().unwrap();
+    def.auth_probe = Some(AuthProbe {
+        args: vec!["auth-recovery-probe".into()],
+        stdin: "Reply with exactly ORBIT_AUTH_OK.".into(),
+        timeout_seconds: 5,
+        success: AuthProbeSuccess::StdoutContains {
+            text: "ORBIT_AUTH_OK".into(),
+        },
+        relogin_hint: "Run `claude login`.".into(),
+    });
+    pair.follower.upsert_executor_def(&def).unwrap();
+
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), pair.tasks[0]);
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] provider=claude account=opus-credits claude provider \
+         authentication failure (HTTP 401)",
+    );
+    let pass = pair.pass(&drain);
+    let excluded = pass["crews"]["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["crew"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(excluded, ["opus-credits"], "the credits crew alone: {pass}");
+    let runnable = pass["crews"]["runnable"].as_array().unwrap();
+    for crew in ["opus", "sonnet"] {
+        assert!(runnable.iter().any(|name| name == crew), "{crew}: {pass}");
+    }
+    let [exclusion] = pass["crews"]["auth_exclusions"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("one account excluded: {pass}");
+    };
+    assert_eq!(
+        (&exclusion["provider"], &exclusion["account"]),
+        (&json!("claude"), &json!("opus-credits"))
+    );
+
+    pair.pass(&drain);
+    std::fs::write(pair.follower_repo.join("auth-ok"), "ready").unwrap();
+    due(&pair, &drain);
+    let recovered = pair.pass(&drain);
+    assert!(
+        recovered["crews"]["auth_exclusions"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{recovered}"
+    );
+    assert!(
+        !recovered["crews"]["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["crew"] == "opus-credits"),
+        "the probe re-admits the credits crew: {recovered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(pair.follower_repo.join("probe-calls")).unwrap(),
+        "probe key=credits-fixture-key\n",
+        "one probe, on the credits crew's own credential"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain_scenarios,
     auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain,
-    only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded
+    only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded,
+    a_crew_account_auth_failure_excludes_and_recovers_only_that_crew
 );

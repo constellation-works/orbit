@@ -3886,6 +3886,7 @@ fn recover(
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     });
     dispatch_v2_activity(V2DispatchInput {
         activity_name: "pr_conflict_recovery",
@@ -3955,6 +3956,7 @@ fn dispatch_audited_linked_activity(
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     });
     dispatch_v2_activity(V2DispatchInput {
         activity_name,

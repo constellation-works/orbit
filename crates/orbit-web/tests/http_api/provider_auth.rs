@@ -421,6 +421,7 @@ fn reading(
 ) -> ProviderLimitObservation {
     ProviderLimitObservation {
         provider: provider.into(),
+        account: None,
         model: None,
         window: Some(window.into()),
         exhausted: false,

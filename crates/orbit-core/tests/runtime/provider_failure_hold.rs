@@ -108,11 +108,24 @@ pub(super) fn fixture(config: &str) -> Fixture {
 
 /// [`fixture`] on a host registered as `machine`, when one is given.
 fn fixture_on(config: &str, machine: Option<&str>) -> Fixture {
+    fixture_in(None, config, machine)
+}
+
+/// [`fixture`] with `global` as the host's global `config.toml`, where a
+/// crew's `env` is set [ORB-17288].
+pub(super) fn fixture_with_global(global: &str, config: &str) -> Fixture {
+    fixture_in(Some(global), config, None)
+}
+
+fn fixture_in(global_config: Option<&str>, config: &str, machine: Option<&str>) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    if let Some(global_config) = global_config {
+        std::fs::write(global.join("config.toml"), global_config).unwrap();
+    }
     std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .unwrap()
@@ -780,6 +793,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         proc_disallowed_programs: None,
         trusted_host_execution: false,
         crew_env: Vec::new(),
+        crew_account: None,
     };
     let asset = json!({
         "schemaVersion": 2,

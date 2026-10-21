@@ -152,6 +152,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                         .runtime
                         .insert_invocation_trace_record(&InvocationInsertParams {
                             job_run_id: run_id.clone(),
+                            account: None,
                             activity_id: activity.into(),
                             agent: "fixture".into(),
                             provider: None,
@@ -503,6 +504,7 @@ fn calibrated(
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
             job_run_id: implementation,
+            account: None,
             activity_id: "implement_one".into(),
             agent: "codex".into(),
             provider: None,

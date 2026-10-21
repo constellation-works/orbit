@@ -1,6 +1,5 @@
-use orbit_engine::DispatchError;
+use orbit_engine::{DispatchError, DispatchInvocationTrace};
 use orbit_store::contracts::InvocationInsertParams;
-use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::Provider;
 use serde_json::Value;
 
@@ -20,11 +19,16 @@ pub(super) fn persist_invocation_trace(
     runtime: &OrbitRuntime,
     job_run_id: &str,
     activity_id: &str,
-    provider: &str,
-    model: Option<&str>,
     input: &Value,
-    trace: &InvocationTrace,
+    invocation: &DispatchInvocationTrace,
 ) -> Result<(), DispatchError> {
+    let DispatchInvocationTrace {
+        provider,
+        model,
+        account,
+        trace,
+    } = invocation;
+    let (provider, model) = (provider.as_str(), model.as_deref());
     let (agent, model) = runtime.invocation_agent_model_identity(
         provider,
         model,
@@ -38,6 +42,7 @@ pub(super) fn persist_invocation_trace(
             activity_id: activity_id.to_string(),
             agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
             provider: Some(canonical_provider(provider)),
+            account: account.clone(),
             model,
             task_ids: task_context::associated_task_ids(input),
             trace: trace.clone(),

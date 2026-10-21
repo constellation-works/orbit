@@ -53,6 +53,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
 
     let reading = |used_percent: f64, resets_at| ProviderLimitObservation {
         provider: "claude".into(),
+        account: None,
         model: None,
         window: Some("five_hour".into()),
         exhausted: false,

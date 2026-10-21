@@ -12,6 +12,12 @@
 //! crew of the provider when the hold covers the whole provider. A probe does
 //! not clear capacity. Limit and refusal failures are not holds here.
 //!
+//! [ORB-17288] Unavailability covers one provider account: the crew account
+//! the failure names (a crew that sets `env`), else the provider's default
+//! login, whose crews are those without `env`. Only a success or a probe of
+//! that same account clears it, so an expired API key on one crew neither
+//! holds the subscription's crews nor is cleared by them.
+//!
 //! Readiness and holds share recorded crew attribution: pilots and blocked
 //! recovery use their frozen draws, finding verification uses its dispatched
 //! partitions, and ordinary jobs use `resolved_crew`. A pilot's own provider
@@ -24,7 +30,8 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_provider,
+    JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_account, failed_provider,
+    provider_account_label,
 };
 
 use super::PULL_DRAIN_JOB;
@@ -44,8 +51,11 @@ pub(crate) struct HostProviderHold {
     pub(crate) class: ProviderFailureClass,
     /// Canonical provider (`claude`, `codex`).
     pub(crate) provider: String,
-    /// `None` covers every crew of `provider`. A capacity hold names the run's
-    /// crew when that crew's provider is the one that failed.
+    /// The crew account that failed, when the failure named one; `None` is
+    /// the provider's default login.
+    pub(crate) account: Option<String>,
+    /// `None` covers every crew of `provider` on `account`. A capacity hold
+    /// names the run's crew when that crew's provider is the one that failed.
     pub(crate) crew: Option<String>,
     pub(crate) not_before: DateTime<Utc>,
     pub(crate) run_id: String,
@@ -60,13 +70,17 @@ impl HostProviderHold {
         if canonical_provider(&crew.assignment.provider) != self.provider {
             return false;
         }
-        self.crew.as_deref().is_none_or(|name| name == crew.name)
+        match self.crew.as_deref() {
+            Some(name) => name == crew.name,
+            None => crew.account() == self.account.as_deref(),
+        }
     }
 
     /// `provider_unavailable <subject> until <time> (<run>)`. The subject is
-    /// the crew when the hold names one, otherwise the provider.
+    /// the crew when the hold names one, otherwise the provider account.
     pub(crate) fn detail(&self) -> String {
-        let subject = self.crew.as_deref().unwrap_or(self.provider.as_str());
+        let account = provider_account_label(&self.provider, self.account.as_deref());
+        let subject = self.crew.as_deref().unwrap_or(account.as_str());
         let until = self.not_before.to_rfc3339_opts(SecondsFormat::Secs, true);
         format!(
             "{} {subject} until {until} ({})",
@@ -82,8 +96,13 @@ struct OpenFailure {
     run_id: String,
     class: ProviderFailureClass,
     provider: String,
+    account: Option<String>,
     crew: Option<String>,
 }
+
+/// A provider and one of its accounts: the crew account, or `None` for the
+/// default login.
+type AccountKey = (String, Option<String>);
 
 impl OrbitRuntime {
     /// Unavailable and capacity holds still standing on this host at `now`.
@@ -135,15 +154,16 @@ impl OrbitRuntime {
         let crews =
             self.recorded_run_crews(failures.iter().map(|(run, ..)| run).chain(successes.iter()))?;
 
-        let mut provider_success: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+        let mut provider_success: BTreeMap<AccountKey, DateTime<Utc>> = BTreeMap::new();
         let mut crew_success: BTreeMap<(String, String), DateTime<Utc>> = BTreeMap::new();
         for run in &successes {
             for crew_name in crews.crews(run, None) {
                 let Some(provider) = self.provider_of_crew(&crew_name) else {
                     continue;
                 };
+                let account = self.account_of_crew(&crew_name);
                 let at = clearing_at(run);
-                note_later(&mut provider_success, provider.clone(), at);
+                note_later(&mut provider_success, (provider.clone(), account), at);
                 note_later(&mut crew_success, (provider, crew_name), at);
             }
         }
@@ -152,7 +172,7 @@ impl OrbitRuntime {
         // Matching it by `created_at` would miss a recovery on a drain that
         // started before the lookback. Probes clear unavailability only;
         // they stay out of the success maps capacity reads.
-        let mut provider_probe: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+        let mut provider_probe: BTreeMap<AccountKey, DateTime<Utc>> = BTreeMap::new();
         if failures
             .iter()
             .any(|(_, class, ..)| *class == ProviderFailureClass::Unavailable)
@@ -160,7 +180,7 @@ impl OrbitRuntime {
             self.note_probe_recoveries(&aliases, &fallback, &mut provider_probe)?;
         }
 
-        let mut open: BTreeMap<(String, String, Option<String>), OpenFailure> = BTreeMap::new();
+        let mut open: BTreeMap<(String, AccountKey, Option<String>), OpenFailure> = BTreeMap::new();
         for (run, class, message, at) in &failures {
             let assignments = crews.crews(run, message.as_deref());
             // A named provider still forms a provider-wide hold when its
@@ -180,7 +200,7 @@ impl OrbitRuntime {
                 }
                 let key = (
                     failure.class.as_str().to_string(),
-                    failure.provider.clone(),
+                    (failure.provider.clone(), failure.account.clone()),
                     failure.crew.clone(),
                 );
                 match open.get_mut(&key) {
@@ -205,6 +225,7 @@ impl OrbitRuntime {
             .map(|failure| HostProviderHold {
                 class: failure.class,
                 provider: failure.provider,
+                account: failure.account,
                 crew: failure.crew,
                 not_before: failure.at + base_backoff(failure.class),
                 run_id: failure.run_id,
@@ -215,6 +236,7 @@ impl OrbitRuntime {
                 .as_str()
                 .cmp(right.class.as_str())
                 .then(left.provider.cmp(&right.provider))
+                .then(left.account.cmp(&right.account))
                 .then(left.crew.cmp(&right.crew))
                 .then(left.run_id.cmp(&right.run_id))
         });
@@ -222,9 +244,10 @@ impl OrbitRuntime {
     }
 
     /// A failure scoped the way a host hold is: unavailability covers every
-    /// crew of the provider, and capacity covers the crew the run ran as when
-    /// that crew uses the failing provider. The provider is the one the
-    /// step's text names, else that crew's.
+    /// crew of the failing provider account, and capacity covers the crew the
+    /// run ran as when that crew uses the failing provider. The provider is
+    /// the one the step's text names, else that crew's; the account is the
+    /// one the text names, else the default login.
     fn open_failure(
         &self,
         run: &JobRun,
@@ -250,6 +273,7 @@ impl OrbitRuntime {
             run_id: run.run_id.clone(),
             class,
             provider,
+            account: message.and_then(failed_account).map(ToOwned::to_owned),
             crew,
         })
     }
@@ -258,7 +282,7 @@ impl OrbitRuntime {
         &self,
         aliases: &BTreeSet<String>,
         fallback: &str,
-        provider_probe: &mut BTreeMap<String, DateTime<Utc>>,
+        provider_probe: &mut BTreeMap<AccountKey, DateTime<Utc>>,
     ) -> Result<(), OrbitError> {
         let mut seen = BTreeSet::new();
         let ids = self
@@ -364,7 +388,7 @@ fn provider_failure_step(run: &JobRun) -> Option<(ProviderFailureClass, Option<S
 fn note_state_recoveries(
     state: &PipelineState,
     aliases: &BTreeSet<String>,
-    provider_probe: &mut BTreeMap<String, DateTime<Utc>>,
+    provider_probe: &mut BTreeMap<AccountKey, DateTime<Utc>>,
 ) {
     for recovery in state.pull_drain.pull_auth_recovery.values() {
         let Some(recovered_at) = recovery.recovered_at else {
@@ -375,7 +399,10 @@ fn note_state_recoveries(
         }
         note_later(
             provider_probe,
-            canonical_provider(&recovery.exclusion.provider),
+            (
+                canonical_provider(&recovery.exclusion.provider),
+                recovery.exclusion.account.clone(),
+            ),
             recovered_at,
         );
     }
@@ -389,21 +416,22 @@ fn later_than(at: DateTime<Utc>, cleared: Option<&DateTime<Utc>>) -> bool {
 
 fn hold_cleared(
     failure: &OpenFailure,
-    provider_success: &BTreeMap<String, DateTime<Utc>>,
+    provider_success: &BTreeMap<AccountKey, DateTime<Utc>>,
     crew_success: &BTreeMap<(String, String), DateTime<Utc>>,
-    provider_probe: &BTreeMap<String, DateTime<Utc>>,
+    provider_probe: &BTreeMap<AccountKey, DateTime<Utc>>,
 ) -> bool {
+    let account = (failure.provider.clone(), failure.account.clone());
     match failure.class {
         ProviderFailureClass::Capacity => match failure.crew.as_deref() {
             Some(crew) => later_than(
                 failure.at,
                 crew_success.get(&(failure.provider.clone(), crew.to_string())),
             ),
-            None => later_than(failure.at, provider_success.get(&failure.provider)),
+            None => later_than(failure.at, provider_success.get(&account)),
         },
         ProviderFailureClass::Unavailable => {
-            later_than(failure.at, provider_success.get(&failure.provider))
-                || later_than(failure.at, provider_probe.get(&failure.provider))
+            later_than(failure.at, provider_success.get(&account))
+                || later_than(failure.at, provider_probe.get(&account))
         }
         ProviderFailureClass::Limit | ProviderFailureClass::Refusal => false,
     }

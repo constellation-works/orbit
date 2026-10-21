@@ -427,6 +427,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "retention_analytics".to_string()
             ),
             ("migration.v0055".to_string(), "executor_census".to_string()),
+            (
+                "migration.v0056".to_string(),
+                "provider_crew_accounts".to_string(),
+            ),
         ]
     );
 }

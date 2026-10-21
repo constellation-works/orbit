@@ -20,6 +20,10 @@ pub struct CrewConfig {
     /// them on the agent environment through
     /// [`crate::RuntimeHost::crew_agent_subprocess_environment`].
     pub env: Vec<orbit_types::identity::CrewEnvVar>,
+    /// The crew's name when it sets `env` and so is its own provider account
+    /// ([`orbit_types::identity::Crew::account`]); `None` for a crew on its
+    /// provider's default login.
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

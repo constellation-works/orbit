@@ -15,7 +15,7 @@ use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{
     CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
-    TRANSIENT_FAILURE_MARKER, provider_failure_text,
+    TRANSIENT_FAILURE_MARKER, provider_failure_text, with_failed_account,
 };
 use serde_json::Value;
 
@@ -561,6 +561,14 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     } else {
         None
     };
+    // [ORB-17288] A crew that sets `env` is its own provider account: its
+    // provider failure names that account, so the hold or exclusion it
+    // places stays on that crew.
+    let account = spec.crew_account.as_deref();
+    let message = match account {
+        Some(account) => message.map(|message| with_failed_account(&message, account)),
+        None => message,
+    };
 
     // [ORB-14696] The windows first, so a limit failure observed in the same
     // run is the newer observation of its window.
@@ -572,9 +580,10 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         codex_home.as_deref(),
         run_id,
         crew,
+        account,
     );
     if let Some((limit, detail)) = &observed_limit {
-        record_limit(host, &provider, limit, detail, run_id, crew);
+        record_limit(host, &provider, limit, detail, run_id, crew, account);
     }
 
     let StdoutTextPreview {
@@ -737,6 +746,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         invocation: trace.map(|trace| DispatchInvocationTrace {
             provider,
             model,
+            account: spec.crew_account.clone(),
             trace,
         }),
     })

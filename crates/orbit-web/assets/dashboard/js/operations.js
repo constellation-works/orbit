@@ -2389,7 +2389,9 @@ function autoDrainProviderLimitNote(readings) {
   const gated = (Array.isArray(readings) ? readings : []).filter(reading => reading?.gated === true);
   if (gated.length === 0) return null;
   const lines = gated.map((reading) => {
-    const label = `${reading.provider}${reading.scope ? ` [${reading.scope}]` : ""} ${reading.window || "usage window"}`;
+    // A crew that sets `env` is its own account, named `provider/crew`.
+    const account = reading.account ? `${reading.provider}/${reading.account}` : reading.provider;
+    const label = `${account}${reading.scope ? ` [${reading.scope}]` : ""} ${reading.window || "usage window"}`;
     const used = reading.used_percent == null ? "exhausted" : `${reading.used_percent}% ≥ ${reading.threshold}%`;
     // A ledger budget in dollars leaves out invocations that recorded no cost.
     const usage = reading.partial === true ? `${used} (partial: some invocations report no cost)` : used;
@@ -2401,8 +2403,9 @@ function autoDrainProviderLimitNote(readings) {
   return note;
 }
 
-// One row per host and provider whose login is still failing. A later
-// successful run of that provider on that host drops the row from the payload.
+// One row per host and provider account whose login is still failing: the
+// provider's default login, or a crew that sets `env` (`provider/crew`). A
+// later successful run of that account on that host drops the row.
 function autoDrainProviderAuth(failures) {
   const items = Array.isArray(failures) ? failures : [];
   if (items.length === 0) return null;
@@ -2410,7 +2413,7 @@ function autoDrainProviderAuth(failures) {
   list.setAttribute("aria-label", "Provider authentication failures");
   for (const item of items) {
     const row = el("li", { class: "drain-provider-auth-item" }, [
-      `${item.provider || "provider"} auth failed on ${item.host || "this host"}`,
+      `${item.provider || "provider"}${item.account ? `/${item.account}` : ""} auth failed on ${item.host || "this host"}`,
     ]);
     const runs = Array.isArray(item.runs) ? item.runs : [];
     runs.forEach((run, index) => {

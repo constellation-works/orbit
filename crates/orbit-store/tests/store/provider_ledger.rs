@@ -42,6 +42,7 @@ fn record(
             "ws_ledger",
             &InvocationInsertParams {
                 job_run_id: "run".to_string(),
+                account: None,
                 activity_id: "implement_one".to_string(),
                 agent: agent.to_string(),
                 provider: provider.map(ToOwned::to_owned),
@@ -134,7 +135,7 @@ fn spend_is_attributed_by_provider_else_agent_inside_the_window() {
 
     let since = Utc::now() - hour * 5;
     let grok = store
-        .list_provider_ledger_entries(&names(&["grok", "xai"]), since)
+        .list_provider_ledger_entries(&names(&["grok", "xai"]), None, since)
         .unwrap();
     assert_eq!(
         grok.iter()
@@ -146,17 +147,17 @@ fn spend_is_attributed_by_provider_else_agent_inside_the_window() {
     assert!(grok[0].ts < grok[1].ts, "oldest first");
 
     let antigravity = store
-        .list_provider_ledger_entries(&names(&["antigravity"]), since)
+        .list_provider_ledger_entries(&names(&["antigravity"]), None, since)
         .unwrap();
     assert_eq!(antigravity.len(), 1, "attributed by provider, not by agent");
     assert_eq!(antigravity[0].tokens, 10);
     let gemini = store
-        .list_provider_ledger_entries(&names(&["gemini", "google"]), since)
+        .list_provider_ledger_entries(&names(&["gemini", "google"]), None, since)
         .unwrap();
     assert_eq!(gemini.len(), 1, "the Antigravity row is not Gemini's");
     assert!(
         store
-            .list_provider_ledger_entries(&[], since)
+            .list_provider_ledger_entries(&[], None, since)
             .unwrap()
             .is_empty()
     );
@@ -202,7 +203,11 @@ fn an_existing_store_gains_the_provider_column_additively() {
             .unwrap();
         assert_eq!(migration, "invocation_provider");
         let entries = store
-            .list_provider_ledger_entries(&names(&["grok"]), Utc::now() - provider_ledger_Duration::hours(1))
+            .list_provider_ledger_entries(
+                &names(&["grok"]),
+                None,
+                Utc::now() - provider_ledger_Duration::hours(1),
+            )
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].tokens, 42);
