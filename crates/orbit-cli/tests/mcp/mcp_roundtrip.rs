@@ -553,36 +553,10 @@ fn task_update_refusal_names_a_reachable_status() {
 
 #[test]
 fn agent_task_deletion_is_denied_through_every_dispatch_path() {
-    const CHILD_ENV: &str = "ORBIT_TEST_AUTHORIZATION_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let temp = tempdir().expect("isolated authorization home");
-        let mut child = Command::new(std::env::current_exe().expect("integration binary"));
-        test_env::clear_inherited_authority(|name| {
-            child.env_remove(name);
-        });
-        child
-            .current_dir(temp.path())
-            .env("HOME", temp.path())
-            .env("USERPROFILE", temp.path())
-            .env("ORBIT_AGENT_MODEL", "codex")
-            .env(CHILD_ENV, "1")
-            .args([
-                "--exact",
-                "mcp_roundtrip::agent_task_deletion_is_denied_through_every_dispatch_path",
-                "--nocapture",
-            ]);
-        let output = assert_cmd::Command::from_std(child)
-            .timeout(RESPONSE_TIMEOUT)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        assert!(
-            String::from_utf8_lossy(&output).contains("1 passed"),
-            "child test `mcp_roundtrip::agent_task_deletion_is_denied_through_every_dispatch_path` did not execute: {}",
-            String::from_utf8_lossy(&output)
-        );
+    if crate::isolated_test::run_in_child_with_env(
+        "mcp_roundtrip::agent_task_deletion_is_denied_through_every_dispatch_path",
+        &[("ORBIT_AGENT_MODEL", "codex")],
+    ) {
         return;
     }
 

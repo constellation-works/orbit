@@ -467,28 +467,9 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
 
 #[test]
 fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
-    const CHILD: &str = "ORBIT_REVIEW_RESET_BOUNDARY_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let home = tempdir().unwrap();
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
-        let name = "mcp_roundtrip::transport_operations::review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions";
-        let output = command
-            .args(["--exact", name, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions",
+    ) {
         return;
     }
     let workspace = McpWorkspace::init();

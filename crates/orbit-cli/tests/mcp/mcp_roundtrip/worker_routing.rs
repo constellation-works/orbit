@@ -27,36 +27,10 @@ sys.exit(subprocess.call([{binary}] + argv, cwd={work}, env=env, stderr=subproce
 
 #[test]
 fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
-    const CHILD_ENV: &str = "ORBIT_TEST_WORKER_REMOTE_OWNER_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let temp = tempdir().expect("isolated worker home");
-        let mut child = Command::new(std::env::current_exe().expect("integration binary"));
-        test_env::clear_inherited_authority(|name| {
-            child.env_remove(name);
-        });
-        child
-            .current_dir(temp.path())
-            .env("HOME", temp.path())
-            .env("USERPROFILE", temp.path())
-            .env("ORBIT_AGENT_MODEL", "codex")
-            .env(CHILD_ENV, "1")
-            .args([
-                "--exact",
-                "mcp_roundtrip::worker_routing::claimed_worker_reads_owner_records_and_preserves_workspace_routing",
-                "--nocapture",
-            ]);
-        let output = assert_cmd::Command::from_std(child)
-            .timeout(RESPONSE_TIMEOUT)
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        assert!(
-            String::from_utf8_lossy(&output).contains("1 passed"),
-            "child test `mcp_roundtrip::worker_routing::claimed_worker_reads_owner_records_and_preserves_workspace_routing` did not execute: {}",
-            String::from_utf8_lossy(&output)
-        );
+    if crate::isolated_test::run_in_child_with_env(
+        "mcp_roundtrip::worker_routing::claimed_worker_reads_owner_records_and_preserves_workspace_routing",
+        &[("ORBIT_AGENT_MODEL", "codex")],
+    ) {
         return;
     }
 

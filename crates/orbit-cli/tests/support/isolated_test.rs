@@ -7,6 +7,12 @@ use orbit_common::test_env;
 /// Run the complete body in a child, returning true when the parent is done.
 /// The marker names the exact test so a nested fixture cannot bypass isolation.
 pub(crate) fn run_in_child(test: &str) -> bool {
+    run_in_child_with_env(test, &[])
+}
+
+/// [`run_in_child`] that also sets `env` on the child after inherited authority
+/// is cleared, for an envelope the body must see, such as the agent identity.
+pub(crate) fn run_in_child_with_env(test: &str, env: &[(&str, &str)]) -> bool {
     const CHILD: &str = "ORBIT_TEST_ISOLATED_BODY";
     if std::env::var(CHILD).as_deref() == Ok(test) {
         return false;
@@ -28,6 +34,9 @@ pub(crate) fn run_in_child(test: &str) -> bool {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .current_dir(&home);
+    for (name, value) in env {
+        command.env(name, value);
+    }
     let output = test_env::run_child_test(&mut command, test, root.path());
     test_env::assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
     true
