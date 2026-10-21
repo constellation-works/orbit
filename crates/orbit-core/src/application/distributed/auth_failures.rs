@@ -276,8 +276,9 @@ pub(crate) fn canonical_provider(raw: &str) -> String {
 }
 
 /// Recorded agent assignments for jobs whose task crew is not their agent crew.
-/// Both readiness and routine holds use this lookup, including failure-to-partition
+/// Readiness, routine holds and pilot scorecards use this lookup, including failure-to-partition
 /// attribution for finding verification.
+#[derive(Default)]
 pub(crate) struct RunCrewLookup(HashMap<String, PipelineState>);
 
 impl RunCrewLookup {

@@ -2493,7 +2493,7 @@ fn codebase_related_reads_completion_and_settlement_landings_and_explains_empty_
 }
 
 /// A task-pilot run of `crew` and `model`, active from `started` to
-/// `finished`, as the run record the ranking attributes assessments to.
+/// `finished`, with its frozen activity draw and invocation evidence.
 pub(super) fn seed_pilot_run(
     fixture: &Fixture,
     run_id: &str,
@@ -2528,6 +2528,30 @@ pub(super) fn seed_pilot_run(
         .sqlite_store()
         .unwrap()
         .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .unwrap();
+    let mut state =
+        orbit_types::workflow::PipelineState::new(run_id.into(), run.job_id.clone(), json!({}));
+    let key = orbit_types::workflow::CrewPurpose::TaskPilot.config_key();
+    state.activity_crew_draws.insert(
+        key.into(),
+        orbit_types::workflow::ActivityCrewDraw {
+            crew: crew.into(),
+            source: key.into(),
+            eligible_pool: Vec::new(),
+        },
+    );
+    fixture.runtime.write_run_state(run_id, &state).unwrap();
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+            job_run_id: run_id.into(),
+            activity_id: "task_pilot".into(),
+            agent: "fixture".into(),
+            provider: None,
+            model: Some(model.into()),
+            task_ids: Vec::new(),
+            trace: Default::default(),
+        })
         .unwrap();
 }
 

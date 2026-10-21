@@ -17,6 +17,15 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::list_invocation_records(self, filter)
     }
 
+    fn latest_activity_models(
+        &self,
+        workspace_id: &str,
+        activity_id: &str,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Option<String>>, orbit_common::OrbitError> {
+        Self::latest_activity_models(self, workspace_id, activity_id, run_ids)
+    }
+
     fn list_invocation_accounting_facts(
         &self,
         query: &crate::contracts::InvocationAccountingQuery,
