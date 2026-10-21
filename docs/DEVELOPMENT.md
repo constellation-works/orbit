@@ -201,11 +201,11 @@ To check whether a failure is pre-existing, replay the same command on the unmod
 
 ### Required validation commands
 
-The owner workspace lists the four [gates](../AGENTS.md#gates) in [`workflow.required_validation_commands`](CONFIG.md), in ignored per-user `.orbit/config.toml`. The cheap gates come first, because validation stops at the first failing command:
+This repository currently has no blanket local required-validation commands. The required PR checks gate merges on `agent-main`: `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3`. Use focused local checks for the changed behavior as described in [AGENTS.md](../AGENTS.md#gates); the PR checks report their results on GitHub.
 
 ```toml
 [workflow]
-required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", "make ci-test-affected"]
+required_validation_commands = []
 unlocked_path_validation_commands = ["make ci-fast"]
 
 [workflow.generated_paths]
@@ -217,12 +217,12 @@ build_output_env = ["CARGO_TARGET_DIR"]
 
 A repair that changed only Markdown since the run's last full pass reruns only `make ci-fast` ([revalidating an unlocked-path repair](CONFIG.md#revalidating-an-unlocked-path-repair)), and a conflict on `docs/INDEX.md` is resolved by regenerating it ([generated paths](CONFIG.md#generated-paths-are-regenerated-not-merged)).
 
-The reviewable [workspace configuration example](../config/orbit-workspace.toml) includes
-these settings. Merge it into the owner configuration during operator rollout. Cargo
-output selection is this repository's policy; the generic runtime has no build-tool
-default ([build output contract](CONFIG.md#workspace-build-output)).
+The reviewable [workspace configuration example](../config/orbit-workspace.toml) shows
+the current repository policy. Merge applicable settings into the owner configuration
+during operator rollout. Cargo output selection is this repository's policy; the generic
+runtime has no build-tool default ([build output contract](CONFIG.md#workspace-build-output)).
 
-For tasks that deliver a diff, candidate validation runs them once, in that order, on the final candidate after base synchronization, and before-PR review requires a passing record of each. Tasks tagged `no-diff-expected` do not run this list. A managed implementer finds the list in its envelope's `task.final_validation_commands` and leaves those commands to that validation ([required validation](CONFIG.md#required-validation)); it still runs focused checks and any gate the list omits, so a shorter list moves no gate out of the delivery.
+When an owner configures required validation commands, candidate validation runs them in order on the final candidate after base synchronization, and before-PR review requires a passing record of each. Tasks tagged `no-diff-expected` do not run this list. A managed implementer finds the list in its envelope's `task.final_validation_commands` and leaves those commands to that validation ([required validation](CONFIG.md#required-validation)); it still runs focused checks and any gate the list omits.
 
 Managed PR conflict recovery at `sync_base` uses that same captured list:
 it runs focused resolution checks and leaves those full commands to the
