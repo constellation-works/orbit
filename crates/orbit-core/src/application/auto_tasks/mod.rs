@@ -15,7 +15,9 @@
 //!   native), with catch-up collapse.
 //! - [`state`] — host-local, workspace-scoped last-fired cursors.
 //! - [`scheduler`] — the evaluator called by the host tick.
-//! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
+//! - `change_probe` — the `skip_if_unchanged` precondition's evidence. The
+//!   `skip_unless_blocked_candidates` precondition reads the blocked-task
+//!   triage's candidate rule (`application::task::triage_candidacy`).
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
@@ -58,6 +60,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "backlog-hygiene",
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
+    ),
+    (
+        "blocked-task-triage",
+        include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
     ),
     (
         "delivery-code-review",

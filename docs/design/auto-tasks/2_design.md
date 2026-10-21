@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-20
+last_updated: 2026-10-21
 last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
@@ -32,7 +32,8 @@ semantics remain current.
 
 `AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
-`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
+`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
+`skip_unless_blocked_candidates` (§4c) preconditions, and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — exactly one of `{ cron: "…" }`, `{ every_minutes: N }`, or
 `{ deliveries_landed: { … } }`. Delivery schedules use source evaluation and
@@ -158,8 +159,10 @@ instead of rendering a silent never-observed baseline.
 before mint and cleared only after the consumed-slot checkpoint. It is not a
 cross-store exactly-once token.
 
-`last_skip` is the most recent `skip_if_unchanged` decision: `{ at, slot,
-reason, ref, cursor_sha, tip_sha, cursor_task_id? }`. It explains why a due
+`last_skip` is the most recent precondition skip: `{ at, slot, reason, ref?,
+cursor_sha?, tip_sha?, cursor_task_id?, detail? }`. A `skip_if_unchanged` skip
+fills the ref and SHAs; a `no_blocked_candidates` skip (§4c) leaves them out
+and carries `detail` instead. It explains why a due
 definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
@@ -260,6 +263,23 @@ delivery-triggered definitions do not need it (they never fire on a quiet
 tree). `qa-full-sweep`'s cursor task is its roll-up chore, the one task of a
 sweep tagged `qa-full-sweep-rollup`, so neither the coordinator nor an area
 chore of a later sweep can shadow the last decided sweep.
+
+### 4c. `skip_unless_blocked_candidates`: nothing blocked awaits triage
+
+`skip_unless_blocked_candidates: true` is the second mint-time precondition,
+evaluated after `skip_if_unchanged` on `Fire` only. The host's
+`probe_blocked_candidates` reads every blocked task and applies the
+blocked-task triage's candidate rule (`triage_candidacy` in
+`crates/orbit-core/src/application/task/blocked_recovery/triage.rs`): the
+latest transition into `blocked` is one episode, and it qualifies when its
+final-recovery decision escalated, or when it has none and is older than the
+backstop's 72 hours, unless a human set or touched it or it was already
+triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
+recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
+naming how many blocked tasks were read, and the tick report says the same.
+`Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
+mints and the tick report's reason says the precondition was inconclusive. The
+shipped `blocked-task-triage` default carries it.
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass

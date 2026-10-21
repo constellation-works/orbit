@@ -14,7 +14,8 @@ use orbit_automation::auto_tasks::schedule::{
     AutoTaskDueDecision, decide_due, next_scheduled_slot, validate_schedule,
 };
 use orbit_automation::auto_tasks::scheduler::{
-    AutoTaskDispatch, ChangeProbe, SchedulerOptions, run_auto_task_scheduler_at,
+    AutoTaskDispatch, BlockedCandidateProbe, ChangeProbe, SchedulerOptions,
+    run_auto_task_scheduler_at,
 };
 use orbit_automation::members::{
     MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage, evaluate,
@@ -437,6 +438,8 @@ struct AutoHost {
     root: PathBuf,
     minted: Cell<usize>,
     skip_version: RefCell<Option<String>>,
+    /// The blocked-candidate probe's next answer; `Err` is a probe failure.
+    blocked: RefCell<Option<Result<BlockedCandidateProbe, String>>>,
 }
 
 impl AutoTaskDispatch for AutoHost {
@@ -480,6 +483,17 @@ impl AutoTaskDispatch for AutoHost {
         _: &orbit_types::workflow::SkipIfUnchanged,
     ) -> Result<ChangeProbe, OrbitError> {
         panic!("time fixture has no change precondition")
+    }
+    fn probe_blocked_candidates(
+        &self,
+        _: &AutoTaskDefinition,
+        _: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        self.blocked
+            .borrow()
+            .clone()
+            .expect("this fixture has no blocked-candidate precondition")
+            .map_err(OrbitError::Store)
     }
 }
 
@@ -583,6 +597,7 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
             root,
             minted: Cell::new(0),
             skip_version: RefCell::new(None),
+            blocked: RefCell::new(None),
         };
         for (now, action, count, slot) in [
             ("2026-10-01T00:07:00Z", "baselined", 0, None),
@@ -855,6 +870,7 @@ fn inactive_plugin_warning_is_deduplicated_across_scheduler_passes() {
                 root,
                 minted: Cell::new(0),
                 skip_version: RefCell::new(Some("1.0".into())),
+                blocked: RefCell::new(None),
             };
             let versions: &[&str] = if workspace == "one" {
                 &["1.0", "1.0", "2.0", "2.0"]
@@ -929,6 +945,7 @@ fn inactive_plugin_warning_is_deduplicated_across_clock_tick_processes() {
         root,
         minted: Cell::new(0),
         skip_version: RefCell::new(Some("1.0".into())),
+        blocked: RefCell::new(None),
     };
     let levels = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(Capture(levels.clone()));
@@ -950,4 +967,85 @@ fn inactive_plugin_warning_is_deduplicated_across_clock_tick_processes() {
     for level in levels.lock().unwrap().iter() {
         writeln!(log, "{level}").unwrap();
     }
+}
+
+/// `skip_unless_blocked_candidates` skips only when the host establishes that
+/// no episode awaits triage, and records that skip like `skip_if_unchanged`;
+/// a probe that cannot answer mints, so a broken probe never hides a block.
+#[test]
+fn blocked_candidate_precondition_skips_only_on_a_definite_none() {
+    if isolated("blocked_candidate_precondition_skips_only_on_a_definite_none") {
+        return;
+    }
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    std::fs::create_dir_all(root.join("auto_tasks")).unwrap();
+    std::fs::write(
+        root.join("auto_tasks/triage.yaml"),
+        "schemaVersion: 1\nname: triage\nenabled: true\nschedule:\n  every_minutes: 1\n\
+         dedupe: always\nskip_unless_blocked_candidates: true\ntemplate:\n  title: Triage fixture\n",
+    )
+    .unwrap();
+    let host = AutoHost {
+        root,
+        minted: Cell::new(0),
+        skip_version: RefCell::new(None),
+        blocked: RefCell::new(None),
+    };
+    let tick = |now: &str, probe: Result<BlockedCandidateProbe, String>| {
+        *host.blocked.borrow_mut() = Some(probe);
+        let mut outcome =
+            run_auto_task_scheduler_at(&host, at(now), SchedulerOptions::default()).unwrap();
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        outcome.reports.remove(0)
+    };
+    let none = || Ok(BlockedCandidateProbe::None { blocked: 3 });
+    assert_eq!(tick("2026-10-21T00:00:30Z", none()).action, "baselined");
+
+    let skipped = tick("2026-10-21T00:02:30Z", none());
+    assert_eq!(skipped.action, "skipped", "{skipped:?}");
+    assert_eq!(
+        skipped.reason.as_deref(),
+        Some("no_blocked_candidates: 3 blocked task(s) read; no block episode awaits triage")
+    );
+    assert_eq!(host.minted.get(), 0, "a definite none mints nothing");
+    let cursors = orbit_store::compose::auto_task::load_cursor_state(
+        &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
+    )
+    .unwrap();
+    let skip = cursors.definitions["triage"].last_skip.clone().unwrap();
+    assert_eq!(skip.reason, "no_blocked_candidates");
+    assert_eq!(
+        skip.slot,
+        at("2026-10-21T00:02:30Z").to_rfc3339(),
+        "interval slots keep the baseline anchor"
+    );
+
+    for (now, probe) in [
+        ("2026-10-21T00:04:30Z", Err("store unreadable".to_string())),
+        (
+            "2026-10-21T00:06:30Z",
+            Ok(BlockedCandidateProbe::Unknown {
+                reason: "history unreadable".into(),
+            }),
+        ),
+    ] {
+        let fired = tick(now, probe);
+        assert_eq!(
+            fired.action, "fired",
+            "an inconclusive probe mints: {fired:?}"
+        );
+        assert!(
+            fired.reason.as_deref().is_some_and(|reason| reason
+                .starts_with("no_blocked_candidates precondition inconclusive; minted")),
+            "{fired:?}"
+        );
+    }
+    let fired = tick(
+        "2026-10-21T00:08:30Z",
+        Ok(BlockedCandidateProbe::Qualifying {
+            task_ids: vec!["fixture-blocked".into()],
+        }),
+    );
+    assert_eq!(fired.action, "fired", "{fired:?}");
+    assert_eq!(host.minted.get(), 3);
 }

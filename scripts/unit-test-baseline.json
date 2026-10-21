@@ -276,6 +276,7 @@
         "application/task/blocked_recovery/tests/steps.rs::only_the_envelope_result_reaches_the_decision_parser",
         "application/task/desktop/tests/write.rs::completion_replay_finishes_side_effects_after_a_post_lock_read_failure",
         "application/task/final_recovery/tests/apply.rs::terminal_replay_finishes_side_effects_after_a_post_lock_read_failure",
+        "application/task/final_recovery/tests/triage.rs::an_unreadable_requeue_count_refuses_the_requeue_and_records_nothing",
         "application/task/pilot/tests/drain_promotion.rs::a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one",
         "application/task/pilot/tests/drain_promotion.rs::material_edit_after_the_pilot_write_is_held_for_revalidation",
         "application/task/pilot/tests/drain_promotion.rs::opt_out_landing_before_the_approval_lock_keeps_the_task_proposed",

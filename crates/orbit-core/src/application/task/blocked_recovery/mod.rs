@@ -46,6 +46,7 @@ mod next_step;
 mod readout;
 pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
+mod triage;
 
 pub use episode::{
     BlockEpisode, BlockSource, EpisodeDisposition, FinalRecoveryRecord, episode_disposition,
@@ -53,6 +54,10 @@ pub use episode::{
 pub(crate) use input::BlockedRecoveryPreparation;
 pub use input::{BlockedRecoveryInput, BlockedRecoveryTick, BlockedRecoveryView};
 pub use next_step::BlockedNextStep;
+pub use triage::{
+    BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, BlockedTriageView,
+    TriageBasis, TriageCandidacy, TriageEpisode, TriageOption, triage_candidacy,
+};
 
 use std::path::{Path, PathBuf};
 

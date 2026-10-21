@@ -132,6 +132,46 @@ worker.
 The crew comes from `workflow.purpose_crews.final_recovery`. To opt out, set
 it to `[]`; this also turns off final recovery inside the delivery pipelines.
 
+### Blocked-task triage
+
+What final recovery escalates stays blocked for a human. The bundled
+`blocked-task-triage` auto-task (disabled until you enable it, hourly) re-reads
+those blocks once each. A block episode — the task's latest move to `blocked` —
+awaits triage when its final-recovery decision was an escalation, or when it
+has none and is older than the 72 hours after which the backstop above never
+decides it. An episode is skipped when a human set the block or commented,
+changed the status, attached an artifact or made an unattributed edit after
+it, and once triaged; a later block is a new episode. With nothing waiting the
+tick mints nothing and records a `no_blocked_candidates` skip
+([auto-tasks.md](auto-tasks.md#skipping-a-tick-when-nothing-is-blocked)).
+
+The minted task records exactly one disposition per episode through
+`orbit.task.block_triage`, whose `candidates` action lists what qualifies:
+
+- **Mechanical** — a cause with a supported recovery. `requeue` moves the task
+  to `backlog` as a final-recovery requeue: it counts against the same bound
+  (2 requeues per 24 hours, one count shared with final recovery), and the
+  comment records `requeue n of 2 per 24h`. Past the bound it is refused and
+  the task stays blocked with the bound named; when the count cannot be read
+  nothing is written. An Orbit defect with no supported recovery gets a
+  friction record and a report, never a requeue.
+- **Decision** — a scope or requirements choice. `propose` writes one comment
+  quoting the blocker, with two or three options, their consequences,
+  ready-to-apply replacement text and a recommendation; nothing else on the
+  task changes.
+- **Human-only** — credentials or login, a named owner sign-off, a `security`
+  or `security-review` tag, a run another machine executed, or an OS or
+  browser-kit requirement. `report` names the human action and changes
+  nothing else. The tool itself refuses to requeue a security-tagged task or
+  one whose run executed on another machine.
+
+The triage holds no operator-only tool and no `--force` path: it never
+completes, rejects or archives a task, resumes a run, or merges or closes a
+pull request. A recovery that needs one of those is reported with the exact
+operator command. Its task's execution summary lists every block it read,
+with the block's age, the quoted escalation reason, the disposition and the
+action.
+
 ## Built in: re-checking tasks held for a red base
 
 This needs no enablement either. A task whose required command fails on its

@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-20
+last_updated: 2026-10-21
 last_validated: 2026-10-20
 status: Accepted
 feature: auto-tasks
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These eleven YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -222,6 +222,12 @@ definition of the same name.
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
+- `blocked-task-triage` — disabled-by-default hourly reader of escalated
+  blocks. Its `skip_unless_blocked_candidates` precondition mints only when a
+  block episode awaits triage and otherwise records a `no_blocked_candidates`
+  skip; the minted chore records one disposition per episode through
+  `orbit.task.block_triage`, whose requeue shares final recovery's requeue
+  bound ([distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
@@ -276,6 +282,8 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-15327 — Added the disabled, product-agnostic `qa-full-sweep`
   coordinator default with per-area surface-QA chores and a roll-up release
   decision.
+- ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
+  `skip_unless_blocked_candidates` precondition.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

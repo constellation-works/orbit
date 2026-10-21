@@ -23,6 +23,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
+        "blocked-task-triage",
+        include_str!("../assets/auto_tasks/blocked-task-triage.yaml"),
+    ),
+    (
         "code-review",
         include_str!("../assets/auto_tasks/code-review.yaml"),
     ),
@@ -545,4 +549,43 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
         "shipped auto-task templates call orbit.task.add for findings without context_files:\n{}",
         missing_context_files.join("\n")
     );
+}
+
+/// The blocked-task triage holds no operator authority: none of its tools is
+/// governed, so it cannot requeue past the bound, reject, resume a run or
+/// merge, and it ships inert behind its blocked-candidate precondition.
+#[test]
+fn blocked_task_triage_declares_no_operator_only_tool() {
+    let source = BUNDLED_AUTO_TASKS
+        .iter()
+        .find_map(|(name, source)| (*name == "blocked-task-triage").then_some(*source))
+        .unwrap_or_else(|| panic!("blocked-task-triage is a bundled auto-task"));
+    let definition = parse_template("blocked-task-triage", source);
+    assert!(!definition.enabled, "bundled defaults ship inert");
+    assert!(definition.skip_unless_blocked_candidates);
+    assert!(
+        definition
+            .template
+            .tags
+            .iter()
+            .any(|tag| tag == "no-diff-expected")
+    );
+    assert!(has_required_tool(&definition, "orbit.task.block_triage"));
+    let tools = &definition.template.required_tools;
+    for tool in tools {
+        assert!(
+            orbit_common::governance::authorization::governed_tool(tool).is_none(),
+            "{tool} is operator-governed; the triage reports operator-only routes instead"
+        );
+    }
+    for forbidden in [
+        "orbit.task.update",
+        "orbit.task.requeue",
+        "orbit.task.reject",
+    ] {
+        assert!(
+            !tools.iter().any(|tool| tool == forbidden),
+            "the triage writes other tasks only through orbit.task.block_triage, not {forbidden}"
+        );
+    }
 }

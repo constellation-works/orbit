@@ -55,9 +55,11 @@ pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
 pub use blocked_recovery::{
-    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockSource, BlockedNextStep, BlockedRecoveryInput,
-    BlockedRecoveryTick, BlockedRecoveryView, EpisodeDisposition, FinalRecoveryRecord,
-    MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, episode_disposition,
+    BLOCKED_TASK_RECOVERY_JOB, BLOCKED_TASK_TRIAGED_EVENT, BlockEpisode, BlockSource,
+    BlockTriageDecision, BlockTriageRequest, BlockedNextStep, BlockedRecoveryInput,
+    BlockedRecoveryTick, BlockedRecoveryView, BlockedTriageView, EpisodeDisposition,
+    FinalRecoveryRecord, MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, TriageBasis,
+    TriageCandidacy, TriageEpisode, TriageOption, episode_disposition, triage_candidacy,
 };
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{

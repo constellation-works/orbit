@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-20
+last_updated: 2026-10-21
 last_validated: 2026-10-18
 status: Draft
 feature: distributed-drain
@@ -1263,15 +1263,34 @@ descendants and repair), `list_backlog_tasks` applies it to explicit ship overri
 
 ### 7.2 Failed-run triage
 
-Retired by [ORB-12488] (decision "Blocked tasks wait for a reader, not a classifier"): the owner
-cannot see a follower's failed run, and automatic re-backlogging would hide host-specific failures.
-The triage job, its activities and its recursion guard are gone, and the routine survives only as
-the provenance shape `crates/orbit-core/assets/routines/retired/task_triage.yaml`, which lets
-`orbit workspace sync` tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
-`crates/orbit-core/src/application/routines/seed.rs`).
+Decided in this design ([ORB-12488], decision "Blocked tasks wait for a reader, not a
+classifier") and retired by [ORB-12492]: the owner cannot see a follower's failed run, and
+automatic re-backlogging would hide host-specific failures. The triage job, its activities and its
+recursion guard are gone, and the routine survives only as the provenance shape
+`crates/orbit-core/assets/routines/retired/task_triage.yaml`, which lets `orbit workspace sync`
+tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
+`crates/orbit-core/src/application/routines/seed.rs`). That name stays reserved.
 
-Nothing automatic replaces it: a failed run parks its task in `blocked` with the failure and
-`job_run_machine` attached, and re-backlogging is a deliberate transition by whoever read it.
+A failed run parks its task in `blocked` with the failure and `job_run_machine` attached. Final
+recovery (or, outside a pipeline, the blocked-task backstop) makes one decision on each block;
+what it escalates waits for a reader. The bundled `blocked-task-triage` auto-task ([ORB-17245],
+shipped disabled) is that reader, not a classifier that re-backlogs on its own:
+
+- **Which blocks.** It reads each block episode (the latest transition into `blocked`) once:
+  one whose final-recovery decision escalated, or one with no decision older than the backstop's
+  72 hours. An episode a human set or touched after the block is left alone. The scheduler's
+  `skip_unless_blocked_candidates` precondition evaluates the same rule
+  (`triage_candidacy` in `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`), so
+  a quiet hour mints nothing and records a `no_blocked_candidates` skip.
+- **One decision per episode,** through `orbit.task.block_triage`, which writes a
+  `blocked_task_triaged` history marker. A mechanical block is requeued as a final-recovery
+  requeue: the same `final_recovery_requeued` event and the same `FinalRecoveryRequeueBound`
+  (2 per 24 hours), so triage and final recovery share one count, and an unreadable count
+  refuses. A decision block gets one comment with options and replacement text. A human-only
+  block is reported.
+- **Host-specific failures stay visible.** The tool refuses to requeue a task whose run executed on
+  another machine, or one tagged `security` or `security-review`, and records the human action.
+  The routine holds no operator-only tool, so it cannot reject, resume a run or force anything.
 
 ### 7.3 Ship sweep
 
@@ -1432,6 +1451,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-12488] — authored this design folder.
 - [ORB-12490] — replaced context pruning with `declared_context_files`.
 - [ORB-12491] — retired epic machinery.
+- [ORB-12492] — retired terminal failed-run triage (§7.2).
 - [ORB-12495] — added the probe, receipt lookup and claim listing.
 - [ORB-12500] — added published-PR observation and the shared entry-point admission decision.
 - [ORB-12516] — added owner dashboard claim state and actions.
@@ -1461,5 +1481,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-15956] — classified a landing's failed pull request check as inherited, transient or candidate, each with a one-time recovery, and let a red base recorded green release without a hold.
 - [ORB-16322] — handed an inherited check that still fails after the one branch update, on a base tip where the same job passes, to that same one automatic repair.
 - [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
+- [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

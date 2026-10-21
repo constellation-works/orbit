@@ -97,6 +97,14 @@ impl AutoTaskDispatch for TestDispatch {
         }
     }
 
+    fn probe_blocked_candidates(
+        &self,
+        _definition: &AutoTaskDefinition,
+        _now: DateTime<Utc>,
+    ) -> Result<crate::auto_tasks::scheduler::BlockedCandidateProbe, OrbitError> {
+        panic!("definition without skip_unless_blocked_candidates must not probe")
+    }
+
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
         if self.mint_should_fail.load(Ordering::SeqCst) {
             return Err(OrbitError::Execution("injected mint failure".to_string()));

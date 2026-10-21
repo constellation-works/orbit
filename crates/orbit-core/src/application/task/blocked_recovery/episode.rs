@@ -215,25 +215,58 @@ pub fn episode_disposition(
     if let Some(record) = FinalRecoveryRecord::newest_since(history, comments, episode.blocked_at) {
         return EpisodeDisposition::Decided(record);
     }
+    match later_touch(episode.blocked_at, updated_at, history, comments, artifacts) {
+        Some(LaterTouch::Human { by }) => return EpisodeDisposition::HumanIntervened { by },
+        Some(LaterTouch::Unexplained { changed_at }) => {
+            return EpisodeDisposition::UnexplainedChange { changed_at };
+        }
+        None => {}
+    }
+    if now - episode.blocked_at > Duration::hours(MAX_EPISODE_AGE_HOURS) {
+        return EpisodeDisposition::TooOld;
+    }
+    EpisodeDisposition::Eligible
+}
+
+/// A write to a task after its block that Orbit's automation did not make,
+/// or cannot be shown to have made.
+pub(super) enum LaterTouch {
+    /// Someone outside Orbit's automation commented, changed a field or the
+    /// status, or attached an artifact.
+    Human { by: String },
+    /// The task changed with no recorded actor.
+    Unexplained { changed_at: DateTime<Utc> },
+}
+
+/// Whether anyone but Orbit's automation touched the task after `since`:
+/// the human-intervention rule the backstop and the blocked-task triage
+/// share. `updated_at` is the task's last write.
+pub(super) fn later_touch(
+    since: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+    artifacts: &[ArtifactManifestFileV2],
+) -> Option<LaterTouch> {
     let later_actor = history
         .iter()
-        .filter(|entry| entry.at > episode.blocked_at)
+        .filter(|entry| entry.at > since)
         .map(|entry| entry.by.as_str())
         .chain(
             comments
                 .iter()
-                .filter(|comment| comment.at > episode.blocked_at)
+                .filter(|comment| comment.at > since)
                 .map(|comment| comment.by.as_str()),
         )
         .chain(
             artifacts
                 .iter()
-                .filter(|artifact| artifact.created_at > episode.blocked_at)
+                .filter(|artifact| artifact.created_at > since)
                 .map(|artifact| artifact.created_by.as_str()),
         )
         .find(|by| !is_automation_actor(by));
     if let Some(by) = later_actor {
-        return EpisodeDisposition::HumanIntervened { by: by.to_string() };
+        return Some(LaterTouch::Human { by: by.to_string() });
     }
     // Every attributed write above is automation's. A newer write than all of
     // them changed a field without recording who did it: fail closed.
@@ -242,16 +275,12 @@ pub fn episode_disposition(
         .map(|entry| entry.at)
         .chain(comments.iter().map(|comment| comment.at))
         .chain(artifacts.iter().map(|artifact| artifact.created_at))
-        .filter(|at| *at >= episode.blocked_at)
+        .filter(|at| *at >= since)
         .max()
-        .unwrap_or(episode.blocked_at);
-    if updated_at - last_attributed > Duration::milliseconds(ATTRIBUTION_SLACK_MS) {
-        return EpisodeDisposition::UnexplainedChange {
+        .unwrap_or(since);
+    (updated_at - last_attributed > Duration::milliseconds(ATTRIBUTION_SLACK_MS)).then_some(
+        LaterTouch::Unexplained {
             changed_at: updated_at,
-        };
-    }
-    if now - episode.blocked_at > Duration::hours(MAX_EPISODE_AGE_HOURS) {
-        return EpisodeDisposition::TooOld;
-    }
-    EpisodeDisposition::Eligible
+        },
+    )
 }

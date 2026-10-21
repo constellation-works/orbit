@@ -3,7 +3,9 @@
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskListFilter};
 use chrono::{DateTime, Utc};
-use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe, InactivePluginSkip};
+use orbit_automation::auto_tasks::scheduler::{
+    AutoTaskDispatch, BlockedCandidateProbe, ChangeProbe, InactivePluginSkip,
+};
 pub use orbit_automation::auto_tasks::scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions,
 };
@@ -67,6 +69,14 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
         self.runtime
             .probe_change_since_last_sweep(definition, precondition)
     }
+
+    fn probe_blocked_candidates(
+        &self,
+        definition: &AutoTaskDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        self.runtime.probe_blocked_candidates(definition, now)
+    }
 }
 
 /// One definition as a list surface shows it.
@@ -126,6 +136,31 @@ impl AutoTaskDispatch for OrbitRuntime {
         precondition: &SkipIfUnchanged,
     ) -> Result<ChangeProbe, OrbitError> {
         super::change_probe::probe_change_since_last_sweep(self, precondition)
+    }
+
+    fn probe_blocked_candidates(
+        &self,
+        _definition: &AutoTaskDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError> {
+        let views = self.blocked_triage_view(now)?;
+        let task_ids = views
+            .iter()
+            .filter(|view| {
+                matches!(
+                    view.candidacy,
+                    crate::application::task::TriageCandidacy::Qualifies(_)
+                )
+            })
+            .map(|view| view.task.id.clone())
+            .collect::<Vec<_>>();
+        Ok(if task_ids.is_empty() {
+            BlockedCandidateProbe::None {
+                blocked: views.len(),
+            }
+        } else {
+            BlockedCandidateProbe::Qualifying { task_ids }
+        })
     }
 }
 

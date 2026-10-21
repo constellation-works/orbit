@@ -187,6 +187,12 @@ fn show(value: Value) -> CommandOut {
             strings(&skip["cursor"]["tags"]).join(", ")
         );
     }
+    if doc["skip_unless_blocked_candidates"].as_bool() == Some(true) {
+        let _ = writeln!(
+            out,
+            "  skip_unless_blocked_candidates: mint only when a block episode awaits triage"
+        );
+    }
     if let Some(skip) = doc
         .get("cursor")
         .and_then(|cursor| cursor.get("last_skip"))
@@ -198,19 +204,28 @@ fn show(value: Value) -> CommandOut {
                 .unwrap_or("-")
                 .to_string()
         };
-        let _ = writeln!(
-            out,
-            "  last skip: {} at {} — {} tip {} covered by cursor {}{}",
-            text("reason"),
-            text("at"),
-            text("ref"),
-            text("tip_sha"),
-            text("cursor_sha"),
-            skip.get("cursor_task_id")
-                .and_then(Value::as_str)
-                .map(|id| format!(" from {id}"))
-                .unwrap_or_default(),
-        );
+        if let Some(detail) = skip.get("detail").and_then(Value::as_str) {
+            let _ = writeln!(
+                out,
+                "  last skip: {} at {} — {detail}",
+                text("reason"),
+                text("at"),
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "  last skip: {} at {} — {} tip {} covered by cursor {}{}",
+                text("reason"),
+                text("at"),
+                text("ref"),
+                text("tip_sha"),
+                text("cursor_sha"),
+                skip.get("cursor_task_id")
+                    .and_then(Value::as_str)
+                    .map(|id| format!(" from {id}"))
+                    .unwrap_or_default(),
+            );
+        }
     }
     if let Some(stall) = doc
         .pointer("/automation/state/stall")

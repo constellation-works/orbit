@@ -84,6 +84,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
+            | TaskVerb::BlockTriage
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }
@@ -105,6 +106,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => return,
@@ -187,6 +189,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -224,6 +227,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -246,6 +250,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject

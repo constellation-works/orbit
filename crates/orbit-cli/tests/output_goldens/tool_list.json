@@ -1356,6 +1356,70 @@
     ]
   },
   {
+    "name": "orbit.task.block_triage",
+    "description": "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "action",
+        "description": "candidates, requeue, propose, or report",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "id",
+        "description": "requeue, propose, report: the blocked task",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "blocker",
+        "description": "requeue, propose, report: the escalation reason, quoted in the comment",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "requeue: the repair applied and why the task can run again; report: the specific action only a human can take",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "options",
+        "description": "propose: two or three {summary, consequences, replacement} objects; replacement is the exact text for each changed description section or criterion",
+        "param_type": "array",
+        "required": false
+      },
+      {
+        "name": "recommended",
+        "description": "propose: 1-based index of the recommended option",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.task.eligible",
     "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
     "enabled": true,

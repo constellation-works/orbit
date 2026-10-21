@@ -33,6 +33,7 @@ fn dry_run_matches_pending_recovery_before_enabled_check_without_writes() {
                 root: root.path().to_path_buf(),
                 minted: Cell::new(0),
                 skip_version: RefCell::new(None),
+                blocked: RefCell::new(None),
             };
             let state_path = cursor_state_path(&host.root.join("state"));
             let cursor = AutoTaskCursor {

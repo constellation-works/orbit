@@ -426,6 +426,7 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
+            | TaskVerb::BlockTriage
             | TaskVerb::Reject
             | TaskVerb::Delete => {
                 return Err(not_routable());

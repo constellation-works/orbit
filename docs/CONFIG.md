@@ -1236,6 +1236,19 @@ passed unchanged, including any literal template tokens in its text. Later
 phases do not inherit it. Run-show recovery attempts include the resume
 rationale in their detail.
 
+**Escalated blocks.** A final-recovery `requeue` is bounded to two per task
+in 24 hours; past that the decision is refused and the task stays blocked.
+The bound has no configuration key. What final recovery escalates waits in
+`blocked` for a reader: the bundled `blocked-task-triage` auto-task (shipped
+disabled; `orbit auto-task toggle blocked-task-triage on`) re-reads each
+escalated block once, hourly, and requeues a mechanical one within the same
+two-per-24-hours count, proposes options for a decision, or reports a
+human-only block. Its `skip_unless_blocked_candidates: true` precondition
+mints nothing while no block awaits triage and records a
+`no_blocked_candidates` skip. Its minted task has no crew and draws from the
+`medium` complexity pool. See
+[blocked-task triage](../plugin/skills/orbit-setup/references/automation.md#blocked-task-triage).
+
 ### PR auto-fix repairs
 
 `orbit run auto --auto-fix` lets the drain repair the pull requests its own runs
