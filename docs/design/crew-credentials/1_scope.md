@@ -73,10 +73,11 @@ Rules:
 
 ## Phasing
 
-1. **Env list.** Parse, global-only rule, overlay, credential exclusivity, unset-source
-   exclusion, doctor and config surfaces. Usable alone; limits still per provider (documented).
-2. **Crew as account.** Limits, holds, exclusions, probes and budgets keyed by crew for crews
-   with `env`. Existing records read as provider-level; no migration.
+1. **Env list** [ORB-17287]. Parse, global-only rule, overlay, credential exclusivity,
+   unset-source exclusion, doctor and config surfaces. Usable alone; limits still per provider
+   (documented).
+2. **Crew as account** [ORB-17288]. Limits, holds, exclusions, probes and budgets keyed by crew
+   for crews with `env`. Existing records read as provider-level; no migration.
 
 ## Open questions
 
@@ -97,3 +98,10 @@ Rules:
 - With the source unset, a drain start warns and its window excludes `opus-credits`.
 - After phase 2, a usage-limit failure on `opus` holds only the subscription Claude crews;
   `opus-credits` keeps dispatching, and the reverse.
+
+## Task References
+
+- [ORB-17287] — phase 1: `crews.<name>.env` overlays the agent environment
+- [ORB-17288] — phase 2: a crew with `env` is its own account for limits, holds and exclusions
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
