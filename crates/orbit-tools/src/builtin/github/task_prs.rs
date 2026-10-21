@@ -75,6 +75,36 @@ pub fn view_pull_request(number: u64) -> ExecRequest {
     )
 }
 
+/// What holds open pull request `number` back from merging, as an
+/// out-of-run auto-fix repair reads it: its author, body and head, whether it
+/// conflicts with its base, and each status context on its head with whether
+/// branch protection requires it. `gh pr view` does not report which checks are
+/// required, so this asks the GraphQL API, as completion's watcher does.
+pub fn pull_request_blockers(number: u64) -> ExecRequest {
+    let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
+        pullRequest(number:$pr){state body author{login} headRefName headRefOid mergeable \
+        commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){\
+        pageInfo{hasNextPage} nodes{__typename \
+        ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr)} \
+        ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
+    super::gh_exec_request(
+        vec![
+            "api".into(),
+            "graphql".into(),
+            "-F".into(),
+            "owner={owner}".into(),
+            "-F".into(),
+            "repo={repo}".into(),
+            "-F".into(),
+            format!("pr={number}"),
+            "-f".into(),
+            format!("query={query}"),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
 /// The login `gh` is authenticated as.
 pub fn authenticated_login() -> ExecRequest {
     super::gh_exec_request(

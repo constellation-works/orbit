@@ -14,13 +14,18 @@
 //! start a substitute worker that waits for the fixture to end, so a retry
 //! stays the lineage's live attempt while the test asserts.
 
+mod out_of_run_auto_fix;
+
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
+use orbit_core::runtime::task_pr_forge::{
+    ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
+};
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
@@ -37,6 +42,10 @@ struct ForgeState {
     /// Every read answers with an error, as an unreachable GitHub does.
     unreachable: bool,
     reads: usize,
+    /// What the forge reports blocking each pull request's completion.
+    blockers: BTreeMap<u64, PullRequestBlockers>,
+    blocker_reads: usize,
+    gh_blocker_reads: std::collections::BTreeSet<u64>,
 }
 
 #[derive(Default, Clone)]
@@ -50,6 +59,10 @@ impl FakeForge {
             body: String::new(),
             author: "orbit-bot".to_string(),
         });
+    }
+
+    fn use_gh_for_blockers(&self, number: u64) {
+        self.0.lock().unwrap().gh_blocker_reads.insert(number);
     }
 }
 
@@ -73,6 +86,25 @@ impl TaskPrForge for FakeForge {
             .iter()
             .find(|pull| pull.number == number)
             .cloned())
+    }
+
+    fn pull_request_blockers(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        let mut state = self.0.lock().unwrap();
+        state.blocker_reads += 1;
+        if state.unreachable {
+            return Err(OrbitError::Execution(
+                "gh api graphql failed: timed out".into(),
+            ));
+        }
+        if state.gh_blocker_reads.contains(&number) {
+            drop(state);
+            return GhTaskPrForge.pull_request_blockers(_repo_root, number);
+        }
+        Ok(state.blockers.get(&number).cloned())
     }
 
     fn authenticated_login(&self, _repo_root: &Path) -> Result<String, OrbitError> {

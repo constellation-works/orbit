@@ -43,7 +43,8 @@ mod window_extension;
 mod worker_limit;
 
 /// A claimed worker conclusively exited without a recorded cancellation.
-/// The reconciler cannot recover its exit signal once the process is gone.
+/// The reconciler cannot reap its exit signal once the process is gone; it
+/// names the exit the worker's supervisor recorded, if any [ORB-17179].
 pub(crate) const WORKER_TERMINATED_ERROR_CODE: &str = "worker_terminated";
 
 #[cfg(test)]

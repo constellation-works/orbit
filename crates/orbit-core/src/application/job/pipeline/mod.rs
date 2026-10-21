@@ -76,6 +76,7 @@ pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
+pub(crate) use worker::exit::reconciled_worker_exit_clause;
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
@@ -84,6 +85,8 @@ pub(crate) use worker::log::pipeline_worker_log_test_hook;
 #[cfg(all(feature = "test-support", unix))]
 pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
 pub(crate) use worker::supervisor::WorkerLaunchError;
+#[cfg(feature = "test-support")]
+pub use worker::supervisor::worker_reap_hook::{WorkerReapPhase, install_worker_reap_hook};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {

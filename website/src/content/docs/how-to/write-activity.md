@@ -85,6 +85,6 @@ orbit run job <job> --input key=value      # submits and prints a run ID
 orbit run job <job> --wait
 ```
 
-`orbit run show <run-id>` names the catalog layer that supplied each activity
-(`workspace`, `shipped`, or `plugin:<ns>`), so you can confirm your file was
-used.
+`orbit run show <run-id>` names the catalog layer that supplied each job and
+activity (`workspace`, `shipped`, or `plugin:<ns>`), so you can confirm your
+file was used. It lists shipped references only with `--verbose`.

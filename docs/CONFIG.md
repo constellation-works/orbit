@@ -272,7 +272,7 @@ resource throttle's memory percentage both measure non-reclaimable memory.
 - `strict` starts no uncontained worker: the run reports why and how to enable a user manager or turn strict mode off, with error code `worker_containment_unavailable` (also in CLI JSON errors). The deprecated `worker_containment_strict = true` reads as `strict`, and fails config load beside `worker_containment = false`. `--strict-worker-containment` on `orbit run ship` or `orbit run auto` turns it on for one invocation; the auto coordinator passes it to leaf workers as `ORBIT_WORKER_CONTAINMENT_STRICT`.
 - Every Linux worker, contained or not, starts with an `oom_score_adj` of at least 500, inherited by everything it runs, so a host-wide OOM kills a worker before the user systemd manager (100) or the drain that launched it. It is not configurable; scope units take no `OOMScoreAdjust=`, so the worker sets it on itself before `systemd-run` execs it.
 - `machine.worker_cpu_quota` adds `CPUQuota=` to each scope, so one run cannot take every core. Only an unsigned integer loads, with no upper bound. `orbit doctor`'s `worker-containment` row reads `info` while it is unset and `ok` once it is set. systemd enforces it only where the user manager delegates the cpu controller; elsewhere the property is accepted and not enforced.
-- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
 - Admitted names reach the contained worker through its environment, not the `systemd-run` command line. Orbit passes each name as `--setenv=NAME` with no value. systemd (211 and later, including 259) copies the value from the wrapper process, which already holds the allow-listed environment. That includes pass-listed provider credentials and clock-file defaults. A toolchain `PATH` override, an explicit removal, and the workspace allowlist are unchanged. Agent subprocesses still start from a cleared environment.
 
 ---
@@ -1256,6 +1256,29 @@ the leaf was started with, so the watcher repairs the same pull request and
 head under the run's retry lineage and attempt ledger. The resumed run's crew
 comes from the leaf's own input, not the adopting drain's `--allow-crew`. See
 [adopting a dead leaf's pull request](runbooks/stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
+An `--auto-fix` drain also repairs Orbit pull requests that no run is watching
+any more. When a task's newest delivery leaf ended `failed`, `timeout` or
+`interrupted` and the task waits in `review`, or was blocked or requeued by that
+leaf's own delivery or final recovery, each pass reads the task's recorded pull
+request. If it conflicts with its base or a required check failed on its head,
+the pass resumes the leaf at its completion step with `auto_fix` granted. The
+watcher there admits the repair against the same attempt ledger and budget (three
+per pull request, one per head and blocker), and the auto-fix crew takes the
+task's footprint locks before it edits, pushes to the same branch and leaves
+completion to merge. The resume keeps the leaf's own `completion`, so a repair
+never merges a pull request whose leaf lacked `--complete`. Operator holds,
+`no-auto-approve` tasks, a leaf started with `--complete` under a drain without
+it, and pull requests not opened by a delivery identity on the task's
+`orbit/<task>-` branch are never repaired. Each hand-back is recorded in task
+history as `pr_auto_fix_out_of_run`; a head and blocker is handed back once, and
+a pull request at most as many times as its budget. `orbit run readiness`
+lists live repairs and the latest drain pass's skipped candidates under
+`out_of_run_auto_fix` (`state: "skipped"`, with the PR, reason, detail and
+observation time). Blockers are null when a refusal preceded the forge read.
+`orbit run show <drain-run> --step adopt_orphans --json` exposes the persisted
+pass in `step_output`, including `auto_fix.skipped`. See
+[a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
 
 The crew comes from the existing pool resolution, in this order:
 

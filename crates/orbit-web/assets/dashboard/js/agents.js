@@ -29,8 +29,11 @@ const ROLE_LABELS = {
 };
 // Each role's panel below the shared layout: `{ title, render(context) }`,
 // where `render` returns the panel's child nodes. Optional hooks:
-// `banner(context)` returns the banner's content or null, and `rowTags(row)`
-// returns the tags shown under a row's name.
+// `banner(context)` returns the banner's content or null, `rowTags(row)`
+// returns the tags shown under a row's name, `scoreNote(row)` returns
+// `{ text, detail }` shown beside the row's score (the short text in the
+// ranking, the sentence in the detail column) or null, and `how` lists
+// paragraphs "How the score works" adds for the role.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
   implementers: implementersPanel,
@@ -52,7 +55,7 @@ const NOT_SCORED_REASONS = {
 };
 const MIN_SUPPORT = 10;
 // The smoothing constant K of the shared score (`agents/score.rs`).
-const SMOOTHING = 10;
+const SMOOTHING = 30;
 const PENALTY_TASKS_SHOWN = 6;
 
 const BODY_ID = "agents-body";
@@ -442,13 +445,13 @@ function rankingNode(ranking) {
   const header = el("tr", {}, [
     el("th", { class: "agents-num", text: "Rank" }),
     el("th", { text: "Crew · model" }),
+    el("th", { class: "agents-score-col", text: "Score" }),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
     ...terms().map((term) => el("th", {
       class: "agents-num",
       text: term.label,
       title: `${term.label} per 100 ${scorecard.unit} (weight ${weight(term.weight)}): ${term.definition}`,
     })),
-    el("th", { class: "agents-score-col", text: "Score" }),
   ]);
   const body = ranking.map((row) => {
     const key = rowKey(row);
@@ -482,21 +485,24 @@ function rankingNode(ranking) {
       scoreBar(row.score, scale),
       el("span", { class: "agents-score-value", text: number(row.score) }),
     ]);
+    const note = panel && panel.scoreNote ? panel.scoreNote(row) : null;
+    if (note) score.append(el("span", { class: "agents-score-note", text: note.text, title: note.detail }));
     const classes = ["agents-row"];
     if (row.below_support) classes.push("agents-row-below");
     if (isSelected) classes.push("is-selected");
     const tr = el("tr", { class: classes.join(" ") }, [
       el("td", { class: "agents-num agents-rank", text: row.rank == null ? "—" : String(row.rank) }),
       nameCell,
+      score,
       support,
       ...cells,
-      score,
     ]);
     tr.dataset.row = key;
     tr.addEventListener("click", () => selectRow(row));
     return tr;
   });
   const table = el("table", { class: "agents-table" }, [el("thead", {}, [header]), el("tbody", {}, body)]);
+  // Rank, crew and score lead the table; the evidence columns after them scroll.
   const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${ROLE_LABELS[role]} ranking` }, [table]);
   wrap.tabIndex = 0;
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
@@ -505,7 +511,18 @@ function rankingNode(ranking) {
   return node;
 }
 
+// How the row's score came from its raw score: smoothing only pulls a row
+// above the fleet average down.
+function rawText(row) {
+  const average = scorecard.fleet_average;
+  return typeof average === "number" && row.raw > average
+    ? `raw ${number(row.raw)}, pulled down toward the fleet average ${number(average)} over ${plural(row.units, "unit")}`
+    : `raw ${number(row.raw)}, not above the fleet average ${number(average)}, so not pulled`;
+}
+
 function detailNode(row) {
+  const panel = ROLE_PANELS[role];
+  const scoreNote = panel && panel.scoreNote ? panel.scoreNote(row) : null;
   const termList = terms();
   const contributions = termList.map((term) => ({ term, value: contribution(term, row) }));
   const largest = Math.max(1e-9, ...contributions.map((entry) => Math.abs(entry.value || 0)));
@@ -549,10 +566,8 @@ function detailNode(row) {
       el("strong", { text: number(row.score) }),
       el("span", { text: "score" }),
     ]),
-    el("p", {
-      class: "agents-detail-raw",
-      text: `raw ${number(row.raw)}, pulled toward the fleet average ${number(scorecard.fleet_average)} over ${plural(row.units, "unit")}`,
-    }),
+    el("p", { class: "agents-detail-raw", text: rawText(row) }),
+    ...(scoreNote ? [el("p", { class: "agents-detail-note", text: scoreNote.detail })] : []),
     el("h4", { text: "Score breakdown" }),
     breakdown,
     penaltyNode(row, contributions),
@@ -636,12 +651,14 @@ function howNode() {
     list.append(el("dd", { text: term.definition }));
   }
   const unit = scorecard.unit;
+  const panel = ROLE_PANELS[role];
   const details = el("details", { class: "agents-how" }, [
     el("summary", { text: "How the score works" }),
     list,
     el("p", { text: `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
-    el("p", { class: "agents-formula", text: `score = (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING})` }),
-    el("p", { text: `A row backed by little work is pulled toward the fleet average, the mean raw score weighted by ${unit}. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
+    el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
+    el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
+    ...(panel && Array.isArray(panel.how) ? panel.how.map((text) => el("p", { text })) : []),
   ]);
   details.open = howOpen;
   details.addEventListener("toggle", () => { howOpen = details.open; });

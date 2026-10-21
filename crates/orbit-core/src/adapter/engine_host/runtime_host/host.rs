@@ -715,6 +715,17 @@ impl RuntimeHost for OrbitRuntime {
         agent::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
 
+    fn acquire_deferred_footprint(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+    ) -> Result<(), DispatchError> {
+        // A footprint still held when the wait ends is held for the same
+        // reason on an immediate retry, so the refusal is not retried.
+        OrbitRuntime::acquire_deferred_footprint(self, run_id, activity_name)
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))
+    }
+
     fn mid_run_steering_enabled(&self) -> bool {
         self.mid_run_steering().enabled
     }

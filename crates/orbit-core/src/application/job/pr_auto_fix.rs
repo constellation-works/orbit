@@ -95,17 +95,7 @@ impl OrbitRuntime {
                 let decided = decide_pr_auto_fix(
                     &attempts,
                     &claim,
-                    PR_AUTO_FIX_BUDGET.saturating_sub(
-                        orbit_types::workflow::source_repair_reservations(&history)
-                            .map_err(|e| {
-                                OrbitError::JobValidation(format!(
-                                    "unreadable source repair ledger: {e}"
-                                ))
-                            })?
-                            .iter()
-                            .filter(|record| record.binding.pull_request == request.pr_number)
-                            .count() as u32,
-                    ),
+                    pr_auto_fix_budget(&history, &request.pr_number)?,
                     &crew.name,
                     &crew_source,
                 );
@@ -140,6 +130,20 @@ impl OrbitRuntime {
         })?;
         Ok(PrAutoFixAdmission::Decided(decision))
     }
+}
+
+/// The repairs `pr_number` may receive in all: [`PR_AUTO_FIX_BUDGET`], less
+/// the source repairs reserved for it, which spend the same budget.
+pub(crate) fn pr_auto_fix_budget(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Result<u32, OrbitError> {
+    let reserved = orbit_types::workflow::source_repair_reservations(history)
+        .map_err(|e| OrbitError::JobValidation(format!("unreadable source repair ledger: {e}")))?
+        .iter()
+        .filter(|record| record.binding.pull_request == pr_number)
+        .count();
+    Ok(PR_AUTO_FIX_BUDGET.saturating_sub(u32::try_from(reserved).unwrap_or(u32::MAX)))
 }
 
 impl OrbitRuntime {

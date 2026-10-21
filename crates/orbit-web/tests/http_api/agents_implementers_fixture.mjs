@@ -36,7 +36,7 @@ export function implementerCard() {
     row('small-sample', 'model-f', null, 4, 0),
   ];
   const fleet = rows.reduce((sum, row) => sum + row.units * row.raw, 0) / rows.reduce((sum, row) => sum + row.units, 0);
-  rows.forEach(row => { row.score = (row.units * row.raw + 10 * fleet) / (row.units + 10); });
+  rows.forEach(row => { row.score = Math.min(row.raw, (row.units * row.raw + 30 * fleet) / (row.units + 30)); });
   return {
     role: 'implementers', unit: 'implemented tasks', status: 'ok', window: '30d', requested_window: '30d',
     since: '2026-09-19T08:00:00Z', computed_at: '2026-10-19T08:00:00.000Z', min_support: 10,

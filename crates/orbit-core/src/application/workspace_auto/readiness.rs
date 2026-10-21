@@ -279,6 +279,7 @@ pub fn explain_workspace_auto_readiness(
         workspace_root,
         runtime.unlocked_context_paths(),
         &holders,
+        &snapshot.published_resumes,
         free_slots,
         footprint,
         None,
@@ -361,6 +362,22 @@ pub fn explain_workspace_auto_readiness(
             }
             if let Some(deadline) = snapshot.expiring_batches.get(&task.id) {
                 object.insert("frozen_batch_deadline".to_string(), json!(deadline));
+            }
+            // The next run adopts and completes a preserved publication, so
+            // no context lock holds it back; whatever else it waits on is
+            // reported as for any task.
+            if let Some(resume) = snapshot.published_resumes.get(&task.id) {
+                object.insert(
+                    "published_delivery".to_string(),
+                    json!({
+                        "source_run_id": resume.source_run_id,
+                        "pull_request": resume.pull_request,
+                        "detail": "Resumes its published delivery: the next run adopts the \
+                                   existing branch and pull request before it edits, so other \
+                                   tasks' context locks do not hold it back. It takes them \
+                                   before any edit.",
+                    }),
+                );
             }
             let unmet = unmet_task_dependencies_with_index(
                 task,
@@ -734,6 +751,7 @@ pub fn explain_workspace_auto_readiness(
             .as_ref()
             .map(|drain| &drain.input)
             .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
+        &snapshot.task_lookup,
     )?;
 
     // [ORB-14880] Build budget inspection is advisory: an invalid setting or
@@ -848,6 +866,36 @@ pub fn explain_workspace_auto_readiness(
     }
     if let Some(forecast) = last_forecast_view {
         payload["capacity"]["last_admission_forecast"] = forecast;
+    }
+    // Keep the existing live-repair entries and add the latest completed
+    // pass's refusals. This is recorded history, never a new forge scan.
+    let mut repairs = match runtime.live_out_of_run_auto_fixes() {
+        Ok(repairs) => repairs,
+        Err(error) => {
+            tracing::warn!("readiness shows no live out-of-run auto-fix: {error}");
+            Vec::new()
+        }
+    };
+    if let Some(state) = &status_state
+        && let Some(pass) = state.pipeline.get("adopt_orphans")
+    {
+        for skipped in pass["auto_fix"]["skipped"].as_array().into_iter().flatten() {
+            repairs.push(json!({
+                "state": "skipped",
+                "task_ids": [skipped["task_id"]],
+                "pr_number": skipped["pr_number"],
+                "blocker": skipped["blocker"],
+                "reason": skipped["reason"],
+                "detail": skipped["detail"],
+                "source_run_id": skipped["source_run_id"],
+                "drain_run_id": status_run_id,
+                "drain_live": active_drain.is_some(),
+                "observed_at": pass["observed_at"],
+            }));
+        }
+    }
+    if !repairs.is_empty() {
+        payload["out_of_run_auto_fix"] = json!(repairs);
     }
     Ok(payload)
 }

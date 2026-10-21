@@ -24,6 +24,7 @@ use super::super::flaky::rerun_failed_tests;
 use super::super::git::{BaseSyncMode, normalize_base_branch};
 use super::super::light_delivery::light_delivery_decision;
 use super::super::required::command::{RequiredCommandRun, bounded_validation_text};
+use super::super::validation_log::{FailureLog, rerun_log};
 use super::input::{refused, required_workspace};
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
 use super::{already_resolved, no_diff};
@@ -566,62 +567,30 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     let red = check.as_ref().is_some_and(|check| check.reproduces(run));
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
-    let log = json!({
-        "schema_version": 1,
+    let log = FailureLog {
+        run,
+        run_id: &context.run_id,
+        tested_head: commit,
+        base_sha: Some(&candidate.base.commit),
+        baseline: check.as_ref(),
+        baseline_path: Some(&base_path),
+        flaky: rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
+        known_red: known_red.is_some(),
+        network_transient: run.network_evidence.is_some(),
+    }
+    .record(json!({
         "role": "candidate",
         "workspace_id": context.workspace_id,
         "task_id": context.task_id,
         "claim_id": context.claim_id,
         "machine_id": context.machine_id,
-        "run_id": context.run_id,
-        "tested_head": commit,
-        "base_sha": candidate.base.commit,
-        "command": run.command,
-        "exit_code": run.exit_code,
-        "timed_out": run.timed_out,
-        "output": run.output,
-        "failures": run.failures,
-        "baseline_reproduces": red,
-        "host_output_refusal": run.host_output_refusal.as_ref().map(|refusal| json!({
-            "reason": refusal.reason.as_str(),
-            "detail": refusal.detail,
-        })),
-        "validation_env": run.environment_record(),
-        "flaky": rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()),
-        "failure_kind": if rerun.as_ref().is_some_and(|rerun| rerun.flaky.is_some()) {
-            json!("flaky")
-        } else if known_red.is_some() {
-            json!("known_red")
-        } else if red {
-            json!("baseline_red")
-        } else if check.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
-            json!("environment")
-        } else if run.network_evidence.is_some() {
-            json!("transient")
-        } else {
-            run.failure_kind()
-        },
-        "network_retries": run.network_retries,
-        "timing": run.timing,
-        "summary": run.summary,
-        "baseline": check.as_ref().map(|check| check.record(Some(&base_path))),
-    });
+    }));
     // The logs are evidence for whoever reads the owner's task; failing to
     // deliver them must not hide the typed failure itself.
     let rerun_path = format!("validation/{}/{index}.rerun.json", context.claim_id);
     let mut logs = vec![(&log_path, log)];
     if let Some(rerun) = &rerun {
-        logs.push((
-            &rerun_path,
-            json!({
-                "schema_version": 1, "role": "candidate_rerun", "run_id": context.run_id,
-                "tested_head": commit, "command": rerun.run.command,
-                "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
-                "output": rerun.run.output, "summary": rerun.run.summary,
-                "timing": rerun.run.timing,
-                "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
-            }),
-        ));
+        logs.push((&rerun_path, rerun_log(rerun, &context.run_id, commit)));
     }
     if let Some(check) = &check {
         logs.push((&base_path, check.log(&context.run_id)));

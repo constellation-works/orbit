@@ -179,6 +179,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         lines.push(format!("Occupied slots: {phases}."));
     }
     lines.extend(approval_lines(&payload["approvals"]));
+    lines.extend(out_of_run_auto_fix_lines(&payload["out_of_run_auto_fix"]));
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -236,6 +237,15 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                 .as_str()
                 .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
+            // A task resuming a preserved publication waits on no context
+            // lock: its next run adopts the existing pull request first.
+            let published = match &task["published_delivery"] {
+                Value::Object(delivery) => match delivery["pull_request"].as_str() {
+                    Some(number) => format!(" resuming published delivery (PR #{number})"),
+                    None => " resuming published delivery".to_string(),
+                },
+                _ => String::new(),
+            };
             let observation = &task["admission_forecast"];
             let profile = observation["profile_source"]
                 .as_str()
@@ -255,7 +265,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                 String::new()
             };
             lines.push(format!(
-                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
+                "{task_id}: {} ({reason}){published}{light}{deadline}{crew}{blocked_by}{claimed}{host}{profile}{forecast_wait}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
@@ -269,6 +279,48 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         ));
     }
     lines
+}
+
+/// Live repairs and the latest drain pass's skipped repair candidates.
+fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
+    repairs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|repair| {
+            let tasks = repair["task_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            if repair["state"] == "skipped" {
+                let ended = if repair["drain_live"].as_bool() == Some(false) {
+                    "ended drain"
+                } else {
+                    "drain"
+                };
+                return format!(
+                    "Out-of-run auto-fix skipped: {tasks} PR #{} ({}): {} — {} (latest pass of {ended} {}, {}).",
+                    repair["pr_number"].as_str().unwrap_or("-"),
+                    repair["blocker"].as_str().unwrap_or("blocker unknown"),
+                    repair["reason"].as_str().unwrap_or("unknown"),
+                    repair["detail"].as_str().unwrap_or("-"),
+                    repair["drain_run_id"].as_str().unwrap_or("-"),
+                    repair["observed_at"].as_str().unwrap_or("time unknown"),
+                );
+            }
+            format!(
+                "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
+                repair["pr_number"].as_str().unwrap_or("-"),
+                repair["blocker"].as_str().unwrap_or("-"),
+                repair["run_id"].as_str().unwrap_or("-"),
+                repair["state"].as_str().unwrap_or("-"),
+                repair["source_run_id"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect()
 }
 
 /// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the

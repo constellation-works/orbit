@@ -732,7 +732,7 @@ fn push_checkout(
         .push(WorkspaceCheckout::owner(id.to_string(), repo, orbit_dir));
 }
 
-/// HTTP must expose admission's canonical holders, reservations and expiry side effects.
+/// HTTP observes admission surfaces without expiring grants or entering coordination.
 #[test]
 fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
     isolated(
@@ -771,6 +771,8 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                 &[],
             );
             let review = seed("Review holder", TaskStatus::Review, &["review.rs"], &[]);
+            let docs_holder = seed("Docs holder", TaskStatus::InProgress, &["notes.md"], &[]);
+            let docs_waiter = seed("Docs waiter", TaskStatus::Backlog, &["notes.md"], &[]);
             let no_diff = seed(
                 "Audit only",
                 TaskStatus::InProgress,
@@ -847,8 +849,65 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                 ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
                 Ok(())
             }).unwrap();
-            let server = fixture.server(false);
+            let server = fixture.counted_task_server();
+            let registry_connection = rusqlite::Connection::open(
+                orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let version = |connection: &rusqlite::Connection| {
+                connection
+                    .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap()
+            };
+            let registry_before = version(&registry_connection);
+            let store_before =
+                version(&runtime.sqlite_store().unwrap().connection().lock().unwrap());
+            let envelope_before = std::fs::read(&envelope_path).unwrap();
+            let trace_before = server.task_query_trace().len();
             let http = body_json(request(&server, "/tasks/locks"));
+            assert_eq!(
+                version(&registry_connection),
+                registry_before,
+                "GET never repairs the index or records envelope stamps"
+            );
+            assert_eq!(
+                version(&runtime.sqlite_store().unwrap().connection().lock().unwrap()),
+                store_before,
+                "GET never writes the operational store or dispatch audit"
+            );
+            assert_eq!(std::fs::read(&envelope_path).unwrap(), envelope_before);
+            let trace = server.task_query_trace();
+            let count = |name| {
+                trace[trace_before..]
+                    .iter()
+                    .filter(|row| row["span"]["name"] == name)
+                    .count()
+            };
+            assert_eq!(
+                count("task_index_freshness"),
+                1,
+                "one population covers holders and contention"
+            );
+            assert_eq!(
+                count("task_envelope_selection"),
+                7,
+                "only backlog, active and review envelopes are hydrated"
+            );
+            assert!(
+                runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .list_task_reservation_history(
+                        &fixture.work.display().to_string(),
+                        Some("ws_http_fixture")
+                    )
+                    .unwrap()
+                    .iter()
+                    .find(|row| row.reservation_id == expired["reservation_id"].as_str().unwrap())
+                    .unwrap()
+                    .released_at
+                    .is_none()
+            );
             let expiry_events = || {
                 runtime
                     .list_audit_events(
@@ -865,8 +924,8 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
             };
             assert_eq!(
                 expiry_events().len(),
-                1,
-                "HTTP reads expire reservations and record the shared audit event"
+                0,
+                "HTTP must not expire reservations or record expiry events"
             );
             let shared = runtime.run_tool("orbit.task.locks", json!({})).unwrap();
             for field in [
@@ -884,10 +943,15 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
             }
             assert_eq!(
                 http["locked_files"],
-                json!(["file:held.rs", "file:reserved.rs", "file:review.rs"])
+                json!([
+                    "file:held.rs",
+                    "file:notes.md",
+                    "file:reserved.rs",
+                    "file:review.rs"
+                ])
             );
             assert_eq!(
-                http["total_tasks"], 3,
+                http["total_tasks"], 4,
                 "reservation-only tasks count once beside active/review holders"
             );
             assert_eq!(http["total_reservations"], 1);
@@ -902,7 +966,11 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                     .iter()
                     .map(|row| row["id"].as_str().unwrap())
                     .collect::<Vec<_>>(),
-                vec![active.id.as_str(), review.id.as_str()]
+                vec![
+                    active.id.as_str(),
+                    docs_holder.id.as_str(),
+                    review.id.as_str()
+                ]
             );
             assert_eq!(http["by_task"][0]["context_files"], json!(["file:held.rs"]));
             for task in [&no_diff, &no_diff_review] {
@@ -928,13 +996,60 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                     "unlocked paths, no-diff, review and reservations never cause highlights"
                 );
             }
+            assert_eq!(
+                http["context_contention"][&docs_waiter.id]["entries"][0]["contenders"],
+                json!([{"id": docs_holder.id, "status": "in-progress", "selector": "file:notes.md"}]),
+                "docs-only requesters retain the fallback lock, mixed requesters leave docs unlocked"
+            );
             assert!(http["context_contention"].get(&review.id).is_none());
             assert_eq!(
                 body_json(request(&server, "/tasks/locks")),
                 http,
                 "repeated reads are stable"
             );
-            assert_eq!(expiry_events().len(), 1, "expiry is audited once");
+            assert_eq!(
+                expiry_events().len(),
+                1,
+                "the CLI listing still expires and audits once"
+            );
+            // A deterministic boundary trap: the GET must complete while the
+            // partition is exclusively held. A boundary-entering read cannot.
+            let partition = binding.canonical_path.parent().unwrap();
+            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_core::OrbitError, _>(
+                &partition.join("task-commit"),
+                "HTTP observational regression",
+                || {
+                    let response = reqwest::blocking::Client::builder()
+                        .no_proxy()
+                        .timeout(std::time::Duration::from_secs(2))
+                        .build()
+                        .unwrap()
+                        .get(format!(
+                            "{}/api/tasks/locks?workspace=ws_http_fixture",
+                            server.origin
+                        ))
+                        .send()
+                        .expect("HTTP read never enters the held mutation boundary");
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.json::<Value>().unwrap(), http);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            // A stale index must be observed without attempting a repair.
+            registry_connection
+                .execute(
+                    "DELETE FROM task_bundle_index WHERE task_id = ?1",
+                    [&review.id],
+                )
+                .unwrap();
+            let before = version(&registry_connection);
+            assert_eq!(body_json(request(&server, "/tasks/locks")), http);
+            assert_eq!(
+                version(&registry_connection),
+                before,
+                "fallback never repairs a stale index"
+            );
         },
     );
 }
@@ -1177,4 +1292,159 @@ fn regression_classification_round_trips_over_http() {
             );
         },
     );
+}
+
+/// Opt-in, paced real-server measurement; never exercises a live store.
+#[test]
+#[ignore = "6600-task latency probe; set ORBIT_LOCK_PERF_OUTPUT to an absolute scratch JSON path"]
+fn task_locks_paced_history_probe() {
+    isolated("task_contracts::task_locks_paced_history_probe", || {
+        use std::fs;
+        let fixture = Fixture::new();
+        let runtime = &fixture.runtime;
+        fs::write(runtime.paths().repo_root.join("held.rs"), "").unwrap();
+        let seed = |status, title: &str| {
+            runtime
+                .add_task(TaskAddParams {
+                    title: title.into(),
+                    description: "Lock latency fixture".into(),
+                    plan: "Measure observational reads".into(),
+                    status: Some(status),
+                    context_files: vec!["file:held.rs".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+        };
+        let template = seed(TaskStatus::Done, "Historical template");
+        let holder = seed(TaskStatus::InProgress, "Active holder");
+        seed(TaskStatus::Review, "Review holder");
+        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+        )
+        .unwrap();
+        let template_path = registry
+            .find_task_binding(&template.id)
+            .unwrap()
+            .unwrap()
+            .canonical_path;
+        let template_envelope: orbit_types::task::TaskEnvelopeV2 =
+            serde_yaml::from_str(&fs::read_to_string(template_path.join("task.yaml")).unwrap())
+                .unwrap();
+        let mut envelopes = Vec::new();
+        let mut bindings = Vec::new();
+        // 6500 historical tasks, 98 backlog, one in-progress and one review.
+        for n in 3..6600 {
+            let id = format!("HF-{}", 10000 + n);
+            let path = registry
+                .canonical_task_bundle_path("ws_http_fixture", &id)
+                .unwrap();
+            fs::create_dir_all(&path).unwrap();
+            for entry in fs::read_dir(&template_path).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_file() {
+                    let content = fs::read_to_string(entry.path())
+                        .unwrap()
+                        .replace(&template.id, &id);
+                    fs::write(path.join(entry.file_name()), content).unwrap();
+                }
+            }
+            let mut envelope = template_envelope.clone();
+            envelope.id = id.clone();
+            if n >= 6502 {
+                envelope.status = TaskStatus::Backlog;
+                // Keep the event log coherent with the cloned envelope.
+                let events = path.join("events.jsonl");
+                let content = fs::read_to_string(&events)
+                    .unwrap()
+                    .replace("done", "backlog");
+                fs::write(events, content).unwrap();
+            }
+            fs::write(
+                path.join("task.yaml"),
+                serde_yaml::to_string(&envelope).unwrap(),
+            )
+            .unwrap();
+            bindings.push((id, path));
+            envelopes.push(envelope);
+        }
+        registry
+            .register_task_bundles("ws_http_fixture", &bindings)
+            .unwrap();
+        registry
+            .replace_task_indexes("ws_http_fixture", &envelopes)
+            .unwrap();
+        let reserved = runtime
+            .sqlite_store()
+            .unwrap()
+            .reserve_task_reservation(&orbit_store::contracts::TaskReservationReserveParams {
+                workspace_orbit_dir: fixture.work.display().to_string(),
+                workspace_id: Some("ws_http_fixture".into()),
+                task_ids: vec![holder.id],
+                requested_files: vec!["file:reserved.rs".into()],
+                stored_files: vec!["file:reserved.rs".into()],
+                actor: "perf fixture".into(),
+                ttl_seconds: 120,
+                owner_run_id: None,
+                owner_metadata_json: None,
+            })
+            .unwrap();
+        assert!(reserved.reserved);
+        // Tracing is a separate request, so its per-envelope log writes do not
+        // contaminate the timed requests. Both servers use the production router.
+        let server = fixture.server(false);
+        let uri = format!(
+            "{}/api/tasks/locks?workspace=ws_http_fixture",
+            server.origin
+        );
+        let script = r#"import urllib.request,time,json,sys,math
+samples=[]
+for i in range(21):
+    if i: time.sleep(.250)
+    start=time.perf_counter()
+    with urllib.request.urlopen(sys.argv[1]) as response: body=response.read()
+    samples.append({'ms':(time.perf_counter()-start)*1000,'bytes':len(body)})
+warm=sorted(x['ms'] for x in samples[1:])
+print(json.dumps({'first':samples[0],'samples':samples[1:],'p50_ms':warm[9],'p95_ms':warm[18]}))
+"#;
+        let output = std::process::Command::new("python3")
+            .args(["-c", script, &uri])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        drop(server);
+        let server = fixture.counted_task_server();
+        let start = server.task_query_trace().len();
+        let body = body_json(request(&server, "/tasks/locks"));
+        let trace = server.task_query_trace();
+        let counts = trace[start..].iter().fold(
+            std::collections::BTreeMap::<String, usize>::new(),
+            |mut counts, row| {
+                if let Some(name) = row["span"]["name"].as_str() {
+                    *counts.entry(name.into()).or_default() += 1;
+                }
+                counts
+            },
+        );
+        report["profile_span_counts"] = json!(counts);
+        report["fixture"] = json!({"total":6600,"done":6500,"backlog":98,"in_progress":1,"review":1,"reservations":1});
+        report["returned_holders"] = body["total_tasks"].clone();
+        report["executable"] = json!(std::env::current_exe().unwrap());
+        let output =
+            std::env::var_os("ORBIT_LOCK_PERF_OUTPUT").expect("scratch report destination");
+        fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        assert!(
+            report["p95_ms"].as_f64().unwrap() <= 250.0,
+            "warm GET exceeds 250ms: {report}"
+        );
+        assert_eq!(report["profile_span_counts"]["task_index_freshness"], 1);
+        assert_eq!(
+            report["profile_span_counts"]["task_envelope_selection"], 100,
+            "only the live/backlog population is hydrated, once"
+        );
+    });
 }

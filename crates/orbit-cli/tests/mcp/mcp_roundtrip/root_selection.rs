@@ -2,6 +2,124 @@
 
 use super::*;
 
+#[test]
+fn workspace_discovery_redacts_legacy_registry_credentials() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::root_selection::workspace_discovery_redacts_legacy_registry_credentials",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let registry_path = workspace.home.join(".orbit/workspaces.json");
+    let mut registry: Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+    registry["workspaces"][0]["git_remote"] =
+        json!("https://operator:fixture-secret@github.com/example/orbit.git");
+    std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let before = std::fs::read(&registry_path).unwrap();
+    let mut expected = registry["workspaces"][0].clone();
+    expected["git_remote"] = json!("https://***@github.com/example/orbit.git");
+    let local = workspace
+        .serve()
+        .call_tool_ok("orbit_workspace_list", json!({}));
+    assert_eq!(local["workspaces"], json!([expected.clone()]));
+    let federated = workspace
+        .serve_with_args(&["--mode", "federated"])
+        .call_tool_ok("orbit_workspace_list", json!({}));
+    let row = federated["workspaces"][0].as_object().unwrap();
+    for (key, value) in expected.as_object().unwrap() {
+        assert_eq!(&row[key], value, "federated field {key}");
+    }
+    let show = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "workspace",
+            "show",
+            "--json",
+        ]),
+    );
+    let show: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(show["workspace"]["git_remote"], expected["git_remote"]);
+    let text = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["workspace", "show"]),
+    );
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.contains(expected["git_remote"].as_str().unwrap()));
+    assert!(!text.contains("fixture-secret"));
+    let list = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "workspace",
+            "list",
+            "--json",
+        ]),
+    );
+    let list: Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].get("git_remote").is_none());
+    assert_eq!(
+        std::fs::read(&registry_path).unwrap(),
+        before,
+        "discovery must not rewrite legacy registrations"
+    );
+}
+
+#[test]
+fn workspace_discovery_excludes_removed_checkout_without_persisting() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::root_selection::workspace_discovery_excludes_removed_checkout_without_persisting",
+    ) {
+        return;
+    }
+    removed_checkout_discovery(false);
+}
+
+#[test]
+fn federated_workspace_discovery_reports_removed_checkout_without_persisting() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::root_selection::federated_workspace_discovery_reports_removed_checkout_without_persisting",
+    ) {
+        return;
+    }
+    removed_checkout_discovery(true);
+}
+
+fn removed_checkout_discovery(federated: bool) {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(if federated {
+        &["--mode", "federated"]
+    } else {
+        &[]
+    });
+    let initial = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let id = initial["workspaces"][0]["id"].clone();
+    assert!(id.is_string(), "{initial}");
+    assert_eq!(initial["workspaces"][0]["status"], "active");
+    let registry_path = workspace.home.join(".orbit/workspaces.json");
+    let before = std::fs::read(&registry_path).unwrap();
+    let moved = workspace.work.with_extension("removed");
+    std::fs::rename(&workspace.work, &moved).unwrap();
+    let listing = client.call_tool_ok("orbit_workspace_list", json!({}));
+    if federated {
+        let rows = listing["workspaces"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{listing}");
+        assert_eq!(rows[0]["id"], id);
+        assert_eq!(rows[0]["status"], "invalid");
+        assert_eq!(rows[0]["checkout_health"], "invalid");
+        assert_eq!(rows[0]["reachability"], "reachable");
+    } else {
+        assert_eq!(listing["workspaces"], json!([]));
+    }
+    assert_eq!(
+        std::fs::read(&registry_path).unwrap(),
+        before,
+        "MCP discovery must validate checkout health without persisting it"
+    );
+    std::fs::rename(&moved, &workspace.work).unwrap();
+    let restored = client.call_tool_ok("orbit_workspace_list", json!({}));
+    assert_eq!(restored["workspaces"][0]["id"], id);
+    assert_eq!(restored["workspaces"][0]["status"], "active");
+}
+
 fn discovered<C>(client: &mut McpClient<C>) -> Value {
     let initialized = client.initialize(McpClient::initialize_params("root-selection", None));
     assert!(initialized["result"].is_object(), "{initialized}");

@@ -282,6 +282,42 @@ body {
   white-space: nowrap;
 }
 
+/* CLI reference rows keep both columns on their first line. Their code wraps
+   at explicit token boundaries instead of hiding command names in scroll boxes. */
+.sl-markdown-content table.orbit-cli-commands {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.sl-markdown-content table.orbit-cli-commands th,
+.sl-markdown-content table.orbit-cli-commands td {
+  vertical-align: top;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands th:first-child,
+.sl-markdown-content table.orbit-cli-commands td:first-child {
+  width: 45%;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands code:not(pre code) {
+  overflow-x: visible;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands .orbit-cli-token {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-cli-commands th,
+  .sl-markdown-content table.orbit-cli-commands td {
+    padding-inline: 0.5rem;
+  }
+}
+
 .sl-markdown-content table th,
 .sl-markdown-content table td {
   border-bottom: 1px solid var(--sl-color-hairline-light);

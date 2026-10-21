@@ -985,8 +985,7 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
     );
 }
 
-/// A run-blocked task with a recorded final-recovery decision. `next_step`
-/// stays the workflow-failure block: the decision does not move the task.
+/// A run-blocked task with an escalation recorded without another status change.
 fn block_with_final_recovery(
     runtime: &orbit_core::OrbitRuntime,
     repo: &Path,
@@ -1031,8 +1030,8 @@ fn block_with_final_recovery(
 }
 
 /// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
-/// A blocked task's `next_step` and `final_recovery` match `orbit.task.show`.
-/// List rows and a mutation response omit both keys.
+/// A blocked task's explanation and guidance match `orbit.task.show`.
+/// List rows and mutation responses omit show-only guidance.
 #[test]
 fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
     isolated(
@@ -1076,6 +1075,13 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             assert_eq!(raw["final_recovery"]["run_id"], run_id);
             assert_eq!(raw["final_recovery"]["decision"], "escalate");
             assert_eq!(raw["final_recovery"]["outcome"], "escalated");
+            assert_eq!(raw["block"]["reason"], "the failure needs an operator");
+            assert_eq!(raw["block"]["run_id"], run_id);
+            assert_eq!(raw["block"]["at"], raw["final_recovery"]["at"]);
+            assert_eq!(
+                raw["block"]["next_action"],
+                "move the task back to backlog after fixing the cause"
+            );
             assert!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'));
 
             let mut detail = raw.clone();
@@ -1142,6 +1148,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             let quiet =
                 json_ok(server.get(&format!("/api/tasks/{plain}?workspace=ws_http_fixture")));
             assert!(quiet.get("next_step").is_none() && quiet.get("final_recovery").is_none());
+            assert!(quiet.get("block").is_none());
         },
     );
 }

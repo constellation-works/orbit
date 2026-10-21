@@ -271,10 +271,11 @@ automatically for that task, without recording creation intent, and the
 response lists the stored-but-unresolved selectors as
 `context_files_unverified`. A dashboard request is never bound to a run, so it
 keeps the strict check. Task writes on every surface return the same advisory
-`warnings` (a disabled required tool, an unreadable parent or dependency, a
-proposed task without `context_files` and without the `no-diff-expected` tag,
-regardless of type, a backlog task with no footprint, and task-pilot blockers
-on approval); they never refuse the write.
+`warnings` (on add: a disabled required tool, an unreadable parent, or a
+proposed task added without `context_files` and without the `no-diff-expected`
+tag, regardless of type; on add and update: an unreadable dependency or a
+backlog task with no footprint; and on approval: task-pilot blockers and a
+backlog task with no footprint); they never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an

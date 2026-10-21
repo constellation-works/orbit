@@ -185,7 +185,10 @@ impl ServerMcpHost {
         let include_crews = orbit_mcp::workspace_list_includes_crews(input)?;
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
-        let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
+        let registry = orbit_registry::workspace_registry::load_validated_registry_from(
+            &registry_path,
+            orbit_registry::workspace_registry::WorkspaceValidationMode::InMemory,
+        )?;
         let mut listing =
             orbit_mcp::execute_discovery_tool("orbit.workspace.list", &registry, &self.host_facts)?;
         if include_crews {
@@ -198,7 +201,10 @@ impl ServerMcpHost {
         let include_crews = orbit_mcp::workspace_list_includes_crews(input)?;
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
-        let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
+        let registry = orbit_registry::workspace_registry::load_validated_registry_from(
+            &registry_path,
+            orbit_registry::workspace_registry::WorkspaceValidationMode::InMemory,
+        )?;
         let mut listing =
             orbit_mcp::execute_federated_workspace_discovery(&registry, &self.host_facts);
         if include_crews {

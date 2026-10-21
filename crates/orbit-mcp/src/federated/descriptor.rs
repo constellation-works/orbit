@@ -13,6 +13,8 @@ use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use crate::remote::workspace_for_discovery;
+
 use super::config::{Destination, MachineQualifiedSelector};
 
 /// Whether the configured destination answered this call's live probe.
@@ -93,7 +95,7 @@ impl WorkspaceDescriptor {
             reachability: Reachability::Reachable,
             checkout_health,
             capabilities,
-            workspace: Some(workspace),
+            workspace: Some(workspace_for_discovery(workspace)),
             crews: Map::new(),
         }
     }

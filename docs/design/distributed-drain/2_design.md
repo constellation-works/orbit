@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-18
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Draft
 feature: distributed-drain
@@ -198,6 +198,17 @@ window (one `workspace_pull_pipeline` run):
 
 A request without `crews` (owner-local admission) is unrestricted, as before. Crews are matched
 by registry name, so a crew both sides configure must use the same name.
+
+*Creation-time crew pools.* An owner may draw a crew whose executor excludes the owner's OS
+when another host serving this workspace can run it. The owner reads registered hosts' optional
+`host_os` snapshots from `~/.orbit/hosts.toml`; a remote host counts only when its execution
+claim records show it pulled from this workspace in the previous seven days. The owner itself
+also counts. Registration alone and an unknown host OS add no serving OS. The drawn crew stays
+assigned, so the task waits for a capable host instead of being redrawn at admission. This
+applies to creation, crew-clearing and complexity re-rate draws; admission and activity/purpose
+pool draws still check the host that will execute them. Task `os:` tags still intersect with the
+executor's declared host OS, and an explicitly assigned crew with an empty intersection is
+refused before persistence.
 
 *Host capacity* [ORB-15774]. Under `machine.auto_concurrency` `enforce`, a request also carries
 `admissible`: the work classes, complexities and templates the executor's host load forecast

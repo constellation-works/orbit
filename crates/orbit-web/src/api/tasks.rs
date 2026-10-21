@@ -27,9 +27,7 @@ use super::{
     OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
     validate_id,
 };
-use crate::projections::{
-    TaskListProjection, decorate_task_locks, task_detail_json, task_to_json_with_sidecars,
-};
+use crate::projections::{TaskListProjection, task_detail_json, task_to_json_with_sidecars};
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -461,13 +459,7 @@ fn task_list_page_json(
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
-    match blocking("task locks", move || {
-        Ok(runtime
-            .run_tool("orbit.task.locks", json!({}))
-            .and_then(|locks| decorate_task_locks(&runtime, locks)))
-    })
-    .await
-    {
+    match blocking("task locks", move || Ok(runtime.task_locks_snapshot())).await {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(e)) => server_error(e),
         Err(response) => *response,

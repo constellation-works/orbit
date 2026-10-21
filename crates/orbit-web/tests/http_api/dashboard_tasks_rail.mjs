@@ -50,6 +50,7 @@ class Node {
     this.children.push(child);
   }
   appendChild(child) { this.append(child); return child; }
+  prepend(child) { this.insertBefore(child, this.children[0] || null); }
   dispatch(type, extra = {}) {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
     for (const fn of this.listeners[type] || []) fn(event);
@@ -524,6 +525,19 @@ assert.ok(taskRows().every(row => row.querySelector('.ready-dot').classList.cont
 assert.equal(backlogBody.querySelector('.group-readiness'), null, 'and the card stops counting');
 stopListening();
 common.setWorkspace('ws_orbit');
+
+// A requeued task resuming its published delivery is admitted past another
+// task's lock: its dot is eligible, names the pull request it completes, and
+// Ship reads ready rather than a lock wait.
+drainWaits.setDrainReadiness({
+  tasks: [{ task_id: 'ORB-32', status: 'backlog', eligible: true, reason: 'ready', published_delivery: { source_run_id: 'run-32', pull_request: '17' } }],
+});
+paintBacklog();
+assert.equal(dotOf('ORB-32').dataset.pool, 'eligible', 'a resumed published delivery is not a lock wait');
+assert.ok(dotOf('ORB-32').getAttribute('aria-label').includes('PR #17'), 'the dot names the pull request it resumes');
+assert.ok(dotOf('ORB-32').title.includes('PR #17'), 'and so does its tooltip');
+assert.ok(rowFor('ORB-32').querySelector('.task-quick').classList.contains('ready'), 'Ship reads ready');
+drainWaits.setDrainReadiness({ tasks: [] });
 
 // ORB-15371: the Readiness card of a proposed or backlog task leads with its
 // drain pool and the row dot's badge text, then what holds it, the server's

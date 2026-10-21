@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: distributed-drain
 doc_role: overview
@@ -81,7 +81,9 @@ and then one leaf run. Recovery revokes that authority before allowing a replace
 runs. The owner does not track host capacity.
 
 **Epic (tag).** A size hint on a task: one large piece of work a top-tier crew takes on whole. It
-no longer names a pipeline, a worktree, a reservation class, or an admission rule.
+no longer names a pipeline, a worktree, or a reservation class. Admission has one carve-out for
+it: a tagged root with no `context_files` of its own is withheld while a descendant has some
+([§7.1](./2_design.md#71-epic-machinery)).
 
 **Handoff.** Durable PR (or owner-local candidate), validation evidence, and a typed
 `not_required` review disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.

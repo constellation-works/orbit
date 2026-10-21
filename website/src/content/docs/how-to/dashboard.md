@@ -413,7 +413,9 @@ yet says so and lists the terms it will be scored on.
   of work for each term and the score. Rows with fewer than 10 units are greyed,
   unranked, and listed last.
 - **The detail column** shows the selected row: its score, its raw score and
-  the fleet average it is pulled toward, how each term adds to or takes from
+  the fleet average (a row above the average is pulled down toward it, the
+  more the less work backs it; a row below keeps its raw score), how each
+  term adds to or takes from
   the score, the tasks behind its biggest penalty (each opens the task), and
   context such as active hours that is shown but never scored. Select another
   row to change it.
@@ -421,11 +423,14 @@ yet says so and lists the terms it will be scored on.
   the smoothing formula. It stays open while the page refreshes.
 
 The **Orchestrators** tab replaces Analytics → Orchestrators, and old
-`#analytics/orchestrators` links open it. An orchestrator's score now counts
-only problems caused by the specification: spec defects and spec-caused
-rework. Rework caused by the crew and review rejects count against
-**Implementers**, and reviewer fixes that failed revalidation count against
-**Reviewers**.
+`#analytics/orchestrators` links open it. An orchestrator earns one point per
+landed task, whatever its complexity, and loses one per spec defect or
+spec-caused rework, all per 100 owned tasks. Complexity does not count because
+the orchestrator sets it when filing or piloting a task. Rework caused by the
+crew and review rejects count against **Implementers**, and reviewer fixes
+that failed revalidation count against **Reviewers**. Rework and regressions
+with no recorded cause count against no one; their number shows under the
+score as `N unclassified`, because such a score rests on less evidence.
 The **Rework by cause** panel shows where each orchestrator's rework went.
 
 The **Implementers** tab ranks each crew and model separately. It credits

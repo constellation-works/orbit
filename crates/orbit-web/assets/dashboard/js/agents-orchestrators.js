@@ -2,7 +2,9 @@
 // rework went by cause. Only spec-caused rework counts against an
 // orchestrator; crew-caused rework counts against Implementers, and
 // infrastructure and no-cause rework are not scored. The counts are the
-// rows' shown-not-scored `rework_*` stats. Every node is built with `el()`.
+// rows' shown-not-scored `rework_*` stats. Rework and regressions with no
+// recorded cause (the `unclassified` stat) are shown beside each score as its
+// confidence. Every node is built with `el()`.
 
 import { el } from './common.js';
 
@@ -10,12 +12,28 @@ const CAUSES = [
   { key: "rework_spec", label: "Spec", note: "counted here" },
   { key: "rework_crew", label: "Crew", note: "counted against Implementers", role: "implementers" },
   { key: "rework_infrastructure", label: "Infrastructure", note: "not scored" },
-  { key: "rework_no_cause", label: "No cause", note: "not scored" },
+  { key: "rework_no_cause", label: "No cause", note: "not scored, shown beside the score" },
+];
+
+// What "How the score works" adds for orchestrators.
+const HOW = [
+  "A landed task earns one point whatever its complexity: complexity is assessed when a task is filed or piloted, so weighting by it would let an orchestrator raise its own credit by rating its tasks harder. A spec defect or spec-caused rework costs as much as a landing, so a task whose spec needed fixing earns nothing.",
+  "Rework and regressions with no recorded cause count against no one. Their count shows beside a score, because a row with many of them is scored on less evidence than it appears.",
 ];
 
 function causeCount(row, key) {
   const stat = (Array.isArray(row.stats) ? row.stats : []).find((entry) => entry.key === key);
   return stat && typeof stat.value === "number" ? stat.value : 0;
+}
+
+function scoreNote(row) {
+  const count = causeCount(row, "unclassified");
+  if (!count) return null;
+  const rate = row.units ? Math.round((count * 1000) / row.units) / 10 : 0;
+  return {
+    text: `${count} unclassified`,
+    detail: `${count} of the rework and regressions on these ${row.units} owned tasks have no recorded cause (${rate} per 100). They are not scored, so this score rests on less evidence than it shows.`,
+  };
 }
 
 function render({ rows, roleHref }) {
@@ -61,4 +79,4 @@ function render({ rows, roleHref }) {
   ];
 }
 
-export const orchestratorsPanel = { title: "Rework by cause", render };
+export const orchestratorsPanel = { title: "Rework by cause", render, scoreNote, how: HOW };

@@ -502,6 +502,28 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
         !lock.exists(),
         "failed validation must not leave a lock file"
     );
+
+    // Selector resolution has a different contract: a failed status save is
+    // best-effort, so it still reports the filesystem-validated inactive row.
+    // Let lock acquisition succeed and make only the atomic save fail.
+    drop(_restore_global);
+    fs::write(&lock, b"").expect("prepare existing registry lock");
+    let _restore_global = RestorePermissions::set_mode(&global, 0o555);
+    let selector = listed[0]["id"].as_str().expect("registered workspace id");
+    let failed = orbit_command(&unrelated, &home, &[], None)
+        .args(["--workspace", selector, "workspace", "show", "--json"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
+    assert!(
+        stderr.contains("is invalid on this machine"),
+        "selector must use validated status despite the failed save: {stderr}"
+    );
+    assert_eq!(
+        fs::read(global.join("workspaces.json")).expect("registry after best-effort save"),
+        before,
+        "best-effort selector validation must leave failed status writes unchanged"
+    );
 }
 
 fn auto_task_show_reports_and_honors_the_selected_definition_source() {

@@ -14,6 +14,7 @@ mod orphan_adoption;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
 mod pr_auto_fix;
+mod pr_repair_adoption;
 mod resume;
 mod run;
 mod upgrade_resume;
@@ -62,6 +63,7 @@ pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
     SubmissionKind, SubmissionNotices,
 };
+pub(crate) use resume::PublishedResume;
 pub(crate) use run::CodebaseDeliveryScan;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{

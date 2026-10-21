@@ -1,8 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Workspace names differ from their ids, so a chip that shows the id is caught.
+const WORKSPACE_NAMES = { one: 'Orbit fixture', two: 'Second fixture' };
+
+// The Events workspace chip names the selected workspace as the header picker
+// does; the id stays in the request scope.
+async function assertWorkspaceChipName(page, name) {
+  const chipValue = () => page.locator('#audit-scope-chips [data-chip="workspace"] .scope-chip-v').textContent();
+  await page.waitForFunction(expected =>
+    document.querySelector('#audit-scope-chips [data-chip="workspace"] .scope-chip-v')?.textContent === expected, name, { timeout: 5000 })
+    .catch(async () => { throw new Error(`The Events workspace chip must name the workspace "${name}": ${await chipValue()}`); });
+  if (await page.locator('#workspace-select').count()) {
+    const picked = await page.locator('#workspace-select option:checked').textContent();
+    if (picked !== name) throw new Error(`The header picker must show the selected workspace as "${name}": ${picked}`);
+  }
+}
+
 // Drive scope chips and their downstream actions through the full shipped app.
 export async function assertWorkspaceScope(browser, origin, evidence) {
+  await assertWorkspaceHostTransitions(browser, origin, evidence);
   for (const workspaceCount of [1, 2]) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];
@@ -10,7 +27,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     let reliabilityEvidence = null;
     try {
       await page.goto(`${origin}/#diagnostics/incidents/events?role=operator`);
-      await page.evaluate(async workspaceCount => {
+      await page.evaluate(async ([workspaceCount, names]) => {
         const task = { id: 'SCOPE-1', title: 'Workspace scope fixture', status: 'review', priority: 'medium' };
         const claim = {
           claim_id: 'scope-claim', task_id: task.id, phase: 'handed_off', unsettled: true,
@@ -88,14 +105,14 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
               resolve(status === 200 ? respond(reliabilityReport(host, label)) : respond({ error: `${host} reliability unavailable` }, status)) }));
           }
           if (pathname === '/api/workspaces') return respond(['one', 'two'].slice(0, workspaceCount)
-            .map(id => ({ id, name: id, status: 'active', is_default: id === 'one' })));
+            .map(id => ({ id, name: names[id], status: 'active', is_default: id === 'one' })));
           if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task, { id: 'PROPOSAL-1', title: 'Approve the proposed dashboard task', status: 'proposed', priority: 'medium' }], total: 2 });
           if (pathname === `/api/tasks/${task.id}`) return respond(task);
           if (pathname === '/api/audit') return respond([]);
           if (pathname === '/api/crews') return respond({ crews: [] });
           if (pathname === '/api/routines') return respond({
             machine_name: 'fixture', capabilities: { routine_toggle: allowed }, clock: {},
-            routines: [{ name: 'scope-routine', source: 'one', target: 'job:fixture', enabled: routineEnabled }],
+            routines: [{ name: 'scope-routine', source: names.one, target: 'job:fixture', enabled: routineEnabled }],
           });
           if (pathname === '/api/fleet/drains') return respond({ items: [{
             workspace_id: 'one', workspace_name: 'Fixture workspace', phase: drainRunId ? 'draining' : 'idle',
@@ -132,7 +149,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           return respond({ items: [], total: 0 });
         };
         await import('/app.js');
-      }, workspaceCount);
+      }, [workspaceCount, WORKSPACE_NAMES]);
       const chip = page.locator('#audit-scope-chips [data-chip="workspace"]');
       await chip.waitFor({ state: 'visible' });
       if (workspaceCount === 1) {
@@ -155,6 +172,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents/events?role=operator'));
         await chip.waitFor({ state: 'visible' });
       }
+      await assertWorkspaceChipName(page, WORKSPACE_NAMES.one);
       await page.locator('#audit-scope-chips [data-chip="actor"]').click();
       await page.locator('#audit-scope-chips [data-chip="actor"]').waitFor({ state: 'detached' });
       if (!(await chip.isVisible())) throw new Error('Removing an Events filter must retain the workspace chip');
@@ -311,6 +329,124 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     }
   }
   console.log('Single-workspace scope preservation and multi-workspace chip clearing passed.');
+}
+
+// Switch through the real host picker: a shared id must not leave the Events
+// chip with the previous host's removal control or clear the sole workspace.
+export async function assertWorkspaceHostTransitions(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${origin}/?workspace=one#diagnostics/incidents/events`);
+    await page.evaluate(async () => {
+      globalThis.EventSource = class { close() {} };
+      globalThis.hostScopeRequests = [];
+      globalThis.fetch = async url => {
+        const parsed = new URL(url, location.href);
+        const host = parsed.pathname.startsWith('/api/on/beta/') ? 'beta' : 'alpha';
+        const pathname = parsed.pathname.replace('/api/on/beta', '/api');
+        let payload = { items: [], total: 0 };
+        if (pathname === '/api/hosts') payload = { hosts: [
+          { name: 'alpha', machine_id: 'hm_alpha', local: true },
+          { name: 'beta', machine_id: 'hm_beta', local: false },
+        ] };
+        if (pathname === '/api/hosts/beta/connection') payload = { reachable: true, forward_writes: { authorized: true } };
+        if (pathname === '/api/workspaces') payload = (host === 'beta' ? ['one'] : ['one', 'two'])
+          .map(id => ({ id, name: `${host} workspace ${id}`, status: 'active', is_default: id === 'one' }));
+        if (pathname === '/api/audit') {
+          globalThis.hostScopeRequests.push({ host, workspace: parsed.searchParams.get('workspace') });
+          payload = [];
+        }
+        if (pathname === '/api/crews') payload = { crews: [] };
+        if (pathname === '/api/routines') payload = { routines: [], clock: {} };
+        if (host === 'beta' && pathname === '/api/workspaces') {
+          return new Promise(resolve => {
+            globalThis.releaseHostWorkspaces = () => resolve(new Response(JSON.stringify(payload), { status: 200 }));
+          });
+        }
+        return new Response(JSON.stringify(payload), { status: 200 });
+      };
+      await import('/app.js');
+    });
+    const chip = page.locator('#audit-scope-chips [data-chip="workspace"]');
+    await assertWorkspaceChipName(page, 'alpha workspace one');
+    if (await chip.locator('.scope-chip-x').count() !== 1) throw new Error('The multi-workspace host must offer chip removal');
+    // Retain the old node to exercise its listener even after the host rebuild
+    // detaches it (an already queued activation must also preserve sole scope).
+    await chip.evaluate(node => { globalThis.retiredWorkspaceChip = node; });
+    await page.locator('#host-select').selectOption('beta');
+    await page.waitForFunction(() => typeof globalThis.releaseHostWorkspaces === 'function');
+    const pendingScope = () => page.evaluate(async () => {
+      const common = await import('/js/common.js');
+      // Exercise the shipped request path while destination discovery is held.
+      await common.fetchJson('/api/audit');
+      return { workspace: common.getWorkspace(), url: location.href, request: globalThis.hostScopeRequests.at(-1) };
+    });
+    const beforeClick = await pendingScope();
+    const pendingInteractive = await chip.evaluate(node => node.matches('button, [role="button"]') || node.tabIndex >= 0 || !!node.querySelector('.scope-chip-x'));
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `events-host-loading-dark-${width}.png`), animations: 'disabled' });
+    }
+    await chip.click();
+    const afterClick = await pendingScope();
+    await page.evaluate(() => globalThis.retiredWorkspaceChip.click());
+    const afterRetiredClick = await pendingScope();
+    // Always release the response, including on a pre-fix assertion failure.
+    await page.evaluate(() => globalThis.releaseHostWorkspaces());
+    if (beforeClick.workspace !== 'one' || beforeClick.request.host !== 'beta' || beforeClick.request.workspace !== 'one'
+      || JSON.stringify(afterClick) !== JSON.stringify(beforeClick)
+      || JSON.stringify(afterRetiredClick) !== JSON.stringify(beforeClick)) {
+      throw new Error(`Chip interaction while destination workspaces are loading must preserve state, request scope and URL: ${JSON.stringify({ beforeClick, afterClick, afterRetiredClick })}`);
+    }
+    if (pendingInteractive) throw new Error('The Events workspace chip must have no remove control while destination workspaces are loading');
+    await page.waitForFunction(() => !document.querySelector('#workspace-select'));
+    await assertWorkspaceChipName(page, 'beta workspace one');
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `events-host-single-dark-${width}.png`), animations: 'disabled' });
+    }
+    if (await chip.evaluate(node => node.matches('button, [role="button"]') || node.tabIndex >= 0 || !!node.querySelector('.scope-chip-x'))) {
+      throw new Error('Switching to a sole workspace with the same id must remove the Events chip removal control');
+    }
+    await chip.click();
+    await page.evaluate(() => globalThis.retiredWorkspaceChip.click());
+    const scope = await page.evaluate(async () => {
+      const common = await import('/js/common.js');
+      return { workspace: common.getWorkspace(), multi: common.isMultiWorkspace(), url: new URL(location.href).searchParams.get('workspace') };
+    });
+    if (scope.workspace !== 'one' || scope.multi || scope.url !== 'one') {
+      throw new Error(`Interacting with current or retired chips must preserve the sole workspace: ${JSON.stringify(scope)}`);
+    }
+    await page.evaluate(() => { globalThis.hostScopeRequests = []; });
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => globalThis.hostScopeRequests.length > 0);
+    const requests = await page.evaluate(() => globalThis.hostScopeRequests);
+    if (requests.some(request => request.host !== 'beta' || request.workspace !== 'one')) {
+      throw new Error(`Events requests must retain the destination host and sole workspace: ${JSON.stringify(requests)}`);
+    }
+    // Return to the multi-workspace host with the same selected id. Its chip
+    // must regain removal and the picker must be able to restore concrete scope.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#host-select').selectOption('');
+    await assertWorkspaceChipName(page, 'alpha workspace one');
+    if (await chip.locator('.scope-chip-x').count() !== 1) throw new Error('Returning to a multi-workspace host must restore chip removal');
+    await chip.click();
+    await chip.waitFor({ state: 'detached' });
+    if (await page.locator('#workspace-select').inputValue() !== ''
+      || await page.evaluate(async () => (await import('/js/common.js')).getWorkspace()) !== null
+      || new URL(page.url()).searchParams.get('workspace') !== 'all') {
+      throw new Error('Removing the destination multi-workspace chip must select aggregate scope in state, picker and URL');
+    }
+    await page.locator('#workspace-select').selectOption('two');
+    await assertWorkspaceChipName(page, 'alpha workspace two');
+    if (errors.length) throw new Error(`Host workspace transitions raised browser errors: ${errors.join('; ')}`);
+    fs.writeFileSync(path.join(evidence, 'events-host-scope-result.json'), JSON.stringify({ beforeClick, afterClick, afterRetiredClick, scope, requests, errors,
+      transitions: ['multi alpha/one → single beta/one', 'single beta/one → multi alpha/one', 'remove → aggregate → alpha/two'] }, null, 2));
+  } finally {
+    await page.close();
+  }
 }
 
 // Exercise held accounting through the shipped app's public fetch/render path.

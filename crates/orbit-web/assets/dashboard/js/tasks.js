@@ -365,12 +365,12 @@ function feedbackSignature(map, taskId) {
   return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
 }
 
-// The detail's own controls — the status and complexity selects and each field editor —
+// The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
-  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId)];
+  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId), feedbackSignature(crewFeedback, taskId)];
   for (const field of Object.keys(TASK_FIELD_EDITORS)) {
     parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
@@ -438,6 +438,16 @@ function applyUpdatedTask(updatedTask, context) {
     pinnedExternalTask.task = merged;
   }
   return merged;
+}
+
+function currentCrewTask(task, context) {
+  if (!task || !task.id) return task;
+  return taskList(context).find((current) => current && current.id === task.id) ||
+    (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === task.id
+      ? pinnedExternalTask.task
+      : null) ||
+    taskDetails.get(task.id) ||
+    task;
 }
 
 // Read the full projection behind a summary row. One read per summary object:
@@ -1280,7 +1290,7 @@ function buildRowReason(task) {
   const dot = buildReadinessDot(task);
   const readiness = drainReadinessFor(task.id);
   if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
-  const words = readiness.badge ? readiness.badge.text : readiness.poolLabel;
+  const words = readiness.badge ? readiness.badge.text : readiness.label;
   const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
   return el("span", { class: "row-reason" }, [
     dot,
@@ -2657,6 +2667,59 @@ function goToLandingRetry(detail, claim) {
   if (target.tagName === "INPUT") target.focus({ preventScroll: true });
 }
 
+// Core selects the latest block or escalation and supplies readable evidence.
+// Render it as text: diagnoses and operator actions are untrusted task content.
+function buildTaskBlockCallout(task, context, detail) {
+  if (task.status !== "blocked") return null;
+  const block = task.block || {};
+  const headingId = `block-heading-${task.id}`;
+  const content = el("div", { class: "task-attention-content" }, [
+    el("h3", { class: "task-attention-title", id: headingId, text: "Blocked · needs your attention" }),
+    el("p", {
+      class: "task-attention-body task-block-reason",
+      text: block.reason || "No block reason was recorded.",
+    }),
+  ]);
+  const time = el("p", { class: "task-block-time" });
+  if (block.at) {
+    time.append("Blocked at ", absTimeNode(context, block.at));
+  } else {
+    time.textContent = "Block time not recorded.";
+  }
+  content.appendChild(time);
+  const next = block.next_action || (task.next_step && task.next_step.resume_command
+    ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
+    : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
+  content.appendChild(el("p", { class: "task-attention-body task-block-next", text: `Next: ${next}` }));
+  const actions = el("div", { class: "task-attention-actions" });
+  if (Number.isInteger(block.comment_index) && Array.isArray(task.comments) && task.comments[block.comment_index]) {
+    const read = el("button", { class: "attention-action primary", type: "button", text: "Read escalation" });
+    read.addEventListener("click", () => {
+      detail.activateTab("comments");
+      const id = commentAnchorId(task.id, block.comment_index);
+      expandedComments.add(commentKey(task.id, block.comment_index));
+      const panel = detail.querySelector(".comments-panel");
+      if (panel) renderCommentsPanel(panel, task, context);
+      scrollToComment(`#${id}`);
+    });
+    actions.appendChild(read);
+  }
+  if (block.run_id) {
+    const run = el("a", { class: "attention-action", text: "View run" });
+    run.href = runHref(block.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    actions.appendChild(run);
+  }
+  if (!actions.children.length) {
+    const history = el("button", { class: "attention-action", type: "button", text: "View history" });
+    history.addEventListener("click", () => detail.activateTab("history"));
+    actions.appendChild(history);
+  }
+  content.appendChild(actions);
+  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
+  ]);
+}
+
 function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -2866,6 +2929,8 @@ function buildTaskDetail(task, context, drain = null) {
     },
   ], context);
   detail.appendChild(metaBlock);
+  const blockCallout = buildTaskBlockCallout(task, context, detail);
+  if (blockCallout) detail.appendChild(blockCallout);
   const pilotCallout = buildPilotWarnings(task);
   if (pilotCallout) detail.appendChild(pilotCallout);
   detail.appendChild(attentionSlot);
@@ -2898,11 +2963,24 @@ function buildTaskMeta(task, context, { editor, showsEditor }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
   levers.appendChild(buildComplexityUpdateControl(task, context));
-  const crew = explicitCrewValue(task);
-  levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
-    el("span", { class: "visually-hidden", text: "Crew: " }),
-    ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
-  ]));
+  if (canMutateTask(task) && !isAggregateView()) {
+    const control = buildCrewUpdateControl(task, context, { withChip: false });
+    control.classList.add("task-chip-crew");
+    const select = control.querySelector("select");
+    select.removeAttribute("aria-label");
+    select.id = `detail-${task.id}-crew`;
+    const label = el("label", { text: "Crew" });
+    label.htmlFor = select.id;
+    const chip = el("span", { class: "task-chip task-crew-control" }, [label, select]);
+    control.prepend(chip);
+    levers.appendChild(control);
+  } else {
+    const crew = explicitCrewValue(task);
+    levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+      el("span", { text: "Crew: " }),
+      ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
+    ]));
+  }
   levers.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
     el("span", { class: "visually-hidden", text: "Runs on: " }),
     buildOsReadout(task),
@@ -3447,7 +3525,9 @@ function buildStatusUpdateControl(task, context) {
   return cell;
 }
 
-function buildCrewUpdateControl(task, context) {
+// The list row overlays a chip on its select; the detail styles the select
+// itself inside a visible field label and needs no duplicate value.
+function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   const cell = el("span", { class: "crew-cell" });
   if (isAggregateView()) {
     // The aggregate task list has no single crew registry to validate against.
@@ -3515,14 +3595,16 @@ function buildCrewUpdateControl(task, context) {
   cell.appendChild(select);
   const crewLabel = staleCurrentValue ? `${currentValue} (missing)` : currentValue || defaultOption.textContent;
   select.title += `: ${crewLabel}`;
-  const chip = el("span", {
-    class: "task-select-chip",
-    text: crews.length === 0 ? "unavailable" : staleCurrentValue
-      ? `${currentValue} (missing)`
-      : currentValue || resolvedCrewName(task),
-  });
-  chip.setAttribute("aria-hidden", "true");
-  cell.appendChild(chip);
+  if (withChip) {
+    const chip = el("span", {
+      class: "task-select-chip",
+      text: crews.length === 0 ? "unavailable" : staleCurrentValue
+        ? `${currentValue} (missing)`
+        : currentValue || resolvedCrewName(task),
+    });
+    chip.setAttribute("aria-hidden", "true");
+    cell.appendChild(chip);
+  }
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskCrewChange(task, feedback.undo.previousValue, context);
   });
@@ -3661,31 +3743,32 @@ function statusTransitionEvidenceUnavailable(requiredField) {
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {
+  const currentTask = currentCrewTask(task, context);
   const visit = captureWorkspaceVisit();
-  const mutationPath = visit.path(taskMutationPath(task));
-  const previousValue = explicitCrewValue(task);
-  if (nextValue === previousValue || !canMutateTask(task)) return;
-  crewFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  const mutationPath = visit.path(taskMutationPath(currentTask));
+  const previousValue = explicitCrewValue(currentTask);
+  if (nextValue === previousValue || !canMutateTask(currentTask)) return;
+  crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    crewFeedback.set(task.id, {
+    crewFeedback.set(currentTask.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(crewFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // A failed action is announced when it appears: the row's own controls are the
@@ -4017,6 +4100,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
     if (note) note.textContent = osReadoutNote(task);
   }
+  refreshDraftCrewControl(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
@@ -4038,13 +4122,34 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   parent.removeChild(current);
 }
 
-// The pinned global-resolver result: a task outside the active filter, shown
-// in the pane with a note saying so. The list has no row for it, so its crew
-// control sits beside that note; the pane head closes it like any other.
+function refreshDraftCrewControl(wrap, task, context) {
+  const control = wrap.querySelector(".task-meta-block .crew-cell.task-chip-crew");
+  const select = control && control.querySelector("select");
+  if (!select) return;
+
+  const refreshed = buildCrewUpdateControl(task, context, { withChip: false });
+  const refreshedSelect = refreshed.querySelector("select");
+  if (!refreshedSelect) return;
+
+  const value = refreshedSelect.value;
+  select.replaceChildren(...refreshedSelect.children);
+  select.value = value;
+  select.disabled = refreshedSelect.disabled;
+  select.title = refreshedSelect.title;
+  select.dataset.currentValue = refreshedSelect.dataset.currentValue;
+  select.dataset.staleCurrentValue = refreshedSelect.dataset.staleCurrentValue;
+
+  const oldFeedback = control.querySelector(":scope > .mutation-feedback");
+  if (oldFeedback) oldFeedback.remove();
+  const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
+  if (newFeedback) control.appendChild(newFeedback);
+}
+
+// The pinned resolver result shares the normal detail's crew control. Only
+// the dock needs the outside-the-list note; full-page CSS hides that box.
 function buildPinnedTask(ptask, context) {
   const row = el("div", { class: "pinned-external" }, [
     el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
-    buildCrewUpdateControl(ptask, context),
   ]);
   stopRowInteraction(row);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
@@ -4704,7 +4809,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

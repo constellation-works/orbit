@@ -1,11 +1,15 @@
 //! The drain step that adopts interrupted delivery leaves' open pull
-//! requests before it admits new work. What qualifies is
-//! `application::job::orphan_adoption`'s decision; this step only supplies
+//! requests before it admits new work, and, in an `--auto-fix` drain, hands
+//! a conflicting or red Orbit pull request whose task has no live run back to
+//! its delivery for a repair. What qualifies is
+//! `application::job::orphan_adoption`'s and
+//! `application::job::pr_repair_adoption`'s decision; this step only supplies
 //! the drain's authority and its free leaf slots. Only a malformed step input
-//! fails it; a store or forge error never ends the drain.
+//! or a failed checkpoint write fails it; candidate store or forge errors
+//! are reported in the completed pass instead.
 
 use chrono::Utc;
-use orbit_engine::DispatchError;
+use orbit_engine::{DispatchError, RuntimeHost};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -17,6 +21,24 @@ use super::drains::{
 };
 
 pub(crate) fn adopt_orphaned_deliveries(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    let mut output = adoption_pass(runtime, action, input)?;
+    if let Some(run_id) = drain_run_id(input)
+        && !runtime.is_write_free()
+    {
+        output["observed_at"] = json!(Utc::now());
+        // This is a loop-body step: the enclosing loop may not checkpoint
+        // until the drain ends. Save this pass now for run show and readiness,
+        // using the transactional update that preserves operator controls.
+        runtime.checkpoint_step_diagnostic(run_id, "adopt_orphans", &output)?;
+    }
+    Ok(output)
+}
+
+fn adoption_pass(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -68,7 +90,20 @@ pub(crate) fn adopt_orphaned_deliveries(
             .unwrap_or(usize::MAX)
             .saturating_sub(occupied),
     };
-    Ok(runtime.adopt_orphaned_deliveries(&authority, Utc::now()))
+    let mut output = runtime.adopt_orphaned_deliveries(&authority, Utc::now());
+    if authority.auto_fix {
+        // Adoption came first: its leaves hold slots the repairs may not.
+        let adopted = output
+            .get("adopted")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let repairs = runtime
+            .repair_out_of_run_pull_requests(&authority, authority.budget.saturating_sub(adopted));
+        if let Some(object) = output.as_object_mut() {
+            object.insert("auto_fix".into(), repairs);
+        }
+    }
+    Ok(output)
 }
 
 /// A templated flag: the template engine may hand a boolean over as text.

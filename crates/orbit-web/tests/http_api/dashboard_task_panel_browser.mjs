@@ -17,7 +17,7 @@ fs.mkdirSync(evidence, { recursive: true });
 // Runs in the page before the app: a fixed task list and the reads it makes.
 const fixture = `
 globalThis.EventSource = class { close() {} };
-const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog')];
+const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
 const tasks = statuses.map((status, index) => ({
   id: 'PANEL-' + (index + 1),
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
@@ -39,7 +39,7 @@ const full = task => ({
   ],
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
 });
-globalThis.panelFixture = { tasks, reads: [], writes: [] };
+globalThis.panelFixture = { tasks, reads: [], writes: [], patches: [] };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
   const api = url.pathname;
@@ -68,6 +68,11 @@ globalThis.fetch = async (input, options = {}) => {
   const detail = api.match(/^\\/api\\/tasks\\/([^/]+)$/);
   if (detail) {
     const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(detail[1]));
+    if (task && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      globalThis.panelFixture.patches.push({ id: task.id, body });
+      task.crew = body.crew;
+    }
     return task ? json(full(task)) : json({ error: 'not found' }, 404);
   }
   return json({ items: [], total: 0 });
@@ -300,6 +305,9 @@ try {
     await page.waitForFunction(() => globalThis.panelFixture.writes.includes('/api/tasks/PANEL-1/approve'));
     assert.equal(await pane(page).isHidden(), true, 'Approve from the row leaves the pane closed');
     assert.equal(await openParam(page), null, 'Approve from the row selects nothing');
+    await row(page, 'PANEL-1').locator('.task-crew-select').selectOption('sol');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-1', body: { crew: 'sol' } }], 'Crew editing still saves from a list row');
     await row(page, 'PANEL-4').getByRole('link', { name: 'View run' }).click();
     await page.waitForFunction(() => location.hash.startsWith('#runs'));
     assert.match(page.url(), /run_id=jrun-fixture-4/, 'View run opens the task\'s run');
@@ -309,6 +317,185 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     results.inlineActions = true;
+  }
+
+  // A comment or reject draft keeps the detail node alive across crew saves.
+  // The crew control must still follow the saved task so its original value can
+  // be selected again and sent as a second update, readiness refreshes must
+  // not reset the select, and selecting the workspace default must clear it.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-2').locator('.title').click();
+    await waitShown(page, 'PANEL-2');
+    const crew = pane(page).locator('#detail-PANEL-2-crew');
+    assert.equal(await crew.inputValue(), 'opus', 'The detail starts with the task\'s explicit crew');
+
+    // Readiness-only refresh with no draft held repaints in place without resetting crew.
+    await page.waitForFunction(() => globalThis.panelFixture.reads.some(r => r.includes('/api/workflows/auto/readiness?task=PANEL-2')));
+    await page.waitForFunction(() => {
+      const list = document.querySelector('#detail-PANEL-2 .readiness-list');
+      return list && list.dataset.drainSignature !== 'true-';
+    });
+    assert.equal(await crew.inputValue(), 'opus', 'A readiness-only refresh with no draft held preserves explicit crew');
+
+    // An open reject composer also retains the explicit crew.
+    await pane(page).getByRole('button', { name: 'reject', exact: true }).click();
+    const reject = pane(page).locator('.reject-form');
+    await reject.waitFor({ state: 'visible' });
+    assert.equal(await crew.inputValue(), 'opus', 'An open reject composer preserves explicit crew');
+    await reject.locator('.action.cancel').click();
+    await reject.waitFor({ state: 'hidden' });
+    assert.equal(await crew.inputValue(), 'opus', 'Canceling the reject composer leaves explicit crew intact');
+
+    // Open comment composer.
+    await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
+    const comment = pane(page).locator('.comment-form');
+    await comment.waitFor({ state: 'visible' });
+    assert.equal(await crew.inputValue(), 'opus', 'Opening comment composer preserves the task\'s explicit crew');
+
+    await crew.selectOption('sol');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === 'sol');
+    await page.waitForTimeout(25);
+    const firstFeedbackVisible = await pane(page).locator('.crew-cell .mutation-feedback.success').isVisible();
+    const draftStillOpenAfterSave = await comment.isVisible();
+    assert.equal(await crew.inputValue(), 'sol', 'The draft-held detail reflects the first saved crew');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), 'sol', 'The list row reflects the saved crew');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), 'sol', 'The API fixture stores the saved crew');
+    await capture(page, 'tasks-crew-draft-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'tasks-crew-draft-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await crew.selectOption('opus');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 2, undefined, { timeout: 2000 }).catch(() => {});
+    const patches = await page.evaluate(() => globalThis.panelFixture.patches);
+    assert.deepEqual(patches, [
+      { id: 'PANEL-2', body: { crew: 'sol' } },
+      { id: 'PANEL-2', body: { crew: 'opus' } },
+    ], 'Reverting to the crew shown before the draft-held change sends a second PATCH');
+    assert.equal(firstFeedbackVisible, true, 'A saved crew paints feedback in the draft-held detail');
+    assert.equal(draftStillOpenAfterSave, true, 'Saving the crew leaves the comment draft open');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === 'opus');
+    await page.waitForTimeout(25);
+    assert.equal(await crew.inputValue(), 'opus', 'The detail shows the reverted crew');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), 'opus', 'The list row shows the reverted crew');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), 'opus', 'The API fixture stores the reverted crew');
+    assert.equal(await comment.isVisible(), true, 'Both crew changes leave the comment draft open');
+
+    // Selecting the workspace default still clears the explicit crew.
+    await crew.selectOption('');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 3, undefined, { timeout: 2000 }).catch(() => {});
+    const patchesAfterDefault = await page.evaluate(() => globalThis.panelFixture.patches);
+    assert.deepEqual(patchesAfterDefault, [
+      { id: 'PANEL-2', body: { crew: 'sol' } },
+      { id: 'PANEL-2', body: { crew: 'opus' } },
+      { id: 'PANEL-2', body: { crew: null } },
+    ], 'Selecting the workspace default sends a third PATCH with crew: null');
+    await page.waitForFunction(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2')?.crew === null);
+    await page.waitForTimeout(25);
+    assert.equal(await crew.inputValue(), '', 'The detail select shows the workspace default');
+    assert.equal(await row(page, 'PANEL-2').locator('.task-crew-select').inputValue(), '', 'The list row shows the workspace default');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.tasks.find(task => task.id === 'PANEL-2').crew), null, 'The API fixture stores null for the cleared crew');
+    assert.equal(await comment.isVisible(), true, 'Selecting default crew leaves the comment draft open');
+
+    await comment.locator('.action.cancel').click();
+    await comment.waitFor({ state: 'hidden' });
+
+    // A task with a missing explicit crew preserves it and marks it stale.
+    await page.evaluate(() => {
+      const task = globalThis.panelFixture.tasks.find(item => item.id === 'PANEL-14');
+      if (task) task.crew = 'stale-crew';
+    });
+    await row(page, 'PANEL-14').locator('.title').click();
+    await waitShown(page, 'PANEL-14');
+    const staleCrew = pane(page).locator('#detail-PANEL-14-crew');
+    assert.equal(await staleCrew.inputValue(), 'stale-crew', 'The detail starts with the missing explicit crew');
+    assert.equal(await staleCrew.getAttribute('data-stale-current-value'), 'stale-crew', 'The select records the stale crew in its dataset');
+    await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
+    await pane(page).locator('.comment-form').waitFor({ state: 'visible' });
+    assert.equal(await staleCrew.inputValue(), 'stale-crew', 'Draft-held refresh preserves the missing explicit crew');
+    assert.equal(await staleCrew.getAttribute('data-stale-current-value'), 'stale-crew', 'The select retains the stale crew in its dataset');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.draftHeldCrewRevert = true;
+  }
+
+  // Filter membership must not change the full-page crew's label, position,
+  // styling or ability to save. Each width compares a done task with a listed
+  // task, using the same crew value so their control geometry is comparable.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const layouts = [];
+    const shots = [];
+    for (const [kind, id] of [['pinned', 'PANEL-31'], ['listed', 'PANEL-5']]) {
+      await page.goto(origin + '/?workspace=one&compare=' + id + '#tasks/' + id);
+      await page.locator('#task-detail-body .task-levers').waitFor({ state: 'visible' });
+      const name = `tasks-page-${kind}-dark-${width}.png`;
+      await capture(page, name);
+      shots.push(fs.readFileSync(path.join(evidence, name)).toString('base64'));
+      assert.equal(await page.locator('#task-detail-body .pinned-external').isVisible(), false, 'The full page has no outside-the-list box');
+      assert.equal(await pane(page).locator('.task-crew-select').count(), 1, 'The full page has one crew select');
+      const crew = pane(page).locator('.task-levers .task-chip-crew');
+      await crew.waitFor({ state: 'visible', timeout: 2000 });
+      assert.equal(await crew.locator('label').isVisible(), true, 'The crew has a visible field label');
+      assert.equal(await crew.getByLabel('Crew', { exact: true }).count(), 1, 'The visible label names its select');
+      layouts.push(await crew.evaluate(node => {
+        const levers = node.parentElement;
+        const control = node.querySelector('select');
+        const style = getComputedStyle(control);
+        return {
+          afterComplexity: node.previousElementSibling.classList.contains('complexity-cell'),
+          beforeHost: node.nextElementSibling.classList.contains('task-chip-host'),
+          offset: node.getBoundingClientRect().top - levers.getBoundingClientRect().top,
+          height: node.getBoundingClientRect().height,
+          style: ['fontFamily', 'fontSize', 'borderRadius', 'color', 'backgroundColor', 'appearance'].map(key => style[key]),
+        };
+      }));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The full page fits its viewport');
+      await crew.locator('select').selectOption('sol');
+      await page.waitForFunction(id => globalThis.panelFixture.patches.some(patch => patch.id === id), id);
+      await crew.locator('.mutation-feedback.success').waitFor({ state: 'visible' });
+      assert.equal(await crew.locator('select').inputValue(), 'sol', 'The full page keeps the saved crew');
+      assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id, body: { crew: 'sol' } }], 'Crew changes target the displayed task');
+    }
+    assert.ok(layouts.every(layout => layout.afterComplexity && layout.beforeHost), 'Crew sits between complexity and host for either filter membership');
+    assert.deepEqual(layouts[0], layouts[1], 'The crew has the same lever-row position and styling inside and outside the filter');
+    // A browser-rendered comparison artifact keeps both complete viewports
+    // side by side without adding an image-processing dependency.
+    const comparison = await context.newPage();
+    await comparison.setViewportSize({ width: width * 2, height: width === 375 ? 812 : 900 });
+    await comparison.setContent(`<body style="margin:0;display:flex">${shots.map(shot => `<img width="${width}" src="data:image/png;base64,${shot}">`).join('')}</body>`);
+    await comparison.locator('img').evaluateAll(images => Promise.all(images.map(image => image.decode())));
+    await comparison.screenshot({ path: path.join(evidence, `tasks-page-comparison-dark-${width}.png`) });
+    assert.deepEqual(errors, []);
+    await context.close();
+    results[`crewLayout${width}`] = layouts;
+  }
+
+  {
+    const { page, errors, context } = await openPage({ url: '/?workspace=one#tasks?open=PANEL-31' });
+    await page.locator('#task-detail-body .pinned-note').waitFor({ state: 'visible' });
+    await capture(page, 'tasks-dock-pinned-dark-1440.png');
+    assert.equal(await page.locator('#task-detail-body .pinned-note').innerText(), 'Not in the current list · done', 'The dock keeps the outside-the-list note');
+    assert.equal(await page.locator('#task-detail-body .task-crew-select').count(), 1, 'The dock shows the crew through one select');
+    assert.equal(await page.locator('#task-detail-body .task-levers .task-crew-select').count(), 1, 'The dock keeps crew editing in the lever row');
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await pane(page).locator('.pinned-note').isVisible(), true, 'The pinned phone sheet keeps the outside-the-list note');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The pinned phone sheet fits its viewport');
+    await capture(page, 'tasks-dock-pinned-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#task-detail-body .task-crew-select').selectOption('opus');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches), [{ id: 'PANEL-31', body: { crew: 'opus' } }], 'Changing the crew beside the list saves it to the pinned task');
+    await pane(page).locator('.crew-cell .mutation-feedback.success').waitFor({ state: 'visible' });
+    await pane(page).getByRole('button', { name: 'Open full page' }).click();
+    assert.equal(await pane(page).locator('.pinned-external').isVisible(), false, 'Opening the pinned dock as a page hides the list-only note');
+    assert.equal(await pane(page).getByLabel('Crew', { exact: true }).inputValue(), 'opus', 'Opening the full page keeps the saved crew and its label');
+    await pane(page).getByRole('button', { name: 'Back to list' }).click();
+    await pane(page).locator('.pinned-note').waitFor({ state: 'visible' });
+    assert.deepEqual(errors, []);
+    await context.close();
   }
 
   // At 375px the pane is a full-screen modal sheet with Back.

@@ -1,5 +1,6 @@
 //! Authenticate the host commit, review, synchronization and publication chain.
 use super::*;
+use orbit_types::workflow::pr_auto_fix_pushes;
 
 impl OrbitRuntime {
     pub(super) fn observe_published_source(
@@ -110,6 +111,12 @@ impl OrbitRuntime {
                 .pull_request
                 .as_str(),
         };
+        // Orbit's own auto-fix may have published repaired heads on this
+        // pull request after the source's push. Follow the chain the source
+        // recorded; any other move of the branch is still refused below.
+        let advanced =
+            auto_fix_advanced_head(&self.get_task_history(task_id)?, source_id, number, head);
+        let head = advanced.as_str();
         if adopted.as_ref().is_some_and(|binding| {
             binding.pull_request != number
                 || binding.base_branch != base_branch
@@ -227,6 +234,30 @@ impl OrbitRuntime {
         }
         Ok(binding)
     }
+}
+
+/// The head `published` reaches through the repaired heads `source_id`
+/// recorded as `pr_auto_fix_pushed` on pull request `number`, each one taken
+/// only from the head before it. A push another run or actor recorded, or one
+/// that does not continue the chain, is not followed.
+fn auto_fix_advanced_head(
+    history: &[TaskHistoryEntry],
+    source_id: &str,
+    number: &str,
+    published: &str,
+) -> String {
+    let recorded = history
+        .iter()
+        .filter(|entry| entry.by == "system")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut head = published.to_string();
+    for push in pr_auto_fix_pushes(&recorded, number) {
+        if push.run_id == source_id && push.from_head_sha == head {
+            head = push.to_head_sha;
+        }
+    }
+    head
 }
 
 pub(super) fn authenticated_checkpoint<'a>(

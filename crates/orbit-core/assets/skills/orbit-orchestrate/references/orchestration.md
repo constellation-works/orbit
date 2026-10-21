@@ -252,6 +252,13 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
+  backlog task whose final-recovery requeue kept its pull request. Its next
+  run adopts that branch and pull request before it edits anything, so it is
+  admitted past other tasks' context locks rather than waiting on
+  `context_lock_conflict`. Before any agent of that run that may edit, the run
+  takes the task's own footprint locks, waiting while another task holds them,
+  so two writers never share a file.
 - `unverified_review_finding` means the workspace sets
   `review.verify_findings = true` and a review-filed bug has no CONFIRMED
   verdict for its current material. Claim and evidence-selector edits require
@@ -612,8 +619,10 @@ and never changes configuration:
   unchanged. If policy applies the other layer, it is refused, naming the key
   and its source.
 - It is refused before anything is submitted when
-  `workflow.purpose_crews.review` is unset, on local-only delivery (`--mode local`, or a local ship mode for a
-  drain), and with `--pull`, where the owner decides review for its claims.
+  the effective reviewer pool resolves no crew (`workflow.purpose_crews.pre_landing_review`
+  when non-empty, falling back to `workflow.purpose_crews.review`), on local-only
+  delivery (`--mode local`, or a local ship mode for a drain), and with `--pull`,
+  where the owner decides review for its claims.
 - A drain with the option holds tasks routed to local-only delivery in the
   backlog instead of starting them. Child runs inherit the layer, and a resume
   keeps it.
@@ -669,6 +678,21 @@ It cannot be combined with `--pull` or `--stop`.
   are spent, the leaf stops with `auto_fix_budget_exhausted` and lists the
   attempts.
 - Closed or merged PRs and superseded heads get no repair.
+- A blocked Orbit PR whose task no run is delivering any more is repaired out
+  of run. Each `--auto-fix` drain pass hands it back to the task's newest
+  failed, timed-out or interrupted leaf, rewound to completion, when the task
+  is in `review` or was blocked or requeued by that leaf's own delivery. The
+  same ledger bounds it, each hand-back is recorded as `pr_auto_fix_out_of_run`,
+  and `orbit run readiness` lists live repairs and the latest drain pass's
+  skipped candidates under `out_of_run_auto_fix`. Skips carry `state: "skipped"`,
+  the PR, reason, detail, observation time and whether the drain is still live;
+  a blocker is null when the refusal preceded a forge read. Read the full
+  persisted pass with `orbit run show <drain-run> --step adopt_orphans --json`
+  under `step_output.auto_fix.skipped`. Capacity and resource holds name the
+  candidates without forge reads; the scan covers every task in `review`,
+  `blocked` or `backlog` that records a PR, not a window of recent leaves. A write-free pass scans and persists nothing.
+  Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
+  started with `--complete` under a drain without it are left alone.
 
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and

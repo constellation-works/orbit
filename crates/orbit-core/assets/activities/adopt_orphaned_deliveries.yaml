@@ -20,6 +20,19 @@ spec:
     or final skip is decided once and audited. The step never fails on a
     store or forge error: one leaf's error defers it, and a pass that cannot
     read its candidates or slots reports `pass_error` and adopts nothing.
+    A drain started with `auto_fix` then repairs, within the slots adoption
+    left free, each Orbit pull request that conflicts with its base or has a
+    failed required check while its task (in `review`, or blocked or requeued
+    by its own delivery) has no live run: it resumes the task's newest failed,
+    timed-out or interrupted delivery leaf at its completion step with
+    `auto_fix` granted, so the auto-fix crew takes the task's footprint
+    locks, pushes to the same branch and the leaf completes the existing pull
+    request under its own `completion` grant. An operator hold or
+    `no-auto-approve` tag, or a leaf started with `--complete` under a drain
+    without `--complete`, is never repaired. Pull requests not opened by a
+    delivery identity on the task's branch and spent per-pull request auto-fix
+    budgets are also never repaired. Its result is reported under
+    `auto_fix` (`started`, `skipped`, and `pass_error`).
   input_schema_json:
     type: object
     properties:
@@ -45,6 +58,8 @@ spec:
       pass_error:
         type: string
       resource_throttle:
+        type: object
+      auto_fix:
         type: object
   action: adopt_orphaned_deliveries
   config: {}

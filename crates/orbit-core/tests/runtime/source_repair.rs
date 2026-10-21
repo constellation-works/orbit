@@ -13,6 +13,8 @@ use std::path::PathBuf;
 mod association;
 #[path = "source_repair/failed_publication.rs"]
 mod failed_publication;
+#[path = "source_repair/failed_successors.rs"]
+mod failed_successors;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, git};
@@ -46,18 +48,29 @@ use completion::{
     changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
     concurrent_and_lost_admission_keep_one_completion_budget,
     configured_review_requires_unchanged_host_certificate,
+    empty_requirements_still_bind_completion_policy,
+    moved_base_and_empty_requirements_retry_unchanged_completion,
     refused_receipts_stop_before_agent_or_republication,
+    repeated_observation_failure_escalates_after_one_retry,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
 };
+use failed_successors::{
+    failed_pre_adoption_chain_rebinds_the_original_publication,
+    failed_successor_chain_keeps_every_neighboring_refusal,
+};
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use published_owner::{
+    auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
+    deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
     published_completion_requeue_adopts_without_reimplementation,
+    published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
+    unrecorded_publication_move_is_refused,
 };
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
 
@@ -826,9 +839,15 @@ crate::scenario_table!(
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+    published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
+    deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
+    auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
+    unrecorded_publication_move_is_refused,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
+    failed_pre_adoption_chain_rebinds_the_original_publication,
+    failed_successor_chain_keeps_every_neighboring_refusal,
     cancelled_published_repair_accepts_fresh_generation,
     cancelled_candidate_requires_explicit_intent_and_continues_same_branch,
     cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift,
@@ -843,6 +862,9 @@ crate::scenario_table!(
 crate::scenario_table!(
     published_completion_scenarios,
     unchanged_publication_retries_only_completion,
+    moved_base_and_empty_requirements_retry_unchanged_completion,
+    empty_requirements_still_bind_completion_policy,
+    repeated_observation_failure_escalates_after_one_retry,
     completion_reuse_refuses_drift,
     changed_base_gets_fresh_native_validation,
     concurrent_and_lost_admission_keep_one_completion_budget,

@@ -17,6 +17,11 @@ then use its registered workspace in tool calls. MCP setup is not a prerequisite
 for local task tracking. Inspect host, workspace, ownership, availability and
 capabilities where returned.
 
+Workspace discovery checks checkout roots against the destination's filesystem
+on each call without saving status changes. A removed checkout disappears from
+a direct server's list. Federated discovery keeps its descriptor with
+`checkout_health: invalid`; restore or re-register the checkout before using it.
+
 - Direct server: pass the returned logical workspace ID as `workspace`.
   The server can also resolve registered names and paths, but IDs avoid
   ambiguity. An explicit selector overrides its session binding.

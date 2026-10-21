@@ -1,7 +1,7 @@
 ---
 title: Mid-Run Operator Steering — Vision
 owner: codex
-last_updated: 2026-10-18
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Accepted
 feature: mid-run-steering
@@ -24,7 +24,7 @@ Forward-looking: where steering could go now that the safe-point version in [2_d
 2. **Native session injection.** Several provider CLIs expose session or resume protocols (the Muse lane's MSP session host in [ORB-16577] is one). Should the executor contract grow an optional `steer` capability flag, negotiated per lane like native inspection, with the generic safe-point path as the floor every lane meets?
 3. **Delivered vs understood in the UI.** What should the operator see after commenting on a live task: "queued for next step", "delivered to run X step Y", "candidate promoted with this unread"? Each is a different promise, and only the first two are facts the host actually holds.
 4. **Steering that changes the task.** When a comment effectively amends acceptance criteria, should the review gate re-derive its criteria from the amended record, or keep judging the candidate against the criteria captured at admission? The absorption certificate in `sync_base` recovery already pins a `task_scope_digest` at admission time; steering may need the same pin-and-name-the-delta treatment.
-5. **Non-human steering.** Routines and auto-tasks write comments today. Should an automation ever be able to steer a live run, or is steering a human-only channel by construction?
+5. **Non-human steering.** Current routine and auto-task code paths do not write task comments. Should an automation ever be able to steer a live run, or is steering a human-only channel by construction?
 6. **Measuring the miss rate.** Before this feature, a missed comment left no trace. What metric — undelivered-at-promotion holds, rounds consumed, time-to-delivery — would prove the mechanism earns its prompt and latency cost per workspace?
 
 ## 2. Prior Work

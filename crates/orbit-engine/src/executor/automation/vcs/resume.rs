@@ -15,8 +15,8 @@ use crate::executor::automation::input::{
 };
 
 use super::freshness::{commit_sha, recovered_head_checkpoint, recovery_pinned_base};
+use super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
 
-const FAILURE_HANDOFF_LINEAGE_MAX_HOPS: usize = 64;
 const RESUME_PREPARATION_REFRESH_MAX_ATTEMPTS: u64 = 1;
 
 const RESUME_PRESERVATION_ERROR: &str = "resume_preservation_unverified";
@@ -582,32 +582,32 @@ fn ensure_preservation_parent_owned<H: RuntimeHost + ?Sized>(
             "failure handoff run '{handoff_run_id}' was not found while verifying preservation ancestry"
         ))
     })?;
-    let mut cursor = handoff_run.retry_source_run_id;
-    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
-        let Some(run_id) = cursor.take() else { break };
-        let run = host.get_job_run(&run_id)?.ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "retry ancestor '{run_id}' was not found while verifying preservation ancestry"
-            ))
-        })?;
-        if run.job_id != handoff_run.job_id {
-            return Err(OrbitError::Execution(format!(
-                "preservation ancestry crosses from job '{}' to job '{}' at run '{}'",
-                handoff_run.job_id, run.job_id, run.run_id
-            )));
+    let mut lineage = RetryLineage::same_job(&handoff_run);
+    loop {
+        match lineage.step(host)? {
+            LineageStep::Ancestor(run_id, _) => {
+                let ancestor_head = host
+                    .read_run_state(&run_id)?
+                    .and_then(|state| state.failure_activity_checkpoint)
+                    .and_then(|checkpoint| checkpoint.output.get("head_sha").cloned())
+                    .and_then(|head| head.as_str().map(ToOwned::to_owned));
+                if ancestor_head.as_deref() == Some(parent_sha.as_str()) {
+                    return Ok(());
+                }
+            }
+            LineageStep::Stop(LineageStop::Missing(run_id)) => {
+                return Err(OrbitError::Execution(format!(
+                    "retry ancestor '{run_id}' was not found while verifying preservation ancestry"
+                )));
+            }
+            LineageStep::Stop(LineageStop::CrossJob { run_id, job_id }) => {
+                return Err(OrbitError::Execution(format!(
+                    "preservation ancestry crosses from job '{}' to job '{job_id}' at run '{run_id}'",
+                    handoff_run.job_id
+                )));
+            }
+            LineageStep::Stop(_) => break,
         }
-        let ancestor_head = host
-            .read_run_state(&run_id)?
-            .and_then(|state| state.failure_activity_checkpoint)
-            .and_then(|checkpoint| checkpoint.output.get("head_sha").cloned())
-            .and_then(|head| head.as_str().map(ToOwned::to_owned));
-        if ancestor_head.as_deref() == Some(parent_sha.as_str()) {
-            return Ok(());
-        }
-        if run.retry_source_run_id.as_deref() == Some(run_id.as_str()) {
-            break;
-        }
-        cursor = run.retry_source_run_id;
     }
 
     Err(OrbitError::Execution(format!(
@@ -630,37 +630,37 @@ pub(super) fn ensure_retry_descends_from<H: RuntimeHost + ?Sized>(
     run_id: &str,
     ancestor_run_id: &str,
 ) -> Result<(), OrbitError> {
-    let mut current = host.get_job_run(run_id)?.ok_or_else(|| {
+    let current = host.get_job_run(run_id)?.ok_or_else(|| {
         OrbitError::Execution(format!(
             "{operation}: cannot verify ownership for task '{task_id}'; active run '{run_id}' was not found"
         ))
     })?;
-    let job_id = current.job_id.clone();
-
-    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
-        let Some(parent_run_id) = current.retry_source_run_id.as_deref() else {
-            return Err(OrbitError::Execution(format!(
-                "{operation}: run '{run_id}' is not a retry descendant of {ancestor_label} '{ancestor_run_id}' for task '{task_id}'"
-            )));
-        };
-        let parent = host.get_job_run(parent_run_id)?.ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "{operation}: cannot verify ownership for task '{task_id}'; retry ancestor '{parent_run_id}' was not found"
-            ))
-        })?;
-        if parent.job_id != job_id {
-            return Err(OrbitError::Execution(format!(
-                "{operation}: retry lineage for run '{run_id}' crosses from job '{job_id}' to job '{}' at run '{}'; refusing handoff for task '{task_id}'",
-                parent.job_id, parent.run_id
-            )));
+    let mut lineage = RetryLineage::same_job(&current);
+    loop {
+        match lineage.step(host)? {
+            LineageStep::Ancestor(_, parent) if parent.run_id == ancestor_run_id => return Ok(()),
+            LineageStep::Ancestor(..) => {}
+            LineageStep::Stop(LineageStop::Root) => {
+                return Err(OrbitError::Execution(format!(
+                    "{operation}: run '{run_id}' is not a retry descendant of {ancestor_label} '{ancestor_run_id}' for task '{task_id}'"
+                )));
+            }
+            LineageStep::Stop(LineageStop::Missing(parent_run_id)) => {
+                return Err(OrbitError::Execution(format!(
+                    "{operation}: cannot verify ownership for task '{task_id}'; retry ancestor '{parent_run_id}' was not found"
+                )));
+            }
+            LineageStep::Stop(LineageStop::CrossJob {
+                run_id: parent_run_id,
+                job_id: parent_job_id,
+            }) => {
+                return Err(OrbitError::Execution(format!(
+                    "{operation}: retry lineage for run '{run_id}' crosses from job '{}' to job '{parent_job_id}' at run '{parent_run_id}'; refusing handoff for task '{task_id}'",
+                    current.job_id
+                )));
+            }
+            LineageStep::Stop(_) => break,
         }
-        if parent.run_id == ancestor_run_id {
-            return Ok(());
-        }
-        if parent.run_id == current.run_id {
-            break;
-        }
-        current = parent;
     }
 
     Err(OrbitError::Execution(format!(
@@ -676,26 +676,23 @@ pub(super) fn retry_chain_to<H: RuntimeHost + ?Sized>(
     run_id: &str,
     ancestor_run_id: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
-    let Some(mut current) = host.get_job_run(run_id)? else {
+    let Some(run) = host.get_job_run(run_id)? else {
         return Ok(None);
     };
-    let job_id = current.job_id.clone();
-    let mut chain = vec![current.run_id.clone()];
-    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
-        if current.run_id == ancestor_run_id {
+    let mut lineage = RetryLineage::same_job(&run);
+    let mut chain = vec![run.run_id];
+    loop {
+        if chain.last().is_some_and(|id| id == ancestor_run_id) {
             return Ok(Some(chain));
         }
-        let Some(parent_run_id) = current.retry_source_run_id.clone() else {
+        let LineageStep::Ancestor(_, parent) = lineage.step(host)? else {
             return Ok(None);
         };
-        let Some(parent) = host.get_job_run(&parent_run_id)? else {
-            return Ok(None);
-        };
-        if parent.job_id != job_id || chain.contains(&parent.run_id) {
+        // The chain holds at most `RETRY_LINEAGE_MAX_HOPS` runs, `run_id`
+        // included.
+        if chain.len() == RETRY_LINEAGE_MAX_HOPS || chain.contains(&parent.run_id) {
             return Ok(None);
         }
-        chain.push(parent.run_id.clone());
-        current = parent;
+        chain.push(parent.run_id);
     }
-    Ok(None)
 }

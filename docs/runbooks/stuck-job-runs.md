@@ -4,8 +4,8 @@ summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
-related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-19
+related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179]
+last_validated: 2026-10-20
 ---
 
 # Recover Stuck Job Runs
@@ -151,7 +151,42 @@ worker exit. While a recorded provider is alive or unverifiable, the run stays
 nonterminal and keeps its reservations. The observer retries once per second and
 retains the original exit status and worker-log diagnostic until it can finalize.
 It does not kill surviving providers. If the observer itself stops, lazy orphan
-reconciliation remains available with its ordinary stale-owner diagnostic.
+reconciliation remains available with its stale-owner diagnostic.
+
+### How the worker ended
+
+Only the observer, the worker's parent, can reap its exit status. It records a
+`pipeline.worker.exited` audit row (`orbit audit list`) as soon as it reaps the worker,
+before it settles the run: `exit_code` or `signal` and `signal_name`, `core_dumped`, and
+on Linux the worker scope's `memory.events` `oom_kill` and `pids.events` `max` counters
+while its cgroup still exists. On Linux an unreaped worker keeps its start identity, so
+reconciliation cannot condemn a run while its observer is alive and has not reaped the
+worker; once it has, the two race to settle the run. A run interrupted with
+`reason=process_not_found` or `token_mismatch` then ends its diagnostic with a
+`worker exit:` clause:
+
+- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL)` (or
+  `exited with code <n>`): the observer recorded the exit before reconciliation won.
+- `no supervisor observed or recorded its exit status; …`: nobody had recorded an exit.
+  The launching process had exited, so the init process or the user manager reaped the
+  worker, or reconciliation won the race. What follows is what the worker's scope, recorded
+  when the worker claimed the run, still reports: its systemd unit `state=…, result=…` and
+  counters, or `worker scope '<unit>' was already gone` with the `journalctl --user -u <unit>`
+  command that still has its end. A worker that ran in no scope (macOS, containment off, no
+  user manager) reads `no worker scope evidence is available`; nothing is inferred.
+- `…; afterwards its supervisor reaped pid <pid> at <time>: …`: reconciliation won the
+  race to settle the run after the observer had already reaped the worker. The observer
+  can record that exit afterward. `finished_at` is the run's last audit activity, not
+  the interruption time. The displayed reap-observation time is stamped when the
+  observer records the reaped status, so it can be later than reconciliation's
+  `Interrupted` write. That later timestamp does not mean the worker was still running
+  when the run was interrupted.
+
+```text
+job run marked interrupted because recorded worker process is no longer alive (reason=process_not_found, pid=4242, pid_start_time=…); worker exit: no supervisor observed or recorded its exit status; worker scope 'orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope' was already gone: no unit result or counters remain (see `journalctl --user -u orbit-worker-jrun-20261019-1515-c3-1a2b3c4d.scope`)
+```
+
+The clause adds evidence only; it changes neither which runs are interrupted nor when.
 
 A process running a different executable than the one recorded for a live Orbit root (for
 example, right after the binary was replaced while workers from the previous build are still
@@ -262,7 +297,20 @@ the exact `orbit job resume <run-id>` when that run is resumable (`failed`, `tim
 `--json`, `orbit.task.show` and `GET /api/tasks/:id` carry the same object in `next_step`; it is
 absent for a task that is not blocked by a run. The same show prints `Final Recovery:` when a
 final-recovery decision is recorded, and those JSON surfaces carry `final_recovery` with
-`run_id`, `decision`, `outcome` and `at`. A task list does not include either field.
+`run_id`, `decision`, `outcome` and `at`. A task list does not include these show-only fields.
+
+For a blocked task, those same JSON surfaces also carry `block`: the latest
+block or escalation's `reason`, `at`, classified `cause`, `run_id`,
+`comment_index` (zero-based into `comments`) and recorded `next_action`.
+Missing evidence is `null`; other statuses omit `block`. A final-recovery
+escalation can update the explanation while the task remains blocked. It
+supersedes the earlier run failure, but a later new block never reuses that
+old escalation. Escalations offer requeue guidance rather than automatic resume.
+
+The dashboard shows this explanation near the status in both the dock and full
+page, including the recorded time, next step and a link to the escalation
+comment or run. When no reason or time was recorded, it says so explicitly.
+Long reasons are summarized in the callout; open the evidence for the full text.
 
 ## Cancel a conclusively stuck run
 
@@ -510,19 +558,25 @@ failed read never counts as passing required checks; the resumed completion
 reads them again.
 
 The host first authenticates the successful commit, preparation, synchronization,
-push and PR chain, exact clean checkout, current task ownership, remote branch
-lease and unchanged remote base. Native validation must have captured the same
-task meaning, command list, resolved job, effective validation environment and
-review policy. Every command needs its complete successful host-written log and
-matching artifact hash. A missing capture, empty command list, deferred result,
-known-red result or damaged receipt grants no reuse. A configured review must
-have an unchanged successful settlement and matching host certificate.
+push and PR chain, exact clean checkout on the published head and branch,
+current task ownership and remote branch lease. A base that advanced after
+publication does not refuse reuse: the receipts stay bound to the base they
+judged, and the resumed completion applies its own base-freshness and
+required-check handling to the published head. Native validation must have
+captured the same task meaning, command list, resolved job, effective
+validation environment and review policy. Every command needs its complete
+successful host-written log and matching artifact hash. A workspace with no
+`workflow.required_validation_commands` has no log to check; its
+`skipped_no_required_commands` capture must still carry the same effective
+policy. A missing capture, deferred result, known-red result or damaged receipt
+grants no reuse. A configured review must have an unchanged successful
+settlement and matching host certificate.
 
 This continuation is limited to a failed observation before any merge, automatic
 merge, post-publication rebase or repair mutation. A `delivery_preparation`
 checkpoint from a `pr_prepare` step before the first push does not exclude reuse:
-the published head, remote base and validation receipts must still match the
-completion binding. Enabling automatic source repair does not exclude an
+the published head and validation receipts must still match the completion
+binding. Enabling automatic source repair does not exclude an
 otherwise unchanged original publication. The host checks the existing
 repair admissions/publications, source-repair, infrastructure and base-update
 reservations, including pending or unreadable records. Any such task history
@@ -534,14 +588,19 @@ Refusals identify mutation provenance, the checkpoint step, the failure-activity
 checkpoint or the reviewer repair that prevented reuse. Native policy captures
 from before this provenance contract cannot authorize reuse.
 
-Current hosted checks, merge policy, PR identity and merge state are read again
-by ordinary completion. Unknown mutation replies retain the existing reconciliation path;
-they are not classified as read-only failures. The original completion deadline
-and final-recovery charge survive retries and checkpoint resumes.
+The retry waits 10 seconds before completion reads the PR again. Current hosted
+checks, merge policy, PR identity and merge state are read again by ordinary
+completion, which merges only the published head. Unknown mutation replies
+retain the existing reconciliation path; they are not classified as read-only
+failures. The original completion deadline and final-recovery charge survive
+retries and checkpoint resumes, so a run retries once. A second failed
+observation runs the failure handoff, which keeps the PR and the task in review
+and records the failure on the task.
 
-Changed task meaning, policy, base, candidate, review repairs, publication,
-ownership or lease refuses reuse and preserves the publication for explicit
-governed source repair. The agent cannot override that refusal by requesting the
+Changed task meaning, policy, candidate, review repairs, publication, ownership,
+lease or a dirty checkout refuses reuse, blocks the task with the refusal as
+its diagnosis and preserves the publication for explicit governed source
+repair. The agent cannot override that refusal by requesting the
 same stale prefix. A stopped or foreign execution cannot acquire an active
 worker's continuation
 through this check. No successful receipt is rewritten and no replacement PR is
@@ -741,6 +800,32 @@ recovery budgets retain their existing charges. The original execution records
 and retained checkout remain available; branch adoption renames the old local
 branch aside without changing its commit or files.
 
+If Orbit's own auto-fix moved the published branch before the requeue, the
+next run adopts the head that auto-fix recorded. That is a
+`pr_auto_fix_pushed` record written by Orbit for the same run and pull
+request, starting from the published head. When the repair changed files the
+task does not declare, the next run's commit adds them to the task's context
+files as usual, and that addition does not void the adoption. A branch move
+with no such record is still refused.
+
+A requeue that kept its publication does not wait behind other tasks' context
+locks. In a PR-mode workspace, `orbit run readiness` and the dashboard show
+the task as eligible and `resuming published delivery (PR #N)`
+(`published_delivery` in JSON), even while another task holds one of its
+files. Its gate takes a reservation that holds no files
+(`footprint_deferred: true`, naming the holders it did not wait on). The run
+then re-applies the unchanged published patch, which is not an edit. Before
+the first agent that may edit, the run takes the task's footprint locks and
+waits while another task holds them. Those agents are an implementer
+repairing a conflicting re-application, a reviewer fix, and step, conflict or
+check repair. Read-only reviewers and the final-recovery decision do not wait.
+If the locks stay held for the gate's wait (`max_wait_seconds`, default one
+hour), the agent is refused with `footprint_unavailable`, naming the holders.
+Another resumed run that still waits for its own footprint holds no file and is
+no holder, so two overlapping resumed runs take the footprint one after the
+other instead of refusing each other; the run that took it excludes the other
+until it ends. The run's reservation is released when the run ends.
+
 A missing task-meaning binding, changed task/head, incomplete publication,
 foreign source or ambiguous association stops admission. It never authorizes
 fresh replacement implementation for that known publication. Reconcile a
@@ -749,16 +834,34 @@ merged/closed PR or uncertain merge intent explicitly before trying again.
 For a publication requeued before preservation bindings were introduced, use
 explicit source repair against the **original publishing run**. Inspection also
 accepts an owner-local failed source with a durable applied final-recovery
-requeue. If the task now names a newer cancelled replacement, inspection binds
-that successor's entire stopped execution and checkpoints in `binding.superseded`.
-The successor must belong to the same task and machine, be conclusively stopped,
-and have no commit or publication attempt. Its retained files are left intact.
-Missing, live, foreign or candidate-producing successors refuse inspection.
+requeue. If the task now names a newer replacement, inspection binds every
+owner run that bound the task after the publishing run, up to the current
+binding, in `binding.superseded`: it names the current binding and digests each
+run's entire stopped execution and checkpoints. Each must be a single-task
+`task_pr_pipeline` run of the same task on the same machine, created after the
+source, conclusively stopped, unclaimed and with no local pull record, and have
+no commit, push, PR or landing-push checkpoint, step or step-start audit row.
+Gate and auto-dispatch wrappers are not bindings and are skipped. A run is
+either:
+
+- **cancelled**. Its retained files are left intact; or
+- **failed before producing source**, with a settled final recovery
+  (escalated or requeued). It stopped at or before candidate adoption: no step
+  after `resume_candidate` has a state or a step-start audit row, adoption did
+  not succeed, its failure handoff (if any) recorded `no_candidate`, and its
+  retained worktree has no uncommitted changes. A failed run that reached
+  implementation or left work behind is a resume candidate; resume or discard
+  it explicitly instead.
+
+Missing, live, foreign, claimed, unsettled or candidate-producing runs anywhere
+in that chain refuse inspection, as does a publishing run older than the
+task's 64 most recent runs.
 Review the returned original head, branch, PR and successor binding, then submit
-that exact binding with a new request key and a diagnosis. A changed successor
-invalidates it. Do not reconstruct checkpoints, clear the newer run link, or
-restart the replacement. A lost submission reply is reconciled by replaying the
-identical request key and payload.
+that exact binding with a new request key and a diagnosis. A change to any run
+in the chain invalidates it. Do not reconstruct checkpoints, fabricate a
+cancellation, clear the newer run link, or restart the replacement. A lost
+submission reply is reconciled by replaying the identical request key and
+payload.
 
 A stopped, escalated owner publication can also be inspected when its terminal
 hook recorded a blocked-publication receipt. The retained head must be the
@@ -1047,14 +1150,18 @@ refusals are:
 - `not_resumable` (checkpoint resume refused it)
 
 To see why a leaf was left alone, read the drain's latest `adopt_orphans` step output
-with `orbit run show <drain-run> --json`. The following are not decisions; a later
+with `orbit run show <drain-run> --step adopt_orphans --json` (the `step_output`
+field). Each completed pass replaces this checkpoint immediately, including
+while the enclosing drain loop is still running. The following are not decisions; a later
 pass considers the leaf again:
 
 - `authority`: a missing grant;
 - `store_unreadable`: an unreadable store;
 - `forge_unreadable`: an unreadable forge. After the first failed read, a pass
   defers its remaining leaves without asking the forge again, so an unreachable
-  GitHub delays admission by at most one read;
+  GitHub delays admission by at most one read. In the separate out-of-run
+  auto-fix scan, GitHub's `UNKNOWN` mergeability answer is a per-pull-request
+  `mergeability_unknown` skip, so other repair candidates are still checked;
 - `resume_unplannable`: a resume that could not be planned for a reason other than
   validation, including an activity catalog that does not load (a file caught
   mid-edit);
@@ -1069,6 +1176,85 @@ pull requests that no live run is delivering are closed
 ([`[pr]` rules](../CONFIG.md#pr--pull-requests)). A claimed leaf on a follower is
 never adopted this way: its claim's release keeps the candidate and pull request,
 and the task's next claim continues them ([distributed drain](distributed-drain.md)).
+
+## A conflicting or red pull request no run is watching
+
+A delivery leaf's completion step repairs its pull request only while it runs.
+When the leaf ends without completing (its completion deadline ran out, final
+recovery escalated or requeued the task, its worker died after a resume), the
+pull request can go red or conflict with its base while nothing watches it.
+
+A drain started with `orbit run auto --auto-fix` repairs it. After adoption, each
+pass takes every task in `review`, `blocked` or `backlog` that records a GitHub
+pull request, however long ago its run ended and however many deliveries ran
+since, looks at that task's newest `task_pr_pipeline` run and hands the task back
+to that run's completion step when all of these hold. No window of recent runs
+bounds the pass; a task whose newest run finished is left alone:
+
+- the run carries only that task, ended `failed`, `timeout` or `interrupted`,
+  and is not a claimed execution. A leaf that finished (a review-only handoff)
+  or was cancelled is not resumed;
+- the task is in `review`, or in `blocked` or `backlog` because that run's
+  lineage put it there (a delivery failure handoff, an interruption, or a final
+  recovery escalation or requeue);
+- no run of the task is live and no claim of it is unsettled;
+- the drain holds `--complete` when the run was started with it;
+- the run opened the pull request the task records, on the task's `orbit/<task>-`
+  branch, and the forge reports it open on that branch, naming the task and
+  authored by a delivery identity (`pr.delivery_authors`, else the authenticated
+  `gh` login);
+- it conflicts with its base or a required check failed on its current head;
+- the pull request's auto-fix ledger would admit a repair of that head and
+  blocker, and no earlier hand-back covered them.
+
+The hand-back is a checkpoint resume of the run, rewound to `pr_complete`, with
+`auto_fix` and deferred footprint locks granted and the repair recorded under
+`out_of_run_auto_fix` in its input. The task returns to `review`. The watcher
+admits the repair against the pull request's attempt ledger, and the
+`workflow.purpose_crews.auto_fix` crew takes the task's footprint locks before it
+edits, then pushes to the same branch. Completion then merges only when the run
+holds `--complete`; a review-only run leaves the repaired pull request in
+`review`. Each hand-back is recorded in task history as `pr_auto_fix_out_of_run`.
+A pull request is handed back at most once per head and blocker, and at most
+three times in all, so a resume that dies before it repairs cannot loop.
+
+Repairs take free drain slots after adoption. A pass held by host resource
+pressure starts none, and a pull request found unblocked is not read again for
+five minutes. `orbit run readiness` lists live repairs and the latest pass's
+skipped candidates under `out_of_run_auto_fix`. Skipped entries have
+`state: "skipped"`, `reason`, `detail`, `pr_number`, `task_ids`, `source_run_id`,
+`drain_run_id`, `drain_live` and `observed_at`. A `blocker` is present when the
+pass verified a conflict or failed required checks; it is null for a refusal
+before the forge read, such as an operator hold or no capacity. These entries
+are a snapshot of the latest pass, not a fresh forge query. When no drain is live, readiness labels the most recent drain's snapshot
+as ended. `orbit run show <run>` shows a live repair in the resumed run's input.
+
+For the full persisted pass, including every skip and any `pass_error`, run
+`orbit run show <drain-run> --step adopt_orphans --json` and read
+`step_output.auto_fix.skipped`. Each entry names `task_id`, `pr_number`,
+`source_run_id`, `blocker`, `reason` and `detail`. The reasons are:
+
+- `no_capacity`: no free leaf slot remains after adoption and earlier repairs;
+- `resource_throttled`: host resource pressure holds this pass;
+- `operator_hold`: an operator blocked or requeued the task. Release it first;
+- `opted_out`: the task is tagged `no-auto-approve`;
+- `authority`: the run was started with `--complete` and the drain was not;
+- `not_orbit_pull_request`: a branch, body or author that is not Orbit's;
+- `pull_request_not_recorded`, `pull_request_not_open` or `no_pull_request`;
+- `no_blocker` and `checked_recently`: nothing to repair;
+- `mergeability_unknown`: GitHub is still calculating this pull request's
+  mergeability; other candidates in the pass are still checked;
+- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused;
+- `live_run` or `claimed_execution`: another run or machine owns the delivery;
+- `not_resumable`: checkpoint resume refused the run, for example one that
+  stopped before its completion step;
+- `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
+  and `task_moved`: a later pass tries again.
+
+A write-free pass reports `hold_reason: "write_free"` and does not scan or
+persist candidates. A stopped drain or a host shutdown hold also starts no
+scan. A drain without `--auto-fix` never repairs out of run. Repair such a pull request
+yourself, or requeue the task.
 
 ## A delivery pull request merged outside Orbit
 

@@ -106,7 +106,9 @@ The attempt's report stays on the task. The task's next claim continues from
 those automatically. An owner-local delivery leaf that died after opening its
 pull request, with its task in `review`, is resumed on that pull request once by
 the owner drain's next pass, when that drain holds the leaf's `--complete` and
-`--auto-fix` grants. When you
+`--auto-fix` grants. An `--auto-fix` drain also hands a conflicting or red pull
+request of a task with no live run back to its stopped leaf's completion step,
+unless an operator holds the task. When you
 must decide what happens next, follow these steps:
 
 1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
@@ -273,6 +275,15 @@ PR must remain open and unmerged with automatic merge explicitly disabled;
 a draft remains a draft. Missing, contradictory or changed evidence refuses
 before reservation. A live/foreign/claimed source or a newer attempt that
 may have written a candidate cannot be bypassed by selecting an older head.
+Newer owner attempts between the source and the task's current binding are
+bound together in `binding.superseded`, and a change to any of them voids
+the binding. Each must be conclusively stopped and either cancelled, or failed
+at or before candidate adoption with a settled (escalated or requeued) final
+recovery, no failure handoff other than one that published nothing
+(`no_candidate`), and a clean retained worktree. A failed attempt that reached
+implementation or left work behind is a resume candidate, not a successor to
+set aside
+([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-cancelled-published-source-repair)).
 Diagnose the named missing receipt or identity mismatch, then inspect again;
 do not invent a checkpoint, copy another run's admission, or weaken gates.
 

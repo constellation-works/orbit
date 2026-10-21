@@ -101,6 +101,11 @@ pub(crate) fn run_cli_backend_for_step(
     let budget = GitTimeoutBudget::from_input(input)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
+    // A read-only reviewer edits nothing; any other agent may, so it first
+    // holds the context locks its run's admission deferred.
+    if fs_profile != Some("reviewer") {
+        host.acquire_deferred_footprint(run_id, activity_name)?;
+    }
     let provider = spec.provider.as_str().to_string();
     let trusted_host = trusted_host_admission(spec, activity_name, input)?;
     // Reject an unsupported inspection provider before executor lookup can

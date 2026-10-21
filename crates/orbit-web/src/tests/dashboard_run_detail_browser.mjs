@@ -380,6 +380,56 @@ export async function assertRunDetailPresentation(page, evidence) {
     throw new Error('A cancelled drain has no next pass to retry');
   }
 
+  // ORB-17188: the facts grid names the execution host once, and each cell reads
+  // without a repeated word. The execution cell is always the grid's last cell
+  // and the review cell is the one labelled `review`. Screenshots come before the
+  // checks so a failed check still leaves its evidence.
+  const facts = () => page.evaluate(() => {
+    const cells = [...document.querySelectorAll('#run-detail-meta .run-meta-grid > div')];
+    const parts = (cell, selector) => [...cell.querySelectorAll(selector)].map(part => part.textContent.trim()).join(' ');
+    const review = cells.find(cell => cell.querySelector(':scope > .label')?.textContent === 'review');
+    return {
+      executed: parts(cells.at(-1), '.label, .value'),
+      review: review ? parts(review, '.value') : null,
+    };
+  });
+  const repeatedWord = text => {
+    const seen = new Set();
+    for (const word of text.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) ?? []) {
+      if (seen.has(word)) return word;
+      seen.add(word);
+    }
+    return null;
+  };
+  const ranOnHost = { state: 'success', workspace_id: FIXTURE_WORKSPACE, executed_on: { machine_id: 'hm_dk2', machine_name: 'dk-server-2' } };
+  const policyRun = { ...ranOnHost, review_layer: { timing: 'none', source: 'workspace' } };
+  const runOptionRun = { ...ranOnHost, review_layer: { timing: 'before_landing', source: 'run-option' } };
+  const unrecordedRun = { state: 'success', workspace_id: FIXTURE_WORKSPACE, review_layer: { timing: 'none', source: 'workspace' } };
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 1100 });
+    await render(policyRun, []);
+    await page.locator('#run-detail-meta').screenshot({ path: path.join(evidence, `run-facts-dark-${width}.jpg`), type: 'jpeg', quality: 85 });
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await render(policyRun, []);
+  const policy = await facts();
+  if (policy.executed.split('dk-server-2').length !== 2 || repeatedWord(policy.executed)) {
+    throw new Error(`Execution host must read once with no repeated word: ${policy.executed}`);
+  }
+  if (!policy.review.includes('workspace policy') || repeatedWord(policy.review)) {
+    throw new Error(`Review must name its layer and source without a repeated word: ${policy.review}`);
+  }
+  await render(runOptionRun, []);
+  const runOption = await facts();
+  if (!runOption.review.includes('run option --review') || repeatedWord(runOption.review)) {
+    throw new Error(`A run-option review must name its source without a repeated word: ${runOption.review}`);
+  }
+  await render(unrecordedRun, []);
+  const unrecorded = await facts();
+  if (!unrecorded.executed.includes('unknown') || repeatedWord(unrecorded.executed)) {
+    throw new Error(`An unrecorded execution location must still read naturally: ${unrecorded.executed}`);
+  }
+
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
     child_run_id: `jrun-child-${index}`, job_name: 'task_auto_pipeline',
     phase: 'submitted', child_status: 'running', parent_step_id: 'leaf_invoke', state,

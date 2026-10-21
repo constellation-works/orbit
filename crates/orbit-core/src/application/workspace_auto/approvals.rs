@@ -34,7 +34,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, TaskStatus, TaskType,
+    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, Task, TaskStatus, TaskType,
 };
 use orbit_types::workflow::{
     ChildDispatchPhase, DrainApprovalReport, DrainHoldFinding, DrainWaitingTask, JobRunState,
@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskListFilter, UNVERIFIED_REVIEW_FINDING,
+    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskListFilter, UNVERIFIED_REVIEW_FINDING, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
@@ -91,15 +91,9 @@ impl ApprovalSnapshot {
     }
 }
 
-/// Classify the workspace's `proposed` tasks against the drain's task-pilot
-/// children `pilots`. With `close`, a proven `verified_no_diff` task Orbit
-/// automation filed is archived instead of held.
-fn approval_snapshot(
-    runtime: &OrbitRuntime,
-    pilots: &[PilotChild],
-    close: bool,
-) -> Result<ApprovalSnapshot, OrbitError> {
-    let mut proposed = runtime
+/// The workspace's `proposed` tasks, as envelope metadata.
+fn proposed_tasks(runtime: &OrbitRuntime) -> Result<Vec<Task>, OrbitError> {
+    Ok(runtime
         .task_candidates(
             &TaskListFilter {
                 statuses: Some(vec![TaskStatus::Proposed]),
@@ -107,7 +101,21 @@ fn approval_snapshot(
             },
             usize::MAX,
         )?
-        .items;
+        .items
+        .into_iter()
+        .map(metadata_task)
+        .collect())
+}
+
+/// Classify the workspace's `proposed` tasks against the drain's task-pilot
+/// children `pilots`. With `close`, a proven `verified_no_diff` task Orbit
+/// automation filed is archived instead of held.
+fn approval_snapshot(
+    runtime: &OrbitRuntime,
+    mut proposed: Vec<Task>,
+    pilots: &[PilotChild],
+    close: bool,
+) -> Result<ApprovalSnapshot, OrbitError> {
     proposed.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
@@ -439,9 +447,11 @@ pub(crate) fn select_proposed_approvals(
     let pilot_live = !live_pilot_run_ids.is_empty();
     // A stopped drain admits nothing, so it approves and closes nothing either.
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped).map_err(|error| {
-        DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
-    })?;
+    let snapshot = proposed_tasks(runtime)
+        .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+        })?;
     record_report(runtime, run_id, &snapshot, &[]);
     let task_ids = if admissions_stopped || pilot_live {
         Vec::new()
@@ -499,9 +509,11 @@ pub(crate) fn record_proposed_approvals(
         })
         .collect::<Vec<_>>();
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = approval_snapshot(runtime, &pilots, !admissions_stopped).map_err(|error| {
-        DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
-    })?;
+    let snapshot = proposed_tasks(runtime)
+        .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+        })?;
     record_report(runtime, run_id, &snapshot, &recorded);
     let approved = recorded
         .iter()
@@ -566,10 +578,16 @@ pub(crate) fn await_approval_pilot(
 /// Readiness's view of `--approve-proposed` for the status drain: what it
 /// has approved so far and why each remaining proposed task is held. A drain
 /// started without the flag reports only `enabled: false`.
+///
+/// `population` is the readiness snapshot's task lookup. It already holds
+/// every open task, `proposed` included, so the held view classifies those
+/// rather than paying a second workspace-wide index freshness scan for the
+/// same tasks.
 pub(super) fn readiness_approvals(
     runtime: &OrbitRuntime,
     drain_run_id: Option<&str>,
     drain_input: Option<&Value>,
+    population: &BTreeMap<String, Task>,
 ) -> Result<Value, OrbitError> {
     let enabled = drain_input
         .and_then(|input| input.get("approve_proposed"))
@@ -584,7 +602,18 @@ pub(super) fn readiness_approvals(
         .read_run_state(run_id)?
         .and_then(|state| state.pull_drain.drain_approvals)
         .unwrap_or_default();
-    let snapshot = approval_snapshot(runtime, &pilot_children(runtime, run_id)?, false)?;
+    // A replica sees no proposed tasks here, as `task_candidates` would
+    // return none to it.
+    let proposed = if runtime.coordination_task_reads_visible() {
+        population
+            .values()
+            .filter(|task| task.status == TaskStatus::Proposed)
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let snapshot = approval_snapshot(runtime, proposed, &pilot_children(runtime, run_id)?, false)?;
     let mut value = held_json(&snapshot);
     value["closed"] = json!(report.closed);
     value["closed_total"] = json!(report.closed_total);

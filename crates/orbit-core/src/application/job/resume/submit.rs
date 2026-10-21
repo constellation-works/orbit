@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
 
+use super::ResumePlan;
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, SubmittedDefinition,
@@ -41,6 +42,31 @@ impl OrbitRuntime {
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.require_workspace_claim("orbit.workflow.run.resume", claim_token)?;
         let plan = self.plan_job_run_resume(source_run_id)?;
+        self.submit_planned_resume(&plan, actor)
+    }
+
+    /// Submit a drain's out-of-run auto-fix of the pull request
+    /// `source_run_id` opened: the resume
+    /// [`Self::plan_completion_repair_resume`] plans, through the same
+    /// claim gate, lineage guard and ownership reconciliation as
+    /// [`Self::submit_resume_run`].
+    pub(crate) fn submit_completion_repair_run(
+        &self,
+        source_run_id: &str,
+        repair: &serde_json::Value,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.require_workspace_claim("orbit.workflow.run.resume", None)?;
+        let plan = self.plan_completion_repair_resume(source_run_id, repair)?;
+        self.submit_planned_resume(&plan, actor)
+    }
+
+    /// Submit a resume `plan` made under the workspace claim.
+    fn submit_planned_resume(
+        &self,
+        plan: &ResumePlan,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
         let job_id = plan.source.job_id.clone();
         // Settle orphans first: a lineage run whose worker died (a host reboot)
         // still reads as running and would otherwise refuse the resume that
@@ -54,11 +80,11 @@ impl OrbitRuntime {
                     spec: &pinned.spec,
                     yaml: &pinned.yaml,
                 },
-                resume: Some(&plan),
+                resume: Some(plan),
                 ..PipelineSubmission::catalog(&job_id, input, actor)
             }),
             None => self.submit_persisted_pipeline_run(PipelineSubmission {
-                resume: Some(&plan),
+                resume: Some(plan),
                 ..PipelineSubmission::catalog(&job_id, input, actor)
             }),
         }

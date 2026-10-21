@@ -3,7 +3,7 @@
 // and the denial count on the Health rail entry.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -142,7 +142,9 @@ function renderScopeChips() {
   const workspace = getWorkspace();
   if (workspace) {
     // Single-workspace mode has no picker to restore a cleared action scope.
-    host.appendChild(scopeChip("workspace", workspace, isMultiWorkspace() ? () => {
+    // The previous host's cardinality cannot authorize removal while loading.
+    host.appendChild(scopeChip("workspace", workspaceDisplayName(workspace), isWorkspaceListReady() && isMultiWorkspace() ? () => {
+      if (!isWorkspaceListReady() || !isMultiWorkspace()) return;
       setWorkspace(null);
       persistScopeToUrl();
       const select = $("workspace-select");
@@ -741,7 +743,11 @@ onWorkspaceChange(() => {
   lastAudit = [];
   auditPaging = freshAuditPaging();
   auditWindowTotal = null;
+  renderScopeChips();
 });
+
+// The workspace chip shows a name, which arrives with the workspace list.
+onWorkspaceNamesChange(() => renderScopeChips());
 
 function effectiveAuditWindow() {
   if (auditFilter.since) return auditFilter.since;

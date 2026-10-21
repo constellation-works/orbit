@@ -84,6 +84,36 @@ pub struct WorktreeGcReport {
     pub retained_bytes: Option<u64>,
 }
 
+impl WorktreeGcReport {
+    /// An empty report at `path`: no run or task attributed, no action yet,
+    /// nothing reclaimed, measured or retained.
+    pub(super) fn blank(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            run_id: None,
+            run_state: None,
+            task_id: None,
+            task_status: None,
+            pr_status: None,
+            action: String::new(),
+            bytes_reclaimed: 0,
+            detail: None,
+            reclaim: Vec::new(),
+            recovery: None,
+            retained_bytes: None,
+        }
+    }
+
+    /// `blank` at `path`, attributed to `run`.
+    pub(super) fn for_run(path: &Path, run: &JobRun) -> Self {
+        Self {
+            run_id: Some(run.run_id.clone()),
+            run_state: Some(run.state),
+            ..Self::blank(path)
+        }
+    }
+}
+
 /// What an operator can do about a directory Git does not list as a
 /// worktree of this checkout and that GC cannot show to be the remains of a
 /// failed removal. GC never removes one.
@@ -158,18 +188,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         }
         if matching_runs.len() > 1 && matching_runs.iter().any(|run| !run.state.is_terminal()) {
             reports.extend(selected_runs.into_iter().map(|run| WorktreeGcReport {
-                path: path.clone(),
-                run_id: Some(run.run_id.clone()),
-                run_state: Some(run.state),
-                task_id: None,
-                task_status: None,
-                pr_status: None,
                 action: "skipped:ambiguous_run_path".to_string(),
-                bytes_reclaimed: 0,
-                detail: None,
-                reclaim: Vec::new(),
-                recovery: None,
-                retained_bytes: None,
+                ..WorktreeGcReport::for_run(path, run)
             }));
             continue;
         }
@@ -223,18 +243,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 "worktree GC failed to classify or remove a worktree; continuing the sweep"
             );
             WorktreeGcReport {
-                path: path.clone(),
-                run_id: Some(run.run_id.clone()),
-                run_state: Some(run.state),
-                task_id: None,
-                task_status: None,
-                pr_status: None,
                 action: format!("failed:{error}"),
-                bytes_reclaimed: 0,
-                detail: None,
-                reclaim: Vec::new(),
-                recovery: None,
-                retained_bytes: None,
+                ..WorktreeGcReport::for_run(path, run)
             }
         });
         let mut report = report;
@@ -304,35 +314,15 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                                 "failed to reclaim trash directory"
                             );
                             WorktreeGcReport {
-                                path: entry.clone(),
-                                run_id: None,
-                                run_state: None,
-                                task_id: None,
-                                task_status: None,
-                                pr_status: None,
                                 action: format!("failed:{error}"),
-                                bytes_reclaimed: 0,
-                                detail: None,
-                                reclaim: Vec::new(),
-                                recovery: None,
-                                retained_bytes: None,
+                                ..WorktreeGcReport::blank(&entry)
                             }
                         });
                     reports.push(report);
                 } else {
                     reports.push(WorktreeGcReport {
-                        path: entry,
-                        run_id: None,
-                        run_state: None,
-                        task_id: None,
-                        task_status: None,
-                        pr_status: None,
                         action: "skipped:unrecognized".to_string(),
-                        bytes_reclaimed: 0,
-                        detail: None,
-                        reclaim: Vec::new(),
-                        recovery: None,
-                        retained_bytes: None,
+                        ..WorktreeGcReport::blank(&entry)
                     });
                 }
             }

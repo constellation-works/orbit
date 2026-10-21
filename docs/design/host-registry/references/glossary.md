@@ -3,8 +3,8 @@ summary: "Glossary — Host Registry"
 type: design
 title: "Glossary — Host Registry"
 owner: codex
-last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Accepted
 feature: host-registry
 doc_role: reference
@@ -23,8 +23,9 @@ related_artifacts: [ORB-14448, ORB-14449]
 | machine.name | Changeable human display name for the local machine, set through global config |
 | machine.task_prefix | Immutable machine-local namespace projected into task allocation |
 | Host | Operator-facing noun for one Orbit installation, identified by its `[machine] id`. The local host runs the command; a remote host is reached over SSH. See [host-commands](../specs/host-commands.md). |
-| Host file | `~/.orbit/hosts.toml`, written by `orbit host`. It holds operator-registered remote hosts (name, ssh, machine_id, task_prefix) and nothing that can change on the host. Federated serve, pull drains and replica worktree GC read it. It replaces `mcp-destinations.toml`, which is read only while it is the sole file and is migrated by the first `orbit host` mutation. See [host-commands](../specs/host-commands.md). |
-| Host facts | What a host's discovery envelope says about itself: `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint`. Read live by `orbit host` and `orbit doctor`; never persisted. |
+| Host file | `~/.orbit/hosts.toml`, written by `orbit host`. It stores each registered remote's name, SSH target, `machine_id`, `task_prefix`, and optional registration-time `host_os` snapshot. Reachability, version, protocol and workspaces are read live, not stored. Federated serve, pull drains and replica worktree GC read it. It replaces `mcp-destinations.toml`, which is read only while it is the sole file and is migrated by the first `orbit host` mutation. See [host-commands](../specs/host-commands.md). |
+| Host facts | What a host's discovery envelope says about itself: `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint`, and optional `host_os`. Probes by `orbit host` and `orbit doctor` read these live; registration separately stores `machine_id`, `task_prefix`, and the optional OS snapshot. |
+| `host_os` | Optional `linux`, `macos`, or `windows` snapshot captured when a remote host is registered. It supports creation-time crew-pool selection for registered hosts serving a workspace. Entries without it are unknown to that selection; an OS change leaves the old snapshot until the host is removed and added again. |
 | Skew | A registered host's `binary_version` or `protocol_fingerprint` differs from this machine's. `orbit host list` flags it; `orbit doctor` fails on it for a host this machine pulls from. |
 | Host name | The operator's name for a host. For the local host it is `machine.name`; for a remote it is the entry's `name`, which defaults to the remote's own `machine.name`. `orbit host show\|rename\|remove` resolve it case-insensitively, or by exact `machine_id`. |
 | Prefix table | Per-process map from task prefix to host, built from the local `machine.task_prefix` and the host file. It is the key for task-id routing. See [host-routing](../specs/host-routing.md). |

@@ -14,12 +14,28 @@ fn fixture() -> (Fixture, PathBuf) {
 }
 
 fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
+    fixture_with(auto_fix, true, false)
+}
+
+/// `failure_handoff` adds the shipped pipeline's terminal hook, which the
+/// other scenarios leave out.
+fn fixture_with(
+    auto_fix: bool,
+    required_commands: bool,
+    failure_handoff: bool,
+) -> (Fixture, PathBuf) {
     let mut f = Fixture::new();
     let config = f.repo.join(".orbit/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap().replace(
+    let mut text = std::fs::read_to_string(&config).unwrap().replace(
         "[workflow]",
         "[workflow]\nfinal_recovery_crews = [\"fixture\"]",
     );
+    if !required_commands {
+        text = text.replace(
+            "required_validation_commands = [\"true\"]",
+            "required_validation_commands = []",
+        );
+    }
     std::fs::write(&config, text).unwrap();
     let global = f._root.path().join("global");
     let path = global.join("resources/jobs/task_pr_pipeline.yaml");
@@ -43,6 +59,9 @@ fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
         "max_wait_seconds":60, "poll_interval_seconds":5
     });
     job["spec"]["final_recovery_activity"] = json!("completion_refused");
+    if failure_handoff {
+        job["spec"]["failure_activity"] = json!("pr_failure_handoff");
+    }
     std::fs::write(&path, serde_yaml::to_string(&job).unwrap()).unwrap();
     std::fs::copy(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/activities/pr_promote.yaml"),
@@ -106,6 +125,22 @@ case "$1 $2" in
  *) exit 99;;
 esac
 "#, calls.display(), once.display(), once.display(), merged.display(), merged.with_extension("json").display(), f.answer.display(), merged.display(), f.head)).unwrap();
+    if mode == "repeated_lost_read" {
+        // Only the host's identity read, between the two completion
+        // attempts, reaches the forge.
+        let script = std::fs::read_to_string(&gh).unwrap().replace(
+            &format!(
+                "if [ ! -f '{}' ]; then touch '{}';",
+                once.display(),
+                once.display()
+            ),
+            &format!(
+                "if [ \"$(grep -c '^pr view' '{}')\" -ne 2 ]; then",
+                calls.display()
+            ),
+        );
+        std::fs::write(&gh, script).unwrap();
+    }
     if mode == "lost_merge_reply" {
         std::fs::write(&once, "read succeeds").unwrap();
         let script = std::fs::read_to_string(&gh).unwrap();
@@ -305,11 +340,141 @@ fn unchanged_publication_tail(auto_fix: bool, review: bool) {
     );
 }
 
+/// [ORB-17140] A running drain advances the base every few minutes, and a
+/// workspace may require no validation command. Neither turns a lost status
+/// read of an unchanged publication into an escalation; the resumed
+/// completion still merges only the published head.
+pub(super) fn moved_base_and_empty_requirements_retry_unchanged_completion() {
+    for required_commands in [true, false] {
+        let (f, checkout) = fixture_with(true, required_commands, false);
+        let calls = tail_forge(&f, "lost_read");
+        std::fs::write(f.repo.join("drain-base.txt"), "advance").unwrap();
+        git(&f.repo, &["add", "drain-base.txt"]);
+        git(&f.repo, &["commit", "-qm", "another delivery lands"]);
+        git(&f.repo, &["push", "origin", "HEAD:main"]);
+        let outcome = run_tail(&f).unwrap_or_else(|error| {
+            panic!(
+                "required commands {required_commands}: {error}; recovery: {:?}",
+                f.runtime
+                    .read_run_state(&f.source.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .final_recovery
+            )
+        });
+        assert!(outcome.success, "{outcome:?}");
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Done
+        );
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+        let requests = std::fs::read_to_string(calls).unwrap();
+        let merges = requests
+            .lines()
+            .filter(|l| l.starts_with("api repos/"))
+            .collect::<Vec<_>>();
+        assert_eq!(merges.len(), 1, "{requests}");
+        assert!(
+            merges[0].contains(&format!("sha={}", f.head)),
+            "the resumed completion merges only the published head: {}",
+            merges[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(f._root.path().join("pushes"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "the retry neither republishes nor restarts CI"
+        );
+    }
+}
+
+/// With no required command there is no receipt to check, so the captured
+/// completion policy is what refuses a changed configuration.
+pub(super) fn empty_requirements_still_bind_completion_policy() {
+    let (mut f, _) = fixture_with(true, false, false);
+    admit(&f);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap(),
+        "control"
+    );
+    let path = f.repo.join(".orbit/config.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!("{config}[crews.added]\nprovider = \"codex\"\nmodel = \"other-model\"\nbackend = \"cli\"\n"),
+    )
+    .unwrap();
+    f.runtime = orbit_core::OrbitRuntime::from_roots(
+        &f._root.path().join("global"),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_fixture".into(),
+        machine_name: None,
+    }));
+    let refusal = f
+        .runtime
+        .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+        .unwrap_err();
+    assert!(
+        refusal.to_string().contains("effective policy changed"),
+        "{refusal}"
+    );
+}
+
+/// A second lost read after the retry spends no further budget: the run
+/// stops before any merge and the failure handoff diagnoses it.
+pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
+    let (f, checkout) = fixture_with(true, true, true);
+    let calls = tail_forge(&f, "repeated_lost_read");
+    let outcome = run_tail(&f);
+    assert!(
+        !matches!(&outcome, Ok(outcome) if outcome.success),
+        "{outcome:?}"
+    );
+    let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    assert!(
+        matches!(
+            state.final_recovery.as_ref().unwrap().decision,
+            Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+        ),
+        "one authenticated retry: {:?}",
+        state.final_recovery
+    );
+    // As for any completion failure after publication, the failure handoff
+    // keeps the PR and the task in review and records the diagnosis.
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Review
+    );
+    assert!(
+        f.runtime
+            .get_task_comments(&f.task)
+            .unwrap()
+            .iter()
+            .any(
+                |c| c.message.contains("PR completion failed after publication")
+                    && c.message.contains("completion_observation_unavailable:")
+            ),
+        "the exhausted retry is diagnosed on the task"
+    );
+    let requests = std::fs::read_to_string(calls).unwrap();
+    assert!(
+        !requests.lines().any(|l| l.starts_with("api repos/")),
+        "no merge after the retry budget: {requests}"
+    );
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+}
+
 pub(super) fn completion_reuse_refuses_drift() {
     for case in [
         "meaning",
         "policy",
-        "base",
         "head",
         "same_tree",
         "lease",
@@ -369,12 +534,6 @@ pub(super) fn completion_reuse_refuses_drift() {
                         machine_name: None,
                     },
                 ));
-            }
-            "base" => {
-                std::fs::write(f.repo.join("new-base.txt"), "advance").unwrap();
-                git(&f.repo, &["add", "new-base.txt"]);
-                git(&f.repo, &["commit", "-qm", "new base"]);
-                git(&f.repo, &["push", "origin", "HEAD:main"]);
             }
             "head" => {
                 std::fs::write(checkout.join("source.txt"), "changed").unwrap();
@@ -529,12 +688,19 @@ pub(super) fn changed_base_gets_fresh_native_validation() {
     assert!(
         f.runtime
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
-            .is_err()
+            .unwrap(),
+        "a moved base alone leaves the published candidate unchanged"
     );
     git(&checkout, &["fetch", "origin", "main"]);
     git(&checkout, &["rebase", "origin/main"]);
     let head = git(&checkout, &["rev-parse", "HEAD"]);
     assert_ne!(head, old);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .is_err(),
+        "a rebased candidate is not the published head"
+    );
     let validated = f.action("candidate_validate", json!({"job_run_id":f.source.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":git(&checkout, &["rev-parse","origin/main"])}));
     assert_eq!(validated["decision"], "passed");
     assert_eq!(validated["tested_head"], head);

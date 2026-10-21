@@ -198,13 +198,12 @@ const answer = (requests, route) => {
 
 // Contract-shaped payloads (docs/design/agent-scorecards/2_design.md §6).
 const TERMS = [
-  { key: 'weighted_landed', label: 'Weighted landed', weight: 1, definition: 'Landed tasks weighted by complexity.', group: 'credit' },
-  { key: 'landed_initiative', label: 'Landed initiative', weight: 1, definition: 'Landed orchestrator-initiative tasks.', group: 'credit' },
+  { key: 'landed', label: 'Landed', weight: 1, definition: 'Landed tasks, one each whatever their complexity.', group: 'credit' },
   { key: 'spec_defects', label: 'Spec defects', weight: -1, definition: 'Edits after the first run, criteria blocks and escalations.', group: 'problem' },
   { key: 'spec_rework', label: 'Spec-caused rework', weight: -1, definition: 'Rework whose cause is spec.', group: 'problem' },
 ];
 const stats = (rework) => [
-  { key: 'landed', label: 'Landed', value: 12 },
+  { key: 'unclassified', label: 'Unclassified rework and regressions (not scored)', value: rework[3] },
   { key: 'active_hours', label: 'Active hours', value: 30.25 },
   { key: 'rework_spec', label: 'Rework: spec (counted)', value: rework[0] },
   { key: 'rework_crew', label: 'Rework: crew (counted against implementers)', value: rework[1] },
@@ -222,11 +221,11 @@ const header = (role, computedAt, status = 'ok') => ({
   unit: { orchestrators: 'owned tasks', implementers: 'implemented tasks', reviewers: 'settled reviews', pilots: 'assessed tasks' }[role],
 });
 const orchestrators = (computedAt = '2026-10-19T08:00:00.000Z') => ({
-  ...header('orchestrators', computedAt), fleet_average: 40.5, terms: TERMS,
+  ...header('orchestrators', computedAt), fleet_average: 71.43, terms: TERMS,
   rows: [
-    row('opus', 1, 40, { weighted_landed: 30, landed_initiative: 4, spec_defects: 6, spec_rework: 2 }, 65, 60.2, [2, 5, 1, 0]),
-    row('sonnet', 2, 20, { weighted_landed: 8, landed_initiative: 0, spec_defects: 1, spec_rework: 1 }, 30, 33.5, [1, 0, 0, 3]),
-    row('haiku', null, 3, { weighted_landed: 1, landed_initiative: 0, spec_defects: 2, spec_rework: 0 }, -33.33, 21.5, [0, 0, 0, 0]),
+    row('opus', 1, 40, { landed: 38, spec_defects: 6, spec_rework: 2 }, 75, 73.47, [2, 5, 1, 0]),
+    row('sonnet', 2, 20, { landed: 15, spec_defects: 1, spec_rework: 1 }, 65, 65, [1, 0, 0, 3]),
+    row('haiku', null, 3, { landed: 3, spec_defects: 1, spec_rework: 0 }, 66.67, 66.67, [0, 0, 0, 0]),
   ],
 });
 const notComputed = role => ({ ...header(role, '2026-10-19T08:00:00.000Z', 'not_computed'), fleet_average: null, terms: TERMS.slice(0, 2), rows: [] });
@@ -286,7 +285,7 @@ await settle();
 assert.equal(byId['agents-count-orchestrators'].textContent, '2', 'two ranked rows; the below-support row is not counted');
 for (const role of ['implementers', 'reviewers', 'pilots']) assert.equal(byId[`agents-count-${role}`].textContent, '—');
 assert.equal(byId['agents-title'].textContent, 'Orchestrators');
-assert.match(byId['agents-meta'].textContent, /63 owned tasks in 30d · fleet average 40\.5/);
+assert.match(byId['agents-meta'].textContent, /63 owned tasks in 30d · fleet average 71\.4/);
 
 // The strip splits the window's problems by owner and links each role.
 const strip = part('strip');
@@ -302,16 +301,19 @@ assert.equal(segments.length, 3, 'one segment per owner with problems');
 assert.equal(segments[0].style.width, '60%');
 assert.ok(segments[0].classList.contains('is-current'));
 
-// The ranking: rank, crew and model, support, one column per term and the
-// score; the below-support row is greyed, tagged and unranked.
+// The ranking: rank, crew and model, the score, support, then one column per
+// term; the below-support row is greyed, tagged and unranked.
 assert.deepEqual(rankingRows().map(entry => entry.dataset.row.split('\0')[0]), ['opus', 'sonnet', 'haiku']);
 assert.deepEqual(part('ranking').querySelectorAll('thead th').map(th => th.textContent),
-  ['Rank', 'Crew · model', 'Support', 'Weighted landed', 'Landed initiative', 'Spec defects', 'Spec-caused rework', 'Score']);
+  ['Rank', 'Crew · model', 'Score', 'Support', 'Landed', 'Spec defects', 'Spec-caused rework']);
 assert.ok(rowNamed('haiku').classList.contains('agents-row-below'));
 assert.match(rowNamed('haiku').textContent, /below 10/);
 assert.equal(rowNamed('haiku').children[0].textContent, '—', 'a below-support row has no rank');
 assert.equal(rowNamed('opus').children.find(cell => cell.dataset.term === 'spec_defects').textContent, '15');
-assert.ok(rowNamed('haiku').querySelector('span.agents-bar-fill.negative') === null, 'a positive score bar for the smoothed below-support row');
+assert.ok(rowNamed('haiku').querySelector('span.agents-bar-fill.negative') === null, 'a positive score bar for the below-support row');
+// Unclassified rework and regressions show beside the score, only where there are some.
+assert.equal(rowNamed('sonnet').querySelector('td.agents-score-col span.agents-score-note').textContent, '3 unclassified');
+assert.equal(rowNamed('opus').querySelector('span.agents-score-note'), null, 'no note without unclassified problems');
 
 // The top row is selected and its detail asked for.
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'true', 'the top row is selected by default');
@@ -323,8 +325,9 @@ assert.equal(requests[0].url.searchParams.get('model'), 'model unknown');
 assert.match(part('detail').textContent, /Loading the tasks/);
 // The breakdown and the stats come from the ranking row before the detail lands.
 const breakdown = () => part('detail').querySelectorAll('ul.agents-breakdown li').map(item => [item.dataset.term, item.querySelector('span.agents-term-value').textContent]);
-assert.deepEqual(breakdown(), [['weighted_landed', '+75'], ['landed_initiative', '+10'], ['spec_defects', '−15'], ['spec_rework', '−5']]);
-assert.match(part('detail').textContent, /raw 65, pulled toward the fleet average 40\.5 over 40 units/);
+assert.deepEqual(breakdown(), [['landed', '+95'], ['spec_defects', '−15'], ['spec_rework', '−5']]);
+assert.match(part('detail').textContent, /raw 75, pulled down toward the fleet average 71\.4 over 40 units/);
+assert.equal(part('detail').querySelector('p.agents-detail-note'), null);
 requests[0].resolve(response(detailFor(orchestrators(), 'opus', {
   spec_defects: [task('ORB-1', 4, 'spec_edit: acceptance_criteria edited'), task('ORB-2', 2, 'criteria_block: acceptance-criterion-unmet')],
   spec_rework: [task('ORB-3', 2, 'repeat_run: spec')],
@@ -349,7 +352,9 @@ assert.equal(selectButton('sonnet').getAttribute('aria-pressed'), 'true');
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'false');
 assert.ok(rowNamed('sonnet').classList.contains('is-selected'));
 assert.match(part('detail').querySelector('header').textContent, /#2sonnet/);
-assert.deepEqual(breakdown(), [['weighted_landed', '+40'], ['landed_initiative', '+0'], ['spec_defects', '−5'], ['spec_rework', '−5']]);
+assert.deepEqual(breakdown(), [['landed', '+75'], ['spec_defects', '−5'], ['spec_rework', '−5']]);
+assert.match(part('detail').textContent, /raw 65, not above the fleet average 71\.4, so not pulled/, 'a row below the average keeps its raw score');
+assert.match(part('detail').querySelector('p.agents-detail-note').textContent, /^3 .*20 owned tasks .*\(15 per 100\)/, 'the detail states the unclassified rate');
 requests = takeAll();
 assert.equal(requests.length, 1);
 assert.equal(requests[0].url.searchParams.get('crew'), 'sonnet');
@@ -366,8 +371,9 @@ assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySel
 // open state survives a poll.
 const how = () => part('how');
 assert.equal(how().open, false);
-assert.equal(how().querySelectorAll('dt').length, 4);
-assert.match(how().textContent, /score = \(owned tasks × raw \+ 10 × fleet average\) ÷ \(owned tasks \+ 10\)/);
+assert.equal(how().querySelectorAll('dt').length, 3);
+assert.match(how().textContent, /score = min\(raw, \(owned tasks × raw \+ 30 × fleet average\) ÷ \(owned tasks \+ 30\)\)/);
+assert.equal(how().querySelectorAll('p').length, 5, 'the shared rate, formula and smoothing paragraphs, then the role\'s own two');
 how().open = true;
 for (const listener of how().listeners.toggle) listener();
 const howBefore = how();

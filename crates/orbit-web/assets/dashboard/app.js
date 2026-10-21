@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -1340,6 +1340,8 @@ async function initWorkspaceSelector() {
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
+  // This also marks cardinality as known for this host visit, after the stale
+  // response check above, so scope chips can safely offer aggregate selection.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
@@ -1879,7 +1881,12 @@ async function ensureHostScope() {
     const rebuild = { hostRevision: getHostRevision() };
     workspaceRebuild = rebuild;
     rebuild.done = initWorkspaceSelector()
-      .then((loaded) => { if (!loaded && workspaceRebuild === rebuild) workspacesWanted = true; })
+      .then((loaded) => {
+        // Rebuild scope chips after both cardinality and selection settle. A
+        // shared id across hosts does not trigger a workspace-change listener.
+        if (loaded) setWorkspaceNames(dashboardWorkspaces);
+        else if (workspaceRebuild === rebuild) workspacesWanted = true;
+      })
       .finally(() => { if (workspaceRebuild === rebuild) workspaceRebuild = null; });
   }
   if (workspaceRebuild) await workspaceRebuild.done;

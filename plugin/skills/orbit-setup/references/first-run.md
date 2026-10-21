@@ -93,6 +93,11 @@ For agent-assisted PR delivery, from the repository root (omit `--mcp` if no cli
 orbit workspace init --base-branch <integration-branch> --ship-mode pr --mcp
 ```
 
+Fresh registration refuses an origin containing URL credentials before writing
+workspace state. Remove credentials from the origin and use Git's credential
+helper or SSH authentication instead. Credential-free local origins remain
+accepted; discovery redacts remote credentials in older registrations.
+
 This registers the checkout, creates `.orbit/`, and seeds the default skills,
 jobs, activities, policies, routines, and auto-task definitions. `--mcp`
 auto-detects installed agent clients and registers Orbit's MCP server with
@@ -205,9 +210,11 @@ initial setup succeeded:
 5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
-   protocol, make sure the follower can run the owner's before-PR reviewer
-   crew when the owner's `review.timing` is `before_pr`, then probe. Installation is
-   not pull enablement.
+   protocol, make sure the follower can run the owner's captured reviewer from
+   `workflow.purpose_crews.pre_landing_review` when non-empty, otherwise
+   `workflow.purpose_crews.review`. Check this when the owner's
+   `review.timing` enables before-PR or before-landing review, then probe.
+   Installation is not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 
 ## Anti-patterns

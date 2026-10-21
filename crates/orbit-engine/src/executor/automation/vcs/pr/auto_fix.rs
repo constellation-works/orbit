@@ -68,6 +68,7 @@ use super::super::git::{
 };
 use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
 use super::super::push::push_batch_changes;
+use super::super::retry_lineage::{LineageStep, LineageStop, RetryLineage};
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::delivery::{DeliveryPin, blocked_checks};
 
@@ -137,7 +138,7 @@ fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
     run_id: &str,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let mut runs = BTreeSet::from([run_id.to_string()]);
-    let Some(mut current) = host.get_job_run(run_id)? else {
+    let Some(current) = host.get_job_run(run_id)? else {
         return Ok(runs);
     };
     if current.run_id != run_id {
@@ -145,31 +146,26 @@ fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
             "auto_fix: execution identity differs; refusing inherited repair authority".into(),
         ));
     }
-    let job_id = current.job_id.clone();
-    for _ in 0..64 {
-        let Some(parent_id) = current.retry_source_run_id.take() else {
-            return Ok(runs);
-        };
-        if !runs.insert(parent_id.clone()) {
-            return Err(OrbitError::Execution(
-                "auto_fix: cyclic retry lineage; refusing inherited repair authority".into(),
-            ));
+    let mut lineage = RetryLineage::same_job(&current).checking_identity();
+    let refusal = loop {
+        match lineage.step(host)? {
+            LineageStep::Ancestor(parent_id, _) => {
+                if !runs.insert(parent_id) {
+                    break "cyclic retry lineage";
+                }
+            }
+            LineageStep::Stop(LineageStop::Root) => return Ok(runs),
+            LineageStep::Stop(LineageStop::Cycle) => break "cyclic retry lineage",
+            LineageStep::Stop(LineageStop::Missing(_)) => break "retry ancestor is missing",
+            LineageStep::Stop(LineageStop::CrossJob { .. } | LineageStop::IdentityMismatch) => {
+                break "retry ancestor identity differs";
+            }
+            LineageStep::Stop(LineageStop::Bound) => break "retry lineage exceeds its bound",
         }
-        current = host.get_job_run(&parent_id)?.ok_or_else(|| {
-            OrbitError::Execution(
-                "auto_fix: retry ancestor is missing; refusing inherited repair authority".into(),
-            )
-        })?;
-        if current.run_id != parent_id || current.job_id != job_id {
-            return Err(OrbitError::Execution(
-                "auto_fix: retry ancestor identity differs; refusing inherited repair authority"
-                    .into(),
-            ));
-        }
-    }
-    Err(OrbitError::Execution(
-        "auto_fix: retry lineage exceeds its bound; refusing inherited repair authority".into(),
-    ))
+    };
+    Err(OrbitError::Execution(format!(
+        "auto_fix: {refusal}; refusing inherited repair authority"
+    )))
 }
 
 /// What a `BLOCKED` pull request means to an auto-fix watcher.
@@ -542,23 +538,37 @@ fn record_check_annotations<H: RuntimeHost + ?Sized>(
     )
 }
 
+/// Attach `evidence`, redacted, to the owning run of the primary task at
+/// `path`. A task with no owning run stops with `missing_owner_reason`.
+pub(super) fn attach_evidence<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    pr_number: &str,
+    missing_owner_reason: &str,
+    path: &str,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
+    let primary = auto_fix.primary_task()?;
+    let owner_run = host
+        .get_task(primary)?
+        .job_run_id
+        .ok_or_else(|| stopped(pr_number, missing_owner_reason))?;
+    let evidence = orbit_common::security::redaction::redact_all_json(evidence.clone());
+    host.attach_task_validation_log(
+        primary,
+        &owner_run,
+        path,
+        serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
+    )
+}
+
 fn retain<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     path: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    let owner_run = host
-        .get_task(auto_fix.primary_task()?)?
-        .job_run_id
-        .ok_or_else(|| stopped("", "missing owning run"))?;
-    let evidence = orbit_common::security::redaction::redact_all_json(evidence.clone());
-    host.attach_task_validation_log(
-        auto_fix.primary_task()?,
-        &owner_run,
-        path,
-        serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
-    )
+    attach_evidence(host, auto_fix, "", "missing owning run", path, evidence)
 }
 
 /// The required failures on a head, with the head-bound read naming them.

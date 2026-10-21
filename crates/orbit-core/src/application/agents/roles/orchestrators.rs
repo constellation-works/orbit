@@ -1,7 +1,12 @@
 //! Orchestrators: ranked by the tasks' `orchestrator` attribution, with
 //! `model unknown`, over the tasks each one owns that were created in the
-//! window. Credit is the work that landed; problems are only those the
-//! one-owner rule gives orchestrators: spec defects and spec-caused rework.
+//! window. Credit is one point per landed task, whatever its complexity:
+//! complexity is assessed when the task is filed or piloted, so weighting by
+//! it would let the ranked party set its own credit. Problems are only those
+//! the one-owner rule gives orchestrators, spec defects and spec-caused
+//! rework, on the same per-task scale, so a spec problem cancels a landing.
+//! Rework and regressions with no recorded cause are nobody's; they are
+//! shown beside the score as its confidence, never scored.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -11,8 +16,8 @@ use serde_json::json;
 
 use super::RoleSpec;
 use crate::application::agents::attribution::{Charge, Owner};
-use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::records::{Cause, complexity_weight};
+use crate::application::agents::facts::{Problem, TaskFacts};
+use crate::application::agents::records::Cause;
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
 use crate::application::agents::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 
@@ -24,17 +29,10 @@ pub(super) const ROLE: RoleSpec = RoleSpec {
 
 const TERMS: &[Term] = &[
     Term {
-        key: "weighted_landed",
-        label: "Weighted landed",
+        key: "landed",
+        label: "Landed",
         weight: 1.0,
-        definition: "Landed tasks weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1.",
-        group: "credit",
-    },
-    Term {
-        key: "landed_initiative",
-        label: "Landed initiative",
-        weight: 1.0,
-        definition: "Landed tasks whose typed origin is orchestrator_initiative.",
+        definition: "Landed tasks, one each whatever their complexity, so per 100 owned tasks the percent that landed.",
         group: "credit",
     },
     Term {
@@ -84,23 +82,12 @@ fn row<'a>(
 ) -> RowInput<'a> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
     let mut rework: BTreeMap<Cause, i64> = Cause::ALL.iter().map(|cause| (*cause, 0)).collect();
-    let (mut landed, mut dropped_initiative, mut unknown_origin) = (0, 0, 0);
+    let (mut dropped_initiative, mut unknown_origin, mut unclassified_regressions) = (0, 0, 0);
     let mut active = Vec::new();
     for &task in tasks {
         let initiative = task.origin == Some(TaskOrigin::OrchestratorInitiative);
         if task.landed {
-            landed += 1;
-            tallies.entry("weighted_landed").or_default().add(
-                task,
-                complexity_weight(task.complexity) as f64,
-                None,
-            );
-            if initiative {
-                tallies
-                    .entry("landed_initiative")
-                    .or_default()
-                    .add(task, 1.0, None);
-            }
+            tallies.entry("landed").or_default().add(task, 1.0, None);
         }
         if initiative && task.dropped {
             dropped_initiative += 1;
@@ -116,6 +103,11 @@ fn row<'a>(
                 && let Some(cause) = charge.cause
             {
                 *rework.entry(cause).or_default() += 1;
+            }
+            if charge.problem == Problem::Regression
+                && charge.owner == Owner::NotScored("unclassified")
+            {
+                unclassified_regressions += 1;
             }
             if charge.owner != Owner::Role(AgentRole::Orchestrators) {
                 continue;
@@ -136,8 +128,13 @@ fn row<'a>(
             );
         }
     }
+    let unclassified = rework[&Cause::Other] + unclassified_regressions;
     let stats = vec![
-        stat("landed", "Landed", json!(landed)),
+        stat(
+            "unclassified",
+            "Unclassified rework and regressions (not scored)",
+            json!(unclassified),
+        ),
         stat(
             "dropped_initiative",
             "Dropped initiative",
@@ -164,6 +161,11 @@ fn row<'a>(
             "rework_no_cause",
             "Rework: no cause (not scored)",
             json!(rework[&Cause::Other]),
+        ),
+        stat(
+            "regressions_unclassified",
+            "Regressions: unclassified (not scored)",
+            json!(unclassified_regressions),
         ),
     ];
     RowInput {

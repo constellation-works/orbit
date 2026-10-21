@@ -303,7 +303,7 @@ function explainUnavailable(button, reason) {
   const wrapper = el("span", { class: "operation-action-unavailable" }, [button]);
   wrapper.tabIndex = 0;
   wrapper.title = reason;
-  wrapper.setAttribute("aria-label", `${button.textContent}: ${reason}`);
+  wrapper.setAttribute("aria-label", `${button.getAttribute("aria-label") || button.textContent}: ${reason}`);
   return wrapper;
 }
 
@@ -442,15 +442,16 @@ function cronText(cron) {
 }
 
 // One switch for enable/disable. The visible text stays "Enable"/"Disable"
-// (or "Pending…") so the control keeps its accessible name and the readback
-// contract; CSS draws it as a switch.
-function operationSwitch({ on, text, pending, reason }) {
+// (or "Pending…") for the readback contract; CSS draws it as a switch, and
+// aria-label names the item independently of its enabled state.
+function operationSwitch({ name, on, text, pending, reason }) {
   const button = el("button", {
     class: `operation-switch ${on ? "on" : "off"}${pending ? " pending" : ""}`,
     text,
     title: reason || text,
   });
   button.type = "button";
+  button.setAttribute("aria-label", name);
   button.setAttribute("role", "switch");
   button.setAttribute("aria-checked", on ? "true" : "false");
   button.disabled = Boolean(reason) || Boolean(pending);
@@ -578,6 +579,7 @@ function routineButton(payload, routine) {
   const reason = controlReason(payload);
   const pending = pendingOperations.has(key);
   const button = operationSwitch({
+    name: `Routine: ${routine.name}`,
     on: Boolean(routine.enabled),
     text: pending ? "Pending…" : nextEnabled ? "Enable" : "Disable",
     pending,
@@ -1074,6 +1076,7 @@ function autoTaskToggleButton(payload, definition) {
   const verb = nextEnabled ? "Enable" : "Disable";
   const pending = pendingOperations.has(key);
   const button = operationSwitch({
+    name: `Auto-task: ${definition.name}`,
     on,
     text: pending ? "Pending…" : verb,
     pending,

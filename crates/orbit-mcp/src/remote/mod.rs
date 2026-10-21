@@ -7,6 +7,8 @@ mod proxy;
 mod ssh;
 mod surface;
 
+pub(crate) use self::discovery::workspace_for_discovery;
+
 #[cfg(test)]
 mod tests;
 

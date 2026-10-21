@@ -470,8 +470,7 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
     }
 }
 
-/// A run-blocked task with a recorded final-recovery decision. `next_step`
-/// stays the workflow-failure block: the decision does not move the task.
+/// A run-blocked task with an escalation recorded without another status change.
 fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
     runtime
         .apply_task_automation_update(
@@ -517,7 +516,7 @@ fn guidance_lines(id: &str, run_id: &str, at: &str) -> (String, String) {
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     (
         format!(
-            "Next: run {run_id} cannot be resumed; move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
+            "Next: move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
         ),
         format!("Final Recovery: escalate (escalated) by run {run_id} at {formatted}"),
     )
@@ -683,4 +682,339 @@ fn local_read_projection_contracts() {
         check();
         orbit_common::test_env::record_scenario_pass(name);
     }
+}
+
+/// The public show record explains the current block, including an escalation
+/// recorded while the task was already blocked, without leaking stale reasons.
+#[test]
+fn task_show_explains_latest_block() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_explains_latest_block",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("block-readout-fixture"));
+    runtime
+        .apply_task_automation_update(
+            &id,
+            blocked_workflow_failure_update(
+                "ship",
+                "jrun-first-block",
+                Some("STEP_FAILED"),
+                Some("Required check failed"),
+            ),
+        )
+        .unwrap();
+    let failed = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(failed["block"]["reason"], "Required check failed");
+    assert_eq!(failed["block"]["cause"], "run");
+    assert_eq!(failed["block"]["run_id"], "jrun-first-block");
+    assert!(failed["block"]["at"].as_str().is_some());
+
+    block_with_final_recovery(&runtime, &fixture.repo, &id, "jrun-latest-escalation");
+    let escalated = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        escalated["block"]["reason"],
+        "the failure needs an operator"
+    );
+    assert_eq!(
+        escalated["block"]["next_action"],
+        "move the task back to backlog after fixing the cause"
+    );
+    assert_eq!(escalated["block"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["next_step"]["run_id"], "jrun-latest-escalation");
+    assert_eq!(escalated["block"]["at"], escalated["final_recovery"]["at"]);
+    let index = escalated["block"]["comment_index"].as_u64().unwrap() as usize;
+    assert!(
+        escalated["comments"][index]["message"]
+            .as_str()
+            .unwrap()
+            .contains("human_action:")
+    );
+    assert_eq!(
+        escalated,
+        fixture.json(&["task", "show", &id, "--json"]),
+        "show is read-only"
+    );
+    let input = json!({"id": id}).to_string();
+    assert_eq!(
+        escalated["block"],
+        fixture.json(&[
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--full",
+            "--input",
+            &input
+        ])["block"]
+    );
+
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let queued = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(queued.get("block").is_none());
+    assert!(queued.get("next_step").is_none());
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                status_event: Some("status_changed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let unknown = fixture.json(&["task", "show", &id, "--json"]);
+    assert!(
+        unknown["block"]["reason"].is_null(),
+        "a newer unexplained block must not reuse the escalation"
+    );
+    assert!(unknown["block"]["run_id"].is_null());
+    assert!(unknown["block"]["comment_index"].is_null());
+}
+
+/// [ORB-17206] An escalated block with a local run in failed, timeout or
+/// interrupted state offers the resume route in `next_step`.
+#[test]
+fn task_show_offers_resume_for_resumable_escalated_run() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_offers_resume_for_resumable_escalated_run",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("escalation-resume-fixture"));
+    let run_id = "jrun-escalated-failed";
+    let now = Utc::now();
+    let run = JobRun {
+        run_id: run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Failed,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    block_with_final_recovery(&runtime, &fixture.repo, &id, run_id);
+
+    let cli = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        cli["next_step"]["resume_command"],
+        json!(format!("orbit job resume {run_id}"))
+    );
+    assert_eq!(
+        cli["next_step"]["requeue_command"],
+        format!("orbit task update {id} --status backlog")
+    );
+    assert_eq!(cli["next_step"]["run_id"], run_id);
+
+    let human = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.lines().any(|line| line == format!(
+            "Next: run `orbit job resume {run_id}` to retry the failed work, or move the task back to backlog with `orbit task update {id} --status backlog`"
+        )),
+        "resumable Next line:\n{human}"
+    );
+
+    let nonlocal_id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Nonlocal escalated",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay unresumed",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let nonlocal_run_id = "jrun-escalated-nonlocal";
+    let nonlocal_run = JobRun {
+        run_id: nonlocal_run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Failed,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: Some(ExecutionLocation {
+            machine_id: "machine-other".into(),
+            machine_name: Some("other-host".into()),
+        }),
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonlocal_run, None)
+        .unwrap();
+    block_with_final_recovery(&runtime, &fixture.repo, &nonlocal_id, nonlocal_run_id);
+    let nonlocal_cli = fixture.json(&["task", "show", &nonlocal_id, "--json"]);
+    assert_eq!(nonlocal_cli["next_step"]["resume_command"], Value::Null);
+    assert_eq!(
+        nonlocal_cli["next_step"]["requeue_command"],
+        format!("orbit task update {nonlocal_id} --status backlog")
+    );
+    assert_eq!(nonlocal_cli["next_step"]["run_id"], nonlocal_run_id);
+    let nonlocal_human = fixture
+        .command(&["task", "show", &nonlocal_id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let nonlocal_human = String::from_utf8(nonlocal_human).unwrap();
+    assert!(
+        nonlocal_human.lines().any(|line| line == format!(
+            "Next: move the task back to backlog with `orbit task update {nonlocal_id} --status backlog` to run it again"
+        )),
+        "nonlocal Next line:\n{nonlocal_human}"
+    );
+    assert!(
+        !nonlocal_human.contains("cannot be resumed"),
+        "nonlocal run must not claim it cannot be resumed:\n{nonlocal_human}"
+    );
+
+    let nonresumable_id = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Nonresumable escalated",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay unresumed",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let nonresumable_run_id = "jrun-escalated-succeeded";
+    let nonresumable_run = JobRun {
+        run_id: nonresumable_run_id.into(),
+        job_id: "task_pr_pipeline".into(),
+        attempt: 1,
+        state: JobRunState::Success,
+        scheduled_at: now,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: Some(now),
+        duration_ms: Some(1000),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonresumable_run, None)
+        .unwrap();
+    block_with_final_recovery(
+        &runtime,
+        &fixture.repo,
+        &nonresumable_id,
+        nonresumable_run_id,
+    );
+    let nonresumable_cli = fixture.json(&["task", "show", &nonresumable_id, "--json"]);
+    assert_eq!(nonresumable_cli["next_step"]["resume_command"], Value::Null);
+    assert_eq!(
+        nonresumable_cli["next_step"]["requeue_command"],
+        format!("orbit task update {nonresumable_id} --status backlog")
+    );
+    assert_eq!(nonresumable_cli["next_step"]["run_id"], nonresumable_run_id);
+    let nonresumable_human = fixture
+        .command(&["task", "show", &nonresumable_id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let nonresumable_human = String::from_utf8(nonresumable_human).unwrap();
+    assert!(
+        nonresumable_human.lines().any(|line| line == format!(
+            "Next: move the task back to backlog with `orbit task update {nonresumable_id} --status backlog` to run it again"
+        )),
+        "nonresumable Next line:\n{nonresumable_human}"
+    );
+    assert!(
+        !nonresumable_human.contains("cannot be resumed"),
+        "nonresumable run must not claim it cannot be resumed:\n{nonresumable_human}"
+    );
 }

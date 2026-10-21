@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-10-13
-last_validated: 2026-10-18
+last_updated: 2026-10-20
+last_validated: 2026-10-20
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -83,7 +83,10 @@ explicitly replaces them:
 
 1. one canonical tool schema;
 2. one authoritative accepting server for the selected direct destination;
-3. one Core dispatch and audit boundary per tools/call, including unknown names;
+3. one Core dispatch and audit boundary for each host-dispatched tools/call,
+   including unknown names; adapter-owned UI presentation wrappers may return
+   open/empty-state or input-validation results locally, while selected task/run
+   reads use Core;
 4. no policy in the direct byte-forwarding transport;
 5. no client-side check required for correctness; and
 6. a focused end-to-end test for local and remote context propagation. Federated

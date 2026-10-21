@@ -190,6 +190,29 @@ export function setWorkspace(id) {
   for (const listener of workspaceListeners) listener();
 }
 
+// The names `/api/workspaces` gives each workspace id. Labels show the name the
+// header picker shows; an id the list does not name yet is shown as given, and
+// listeners re-render labels when the list arrives.
+let workspaceNames = new Map();
+const workspaceNameListeners = new Set();
+
+export function setWorkspaceNames(workspaces) {
+  workspaceNames = new Map((Array.isArray(workspaces) ? workspaces : [])
+    .filter((workspace) => workspace && workspace.id && workspace.name)
+    .map((workspace) => [workspace.id, workspace.name]));
+  for (const listener of workspaceNameListeners) listener();
+}
+
+export function onWorkspaceNamesChange(listener) {
+  workspaceNameListeners.add(listener);
+  return () => workspaceNameListeners.delete(listener);
+}
+
+/// The name a workspace id is shown by, or the id itself when no name is known.
+export function workspaceDisplayName(id) {
+  return workspaceNames.get(id) || id;
+}
+
 // Workspace ids belong to a host. Keep each host's choice separately so a
 // remembered local workspace cannot become a remote host's default.
 function rememberedWorkspaceKey() {
@@ -383,13 +406,22 @@ export function wireWindowSelector(selectorId, opts = {}) {
 // renders a placeholder instead. This lives in the shared leaf module so all
 // three modules query the same live predicate without a circular import.
 let multiWorkspace = false;
+let workspaceListHostRevision = null;
 
+// Publish cardinality only after loading the current host's workspace list.
 export function setMultiWorkspace(value) {
   multiWorkspace = !!value;
+  workspaceListHostRevision = hostRevision;
 }
 
 export function isMultiWorkspace() {
   return multiWorkspace;
+}
+
+// A host switch invalidates cardinality before workspace listeners run,
+// including while the destination's connection check is still pending.
+export function isWorkspaceListReady() {
+  return workspaceListHostRevision === hostRevision;
 }
 
 export function isAggregateView() {
@@ -1019,15 +1051,15 @@ export function postJson(path, body) {
   return requestJson(path, "POST", body);
 }
 
-// A run's captured review layer before landing and what decided it, as the
-// `Review:` line of `orbit run show` reads: `run-option` is the run's own
-// `--review`, `claim` a claimed leaf's owner, anything else a policy layer.
+// A run's captured review layer before landing and what decided it: `run-option`
+// is the run's own `--review`, `claim` a claimed leaf's owner, and any other
+// source names the policy layer that applied (`workspace policy`, `global policy`).
 export function reviewLayerText(layer) {
   if (!layer?.timing) return "";
   const source = layer.source || "unknown";
   const origin = source === "run-option" ? "run option --review"
     : source === "claim" ? "the owner's claim"
-    : `workspace policy, ${source}`;
+    : `${source} policy`;
   return `${layer.timing} (${origin})`;
 }
 

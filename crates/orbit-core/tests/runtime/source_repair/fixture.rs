@@ -2,7 +2,7 @@
 use crate::fixture_template::TreeTemplate;
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_store::contracts::JobRunStepParams;
 use orbit_types::task::{ExecutionLocation, ExternalRef};
@@ -203,6 +203,11 @@ impl Fixture {
     fn build(timing: &str, agent: bool, number: &str, refs: Vec<ExternalRef>) -> Self {
         Self::build_with_command(timing, agent, number, refs, "true")
     }
+    /// A PR-mode workspace whose task declares `source.txt` as its footprint
+    /// and is assessed, so the drain's admission and readiness judge it.
+    pub(super) fn drained() -> Self {
+        Self::build_shaped("none", false, "17", Vec::new(), "true", true)
+    }
     pub(super) fn handoff() -> Self {
         Self::build_with_command(
             "before-landing",
@@ -218,6 +223,16 @@ impl Fixture {
         number: &str,
         refs: Vec<ExternalRef>,
         command: &str,
+    ) -> Self {
+        Self::build_shaped(timing, agent, number, refs, command, false)
+    }
+    fn build_shaped(
+        timing: &str,
+        agent: bool,
+        number: &str,
+        refs: Vec<ExternalRef>,
+        command: &str,
+        drained: bool,
     ) -> Self {
         let command = serde_json::to_string(command).unwrap();
         let root = TempDir::new_in(bulk_root()).unwrap();
@@ -258,12 +273,29 @@ impl Fixture {
         let yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr_pipeline\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - {id: worktree, target: 'activity:worktree_setup'}\n    - {id: commit, target: 'activity:git_commit'}\n    - {id: prepare_branch, target: 'activity:pr_prepare'}\n    - {id: sync_base, target: 'activity:git_rebase'}\n    - {id: push, target: 'activity:git_push'}\n    - {id: pr_open, target: 'activity:pr_open'}\n    - {id: resume_candidate, target: 'activity:candidate_resume'}\n    - {id: complete_pr, target: 'activity:pr_complete'}\n";
         std::fs::write(jobs.join("task_pr_pipeline.yaml"), yaml).unwrap();
         crate::fixture_template::seed_store(&global);
-        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        let runtime = if drained {
+            OrbitRuntime::from_roots_with_binding(
+                &global,
+                &repo.join(".orbit"),
+                WorkspaceRuntimeBinding {
+                    logical_workspace_id: "ws_published".into(),
+                    task_partition_id: "ws_published".into(),
+                    owner_machine_id: None,
+                    checkout_role: None,
+                    repo_root: repo.clone(),
+                    ship_mode: ShipMode::Pr,
+                    base_branch: Some("main".into()),
+                },
+            )
             .unwrap()
-            .with_automation_execution_location(Some(ExecutionLocation {
-                machine_id: "hm_fixture".into(),
-                machine_name: None,
-            }));
+            .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
+        } else {
+            OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap()
+        }
+        .with_automation_execution_location(Some(ExecutionLocation {
+            machine_id: "hm_fixture".into(),
+            machine_name: None,
+        }));
         let task = runtime
             .add_task(TaskAddParams {
                 external_refs: refs,
@@ -272,6 +304,16 @@ impl Fixture {
                 acceptance_criteria: vec!["Continue the same PR".into()],
                 plan: "Repair the observed failure".into(),
                 status: Some(TaskStatus::Backlog),
+                context_files: if drained {
+                    vec!["file:source.txt".into()]
+                } else {
+                    Vec::new()
+                },
+                complexity: if drained {
+                    TaskComplexity::Medium
+                } else {
+                    TaskAddParams::default().complexity
+                },
                 ..Default::default()
             })
             .unwrap()
@@ -281,6 +323,20 @@ impl Fixture {
         let branch = format!("orbit/{task}-source");
         let checkout = SourceCheckout::for_branch(&branch);
         checkout.write(root.path());
+        if drained {
+            // `git remote -v` reports origin after its rewrite to the bare
+            // remote; PR admission needs one remote naming a forge host,
+            // which nothing fetches from or pushes to.
+            git(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "forge",
+                    "https://github.com/owner/forge.git",
+                ],
+            );
+        }
         let SourceCheckout {
             original_base,
             committed,

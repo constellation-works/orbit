@@ -1352,6 +1352,12 @@ depends on where it ran:
   request and head. A leaf that died before promoting its task leaves it
   interruption-`blocked`, which the blocked-task recovery backstop decides. Every rule and every refusal is listed in
   [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+- **Owner-local leaf that stopped with a blocked pull request.** An
+  `--auto-fix` owner drain hands a conflicting or red Orbit pull request whose
+  task has no live run back to its newest failed, timed-out or interrupted leaf,
+  rewound to completion
+  ([out-of-run auto-fix](stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching)).
+  Claimed leaves and tasks of other workspaces are left alone.
 
 When the task cannot be resumed, requeue it. An operator's move to `backlog`,
 or a `--discard-candidate` requeue out of `blocked`, closes the task's pull
