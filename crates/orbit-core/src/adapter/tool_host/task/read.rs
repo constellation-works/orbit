@@ -41,7 +41,7 @@ pub(super) fn artifact_get(
         .ok_or_else(|| {
             OrbitError::not_found(
                 orbit_common::NotFoundKind::Artifact,
-                format!("{}/{path}", task.id),
+                format!("{}/{path}; {listing_hint}", task.id),
             )
         })?;
     serialize_task_artifact_read(&task.id, &artifact)

@@ -312,8 +312,11 @@ plugin being removed.
   and corrects factual drift and broken links. Each run attaches a
   `doc-duties-ledger.json` artifact recording an outcome (`clean`, `fixed`,
   `partial` or `skipped`) and attempt date per selected document, plus a
-  cumulative `state` map of every path's two latest attempts. A run reads only
-  the newest readable ledger's `state` (older ledgers without it are read
+  cumulative `state` map of every path's two latest attempts. A run discovers
+  each candidate's artifacts through the metadata-only `orbit.task.show`
+  (`field: "artifacts"`) projection and fetches a ledger only when listed, so
+  absent ledgers are skipped without a failed artifact read. It reads only
+  the newest listed ledger's `state` (older ledgers without it are read
   through the 60-run window), so attempts survive task-history truncation.
   Selection orders by the latest attempt, then `last_validated` frontmatter,
   then the git last-touched date, so a skipped document rotates to the back. A

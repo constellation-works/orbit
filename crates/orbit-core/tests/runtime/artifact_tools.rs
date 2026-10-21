@@ -2,7 +2,7 @@
 //! the public tool boundary. Mutable fixtures run in isolated child processes.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
+use orbit_core::{NotFoundKind, OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::telemetry::AuditEventStatus;
@@ -541,6 +541,117 @@ fn review_preflight_fetches_only_existing_optional_artifacts() {
     assert_eq!(listings.len(), 2, "list exactly once per review preflight");
 }
 
+fn doc_duties_discovery_fetches_only_listed_ledgers() {
+    let fixture = Fixture::new();
+    let runtime = &fixture.runtime;
+    let make_task = |title: &str, ledger: Option<String>| {
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Doc-duties discovery candidate.".into(),
+                acceptance_criteria: vec!["Discovery is metadata-first.".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        if let Some(ledger) = ledger {
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        upsert_artifacts: vec![TaskArtifact::from_text(
+                            "doc-duties-ledger.json",
+                            ledger,
+                        )],
+                        ..Default::default()
+                    },
+                    None,
+                    Some("codex".into()),
+                )
+                .unwrap();
+        }
+        task.id.to_string()
+    };
+    let v1 = json!({"schema_version": 1, "documents": [{"path": "docs/a.md", "attempted_on": "2026-01-01", "outcome": "clean"}]}).to_string();
+    let v2 = json!({"schema_version": 2, "state": {"docs/a.md": [{"attempted_on": "2026-02-01", "outcome": "clean"}]}, "documents": []}).to_string();
+    let oldest = make_task("oldest ledger", Some(v1));
+    let middle = make_task("no ledger", None);
+    let newest = make_task("newest ledger", Some(v2.clone()));
+
+    // The doc-duties step-2 procedure: newest first, discover via the
+    // metadata-only artifacts projection, fetch only listed ledgers, and
+    // stop at the first cumulative (schema_version 2) ledger.
+    let call = |tool: &str, input: Value| {
+        runtime
+            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .unwrap()
+    };
+    let mut fetched: Vec<(String, Value)> = Vec::new();
+    for id in [&newest, &middle, &oldest] {
+        let listing = call("orbit.task.show", json!({"id": id, "field": "artifacts"}));
+        let available = listing.as_array().expect("artifact metadata list");
+        assert!(
+            available
+                .iter()
+                .all(|artifact| artifact.get("content").is_none()),
+            "the artifacts projection is metadata-only: {listing}"
+        );
+        if available
+            .iter()
+            .any(|artifact| artifact["path"] == "doc-duties-ledger.json")
+        {
+            let read = call(
+                "orbit.task.artifact.get",
+                json!({"id": id, "path": "doc-duties-ledger.json"}),
+            );
+            let is_cumulative =
+                serde_json::from_str::<Value>(read["content"].as_str().expect("ledger text"))
+                    .unwrap()["schema_version"]
+                    == 2;
+            fetched.push((id.clone(), read));
+            if is_cumulative {
+                break;
+            }
+        }
+    }
+    assert_eq!(fetched.len(), 1, "only the newest listed ledger is fetched");
+    assert_eq!(fetched[0].0, newest);
+    assert_eq!(fetched[0].1["content"], v2);
+    assert_eq!(
+        successful_reads(runtime),
+        1,
+        "skipping the unlisted middle task generated no failed artifact GET"
+    );
+
+    // A direct GET for a well-formed absent artifact stays typed not-found
+    // and now explains metadata-only discovery; valid retrieval is unchanged.
+    let error = runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": middle, "path": "doc-duties-ledger.json"}),
+        )
+        .expect_err("an absent ledger must stay refused, not fabricated");
+    assert!(
+        matches!(
+            error,
+            OrbitError::NotFound {
+                kind: NotFoundKind::Artifact,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    for hint in ["orbit.task.show", "field: \"artifacts\""] {
+        assert!(error.to_string().contains(hint), "{error}");
+    }
+    let read = runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": newest, "path": "doc-duties-ledger.json"}),
+        )
+        .unwrap();
+    assert_eq!(read["content"], v2);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     task_starts_admit_artifacts_before_any_persistence_scenarios,
@@ -549,5 +660,6 @@ crate::scenario_table!(
     full_review_inventory_is_accepted_through_the_agent_artifact_tool,
     normalized_reviewer_reports_are_validated_on_put_and_update,
     artifact_errors_explain_the_source_file_listing_and_size_remedies,
-    review_preflight_fetches_only_existing_optional_artifacts
+    review_preflight_fetches_only_existing_optional_artifacts,
+    doc_duties_discovery_fetches_only_listed_ledgers
 );
