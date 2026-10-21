@@ -224,46 +224,50 @@ pub(super) fn repaired_audit(mut audit: Value, already_repaired: &[Value]) -> Va
 /// Old snapshots did not bind the run log or its checkout scan to the named
 /// job. They remain readable audit evidence, but must be recollected before
 /// filing; inferring attribution from job order would repeat the original bug.
-fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str> {
+fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<String> {
     if schema_version < 2 {
-        return Some("legacy run-scoped evidence has no verified job binding; recollect this run");
+        return Some(
+            "legacy run-scoped evidence has no verified job binding; recollect this run"
+                .to_string(),
+        );
     }
     let Some(job_id) = failure.get("job_id").and_then(Value::as_u64) else {
-        return Some("failure has no numeric job identity");
+        return Some("failure has no numeric job identity".to_string());
     };
     let jobs = failure.get("failed_jobs").and_then(Value::as_array);
     let Some(job) = jobs
         .filter(|jobs| jobs.len() == 1)
         .and_then(|jobs| jobs.first())
     else {
-        return Some("failure must identify exactly one supplying job");
+        return Some("failure must identify exactly one supplying job".to_string());
     };
     if job.get("job_id").and_then(Value::as_u64) != Some(job_id)
         || failure.get("log_job_id").and_then(Value::as_u64) != Some(job_id)
     {
-        return Some("diagnostic evidence is not bound to the named job");
+        return Some("diagnostic evidence is not bound to the named job".to_string());
     }
     if job
         .get("failed_steps")
         .and_then(Value::as_array)
         .is_none_or(|steps| steps.len() != 1)
     {
-        return Some("failed step identity is missing or ambiguous within this job");
+        return Some("failed step identity is missing or ambiguous within this job".to_string());
     }
     if failure["diagnostic_unit"]["kind"] == "runner_failure_regions"
         && selected_diagnostic(failure).is_none()
     {
         return Some(
-            "failure regions have invalid completeness, omission accounting or attribution",
+            "failure regions have invalid completeness, omission accounting or attribution"
+                .to_string(),
         );
     }
     if let Some(text) = selected_diagnostic(failure)
         && error_signature(text, &value_string(&job["failed_steps"][0], "name")).step_fallback
     {
-        return Some("selected evidence contains no concrete diagnostic");
+        return Some("selected evidence contains no concrete diagnostic".to_string());
     }
     if failure["log_source_complete"] == false {
-        return Some("job log source is incomplete");
+        return Some("job log source is incomplete".to_string());
     }
     if selected_diagnostic(failure).is_none()
         && (strip_ansi_sequences(&value_string(failure, "log_excerpt"))
@@ -271,7 +275,7 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
             .is_empty()
             || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
     {
-        return Some("job diagnostic evidence is missing or truncated");
+        return Some("job diagnostic evidence is missing or truncated".to_string());
     }
     if value_string(failure, "log_source") == "job_api_log"
         && failure
@@ -279,18 +283,29 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
             .and_then(Value::as_array)
             .is_none_or(|jobs| jobs.len() != 1 || jobs[0]["job_id"].as_u64() != Some(job_id))
     {
-        return Some("fallback log evidence belongs to a different or unknown job");
+        return Some("fallback log evidence belongs to a different or unknown job".to_string());
     }
     let identity = &failure["checkout_identity"];
-    if identity["provenance"]["job_id"].as_u64() != Some(job_id)
-        || identity["provenance"]["complete"].as_bool() != Some(true)
-        || identity["state"] != "observed"
-        || failure
-            .get("actual_checkout_shas")
-            .and_then(Value::as_array)
-            .is_none_or(|shas| shas.len() != 1)
-    {
-        return Some("checkout identity is not completely observed for this job");
+    let state = match identity["state"].as_str() {
+        Some("observed") => "observed",
+        Some("incomplete") => "incomplete",
+        Some("missing") => "missing",
+        Some("ambiguous") => "ambiguous",
+        _ => "unknown",
+    };
+    let provenance = &identity["provenance"];
+    let job_id_matches = provenance["job_id"].as_u64() == Some(job_id);
+    let provenance_complete = provenance["complete"].as_bool() == Some(true);
+    let checkout_sha_count = failure
+        .get("actual_checkout_shas")
+        .and_then(Value::as_array)
+        .map_or(0, |shas| shas.len());
+    if !job_id_matches || !provenance_complete || state != "observed" || checkout_sha_count != 1 {
+        return Some(format!(
+            "checkout identity is not completely observed for this job (state={state}, state_is_observed={}, provenance.complete={provenance_complete}, provenance.job_id_matches={job_id_matches}, checkout_sha_count={checkout_sha_count}, checkout_sha_count_is_one={})",
+            state == "observed",
+            checkout_sha_count == 1
+        ));
     }
     None
 }

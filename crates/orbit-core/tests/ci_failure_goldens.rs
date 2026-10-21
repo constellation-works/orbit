@@ -67,6 +67,13 @@ fn failure(log: &str, index: usize, checkout: &str) -> Value {
 }
 
 fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
+    file_result(runtime, runs).expect("file CI failure")
+}
+
+fn file_result(
+    runtime: &OrbitRuntime,
+    runs: Vec<Value>,
+) -> Result<Value, orbit_engine::DispatchError> {
     runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({"ci_evidence": {
         "schema_version": 2, "collected": true, "outcome_hint": "current_failures",
         "capability": {"available": true, "authenticated": true},
@@ -74,7 +81,103 @@ fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
         "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
         "latest_runs": runs.clone(), "current_failures": runs, "stale_or_superseded": [],
         "in_flight": [], "retryable_errors": [], "collected_at": "2026-09-07T08:00:00Z"
-    }}), ToolContext::default()).expect("file CI failure")
+    }}), ToolContext::default())
+}
+
+fn retryable_error_payload(error: orbit_engine::DispatchError) -> Value {
+    let message = error.to_string();
+    let (_, payload) = message
+        .split_once("ci_failure_sweep retryable: ")
+        .unwrap_or_else(|| panic!("expected retryable CI sweep error, got {message}"));
+    serde_json::from_str(payload).expect("retryable CI sweep error payload")
+}
+
+#[test]
+fn ci_checkout_identity_gaps_are_named_at_the_filing_boundary() {
+    if !isolated("ci_checkout_identity_gaps_are_named_at_the_filing_boundary") {
+        return;
+    }
+
+    let (_root, runtime, commits) = operator_fixture("");
+    let admitted = file(
+        &runtime,
+        vec![failure("error: valid checkout identity", 0, &commits[0])],
+    );
+    assert_eq!(admitted["filed_count"], json!(1), "{admitted}");
+    assert_eq!(admitted["deferred_count"], json!(0), "{admitted}");
+
+    let cases = [
+        ("incomplete", true, true, 1),
+        ("missing", true, true, 1),
+        ("ambiguous", true, true, 1),
+        ("observed", false, true, 1),
+        ("observed", true, false, 1),
+        ("observed", true, true, 0),
+        ("observed", true, true, 2),
+    ];
+
+    for (offset, (state, provenance_complete, job_id_matches, sha_count)) in
+        cases.into_iter().enumerate()
+    {
+        let index = offset + 1;
+        let mut run = failure(
+            &format!("error: checkout identity case {offset}"),
+            index,
+            &commits[index % commits.len()],
+        );
+        run["checkout_identity"]["state"] = json!(state);
+        run["checkout_identity"]["provenance"]["complete"] = json!(provenance_complete);
+        if !job_id_matches {
+            run["checkout_identity"]["provenance"]["job_id"] = json!(99_000 + index);
+        }
+        run["actual_checkout_shas"] = match sha_count {
+            0 => json!([]),
+            1 => run["actual_checkout_shas"].clone(),
+            _ => json!([
+                commits[index % commits.len()],
+                commits[(index + 1) % commits.len()]
+            ]),
+        };
+
+        let error =
+            file_result(&runtime, vec![run]).expect_err("an identity gap must remain retryable");
+        let output = retryable_error_payload(error);
+        assert_eq!(output["outcome"], json!("retryable_error"), "{output}");
+        assert_eq!(
+            output["stage"],
+            json!("collection_or_investigation"),
+            "{output}"
+        );
+        let reason = &output["errors"][0];
+        assert_eq!(reason["stage"], json!("registration"), "{output}");
+        assert_eq!(
+            reason["operation"],
+            json!("job_evidence_identity"),
+            "{output}"
+        );
+        assert_eq!(reason["retryable"], json!(true), "{output}");
+        assert_eq!(
+            reason["message"],
+            json!(format!(
+                "checkout identity is not completely observed for this job (state={state}, state_is_observed={}, provenance.complete={provenance_complete}, provenance.job_id_matches={job_id_matches}, checkout_sha_count={sha_count}, checkout_sha_count_is_one={})",
+                state == "observed",
+                sha_count == 1
+            )),
+            "{output}"
+        );
+    }
+
+    let mut incomplete_log = failure("error: missing log evidence", 9, &commits[0]);
+    incomplete_log["log_excerpt"] = json!("");
+    incomplete_log["log_truncated"] = json!(true);
+    let error = file_result(&runtime, vec![incomplete_log])
+        .expect_err("a non-identity evidence gap must remain retryable");
+    let output = retryable_error_payload(error);
+    assert_eq!(
+        output["errors"][0]["message"],
+        json!("job diagnostic evidence is missing or truncated"),
+        "{output}"
+    );
 }
 
 fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
