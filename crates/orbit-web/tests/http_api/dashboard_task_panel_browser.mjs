@@ -24,8 +24,12 @@ const tasks = statuses.map((status, index) => ({
   status, priority: 'medium', projection: 'summary', crew: index % 2 ? 'opus' : null,
   job_run_id: status === 'in-progress' ? 'jrun-fixture-' + (index + 1) : null,
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
-  comment_count: 2, artifact_count: 1,
+  comment_count: index === 1 ? 0 : 2, artifact_count: 1,
 }));
+const sampleComments = [
+  { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
+  { at: '2026-10-18T11:30:00Z', by: 'claude', message: 'Done: the detail now opens in a side panel.' },
+];
 const full = task => ({
   ...task, projection: undefined,
   description: '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
@@ -33,13 +37,15 @@ const full = task => ({
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
   created_by: 'operator', created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
   history: Array.from({ length: 6 }, (_, i) => ({ at: '2026-10-18T1' + i + ':00:00Z', by: 'operator', event: 'updated', note: 'edit ' + (i + 1) })),
-  comments: [
-    { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
-    { at: '2026-10-18T11:30:00Z', by: 'claude', message: 'Done: the detail now opens in a side panel.' },
-  ],
+  comments: task.comments || (task.id === 'PANEL-2' ? [] : sampleComments),
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
 });
-globalThis.panelFixture = { tasks, reads: [], writes: [], patches: [] };
+globalThis.panelFixture = {
+  tasks, reads: [], writes: [], patches: [],
+  holdCommentPost: false, releaseCommentPost: null, failCommentPost: false,
+  ships: [], holdShipPost: false, releaseShipPost: null,
+  deliveryClaim: false,
+};
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
   const api = url.pathname;
@@ -51,6 +57,14 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
   if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: [] });
+  if (api === '/api/distributed/claims') {
+    const taskId = url.searchParams.get('task');
+    const claims = globalThis.panelFixture.deliveryClaim && ['PANEL-1', 'PANEL-3'].includes(taskId) ? [{
+      task_id: taskId, claim_id: 'claim-panel-fixture', phase: 'claimed', last_event: 'claim_bound',
+      unsettled: taskId === 'PANEL-3', created_at: '2026-10-18T10:00:00Z', footprint: [],
+    }] : [];
+    return json({ claims });
+  }
   if (api === '/api/job-runs') {
     const id = url.searchParams.get('task_id');
     return json({ items: id ? [
@@ -58,11 +72,37 @@ globalThis.fetch = async (input, options = {}) => {
       { run_id: 'jrun-' + id + '-1', job_id: 'ship', state: 'failed', started_at: '2026-10-18T09:00:00Z', finished_at: '2026-10-18T09:12:00Z', duration_ms: 720000, error_message: 'make ci-fast failed' },
     ] : [], total: id ? 2 : 0, limit: 20 });
   }
+  if (api === '/api/workflows/ship' && options.method === 'POST') {
+    globalThis.panelFixture.ships.push(JSON.parse(options.body));
+    if (globalThis.panelFixture.holdShipPost) {
+      globalThis.panelFixture.holdShipPost = false;
+      await new Promise(resolve => { globalThis.panelFixture.releaseShipPost = resolve; });
+    }
+    return json({ run_id: 'jrun-panel-ship', state: 'submitted' });
+  }
   const approve = api.match(/^\\/api\\/tasks\\/([^/]+)\\/approve$/);
   if (approve && options.method === 'POST') {
     globalThis.panelFixture.writes.push(api);
     const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(approve[1]));
     if (task) task.status = 'backlog';
+    return json({ ok: true });
+  }
+  const comment = api.match(/^\\/api\\/tasks\\/([^/]+)\\/comments$/);
+  if (comment && options.method === 'POST') {
+    const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(comment[1]));
+    if (!task) return json({ error: 'not found' }, 404);
+    globalThis.panelFixture.writes.push(api);
+    if (globalThis.panelFixture.failCommentPost) {
+      globalThis.panelFixture.failCommentPost = false;
+      return json({ error: 'comment refused' }, 422);
+    }
+    if (globalThis.panelFixture.holdCommentPost) {
+      globalThis.panelFixture.holdCommentPost = false;
+      await new Promise(resolve => { globalThis.panelFixture.releaseCommentPost = resolve; });
+    }
+    const prior = task.comments || (task.id === 'PANEL-2' ? [] : sampleComments);
+    task.comments = [...prior, { at: '2026-10-20T12:00:00Z', by: 'human', message: JSON.parse(options.body).message }];
+    task.comment_count = task.comments.length;
     return json({ ok: true });
   }
   const detail = api.match(/^\\/api\\/tasks\\/([^/]+)$/);
@@ -94,7 +134,7 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
 const results = {};
 
-async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null } = {}) {
+async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null, clock = false } = {}) {
   const owner = context || await browser.newContext({ viewport: { width, height } });
   // A viewer whose storage refuses every read and write still gets a pane.
   if (storage === 'refuses') await owner.addInitScript(() => {
@@ -103,6 +143,7 @@ async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tas
     }
   });
   const page = await owner.newPage();
+  if (clock) await page.clock.install();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());
@@ -131,6 +172,162 @@ const waitShown = async (page, id) => {
 };
 
 try {
+  // Task lifecycle controls follow the active Overview panel; Comment follows
+  // the thread in Comments, and neither appears in the other task panels.
+  for (const width of [1440, 375]) {
+    const { page, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    await row(page, 'PANEL-1').locator('.title').click();
+    await waitShown(page, 'PANEL-1');
+    const detail = pane(page).locator('#detail-PANEL-1');
+    const tabNames = await detail.locator('[role="tab"]').evaluateAll(nodes => nodes.map(node => node.dataset.tab));
+    for (const name of tabNames) {
+      await detail.locator(`[role="tab"][data-tab="${name}"]`).click();
+      const panel = detail.locator(`#detail-PANEL-1-panel-${name}`);
+      if (name === 'overview') {
+        const actions = panel.locator('.task-action-row.lifecycle-actions:visible');
+        assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
+        assert.equal(await panel.locator('.action.comment:visible').count(), 0, 'Comment is absent from Overview');
+      } else if (name === 'comments') {
+        assert.equal(await panel.locator('.task-action-row.comment-actions:visible').count(), 1, 'Comments contains its own task-level Comment action row');
+        assert.equal(await panel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'Comment keeps its accessible name in Comments');
+        assert.equal(await panel.locator('.task-action-row.lifecycle-actions:visible').count(), 0, 'Lifecycle actions are absent from Comments');
+        await panel.locator('.comment-card').first().waitFor({ state: 'visible' });
+      } else {
+        assert.equal(await panel.locator('.task-action-row:visible').count(), 0, `${name} has no task-level action row`);
+      }
+      if (['overview', 'runs', 'comments'].includes(name)) {
+        if (name === 'runs') await panel.locator('.task-run').first().waitFor({ state: 'visible' });
+        if (name === 'overview') await panel.locator('.lifecycle-actions').scrollIntoViewIfNeeded();
+        await capture(page, `task-detail-${name}-after-dark-${width}.png`);
+      }
+    }
+    await context.close();
+  }
+
+  // Delivery is exposed only for a claim. Its own panel remains while task
+  // lifecycle and comment actions stay in their Overview and Comments tabs.
+  {
+    const { page, errors, context } = await openPage();
+    await page.evaluate(() => { globalThis.panelFixture.deliveryClaim = true; });
+    await row(page, 'PANEL-1').locator('.title').click();
+    await waitShown(page, 'PANEL-1');
+    const detail = pane(page).locator('#detail-PANEL-1');
+    const deliveryTab = detail.locator('[role="tab"][data-tab="delivery"]');
+    await deliveryTab.waitFor({ state: 'visible' });
+    await deliveryTab.click();
+    const deliveryPanel = detail.locator('#detail-PANEL-1-panel-delivery');
+    await deliveryPanel.locator('.claim-panel').waitFor({ state: 'visible' });
+    assert.equal(await deliveryPanel.locator('.task-action-row:visible').count(), 0, 'Delivery shows no task-level action row');
+    assert.equal(await deliveryPanel.locator('.claim-panel').isVisible(), true, 'The task claim remains in the Delivery panel');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.deliveryPanelActionSeparation = true;
+  }
+
+  // A review task with a live distributed claim must keep the handoff approval
+  // safeguard instead of posting the ordinary task approval.
+  {
+    const { page, errors, context } = await openPage();
+    await page.evaluate(() => { globalThis.panelFixture.deliveryClaim = true; });
+    await row(page, 'PANEL-3').locator('.title').click();
+    await waitShown(page, 'PANEL-3');
+    const detail = pane(page).locator('#detail-PANEL-3');
+    await detail.locator('[role="tab"][data-tab="overview"]').click();
+    await detail.getByRole('button', { name: 'approve', exact: true }).click();
+    const refusal = detail.locator('.action-error');
+    await refusal.waitFor({ state: 'visible' });
+    assert.match(await refusal.innerText(), /claim has not handed off yet/, 'Review approval refuses a claim that has not handed off');
+    assert.equal(await page.evaluate(() => globalThis.panelFixture.writes.some(write => write === '/api/tasks/PANEL-3/approve')), false, 'The review safeguard sends no ordinary task approval');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.reviewClaimApprovalGuard = true;
+  }
+
+  // Status gating stays attached to the same handlers after the controls move.
+  {
+    const { page, errors, context } = await openPage();
+    for (const [id, expected] of [
+      ['PANEL-3', ['approve', 'reject', 'archive']],
+      ['PANEL-6', ['ship', 'reject', 'archive']],
+    ]) {
+      await row(page, id).locator('.title').click();
+      await waitShown(page, id);
+      const detail = pane(page).locator(`#detail-${id}`);
+      await detail.locator('[role="tab"][data-tab="overview"]').click();
+      assert.deepEqual(await detail.locator('.lifecycle-actions .action').allTextContents(), expected, `${id} retains its status-gated lifecycle actions`);
+      await detail.locator('[role="tab"][data-tab="comments"]').click();
+      assert.equal(await detail.locator('.lifecycle-actions:visible').count(), 0, `${id} has no lifecycle action on Comments`);
+      assert.equal(await detail.locator('.comment-actions .action.comment:visible').count(), 1, `${id} keeps Comment on Comments`);
+      if (id === 'PANEL-6') {
+        await detail.locator('[role="tab"][data-tab="overview"]').click();
+        await page.evaluate(() => { globalThis.panelFixture.holdShipPost = true; });
+        const ship = detail.locator('.lifecycle-actions .action.ship');
+        await ship.click();
+        await page.waitForFunction(() => globalThis.panelFixture.ships.length === 1);
+        assert.equal(await ship.isDisabled(), true, 'Ship enters its disabled pending state');
+        await ship.evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.ships), [{ task_ids: ['PANEL-6'] }], 'The duplicate-ship guard sends only one request');
+        await page.evaluate(() => globalThis.panelFixture.releaseShipPost());
+        await pane(page).waitFor({ state: 'hidden' });
+      } else {
+        await page.getByRole('button', { name: 'Close task detail' }).click();
+        await pane(page).waitFor({ state: 'hidden' });
+      }
+    }
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.taskActionTabsAndStatusGating = true;
+  }
+
+  // An empty thread still owns Comment. Its unsent draft survives a tab switch
+  // and the 30-second dashboard refresh, then posts and reloads the thread.
+  {
+    const { page, errors, context } = await openPage({ clock: true });
+    await row(page, 'PANEL-2').locator('.title').click();
+    await waitShown(page, 'PANEL-2');
+    const detail = pane(page).locator('#detail-PANEL-2');
+    const commentsPanel = detail.locator('#detail-PANEL-2-panel-comments');
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    assert.equal(await commentsPanel.getByText('No comments yet.').isVisible(), true, 'The empty Comments tab explains that there is no thread yet');
+    assert.equal(await commentsPanel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'An empty thread still offers Comment');
+    await commentsPanel.getByRole('button', { name: 'comment', exact: true }).click();
+    const form = commentsPanel.locator('.comment-form');
+    const draft = 'Keep this unsent comment through tabs and refresh.';
+    await form.locator('textarea').fill(draft);
+    await detail.locator('[role="tab"][data-tab="overview"]').click();
+    assert.equal(await detail.locator('.comment-form:visible').count(), 0, 'The comment composer is hidden outside Comments');
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    assert.equal(await form.locator('textarea').inputValue(), draft, 'Switching tabs keeps the comment draft');
+
+    const readsBefore = await page.evaluate(() => globalThis.panelFixture.reads.filter(read => read.startsWith('/api/tasks?')).length);
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(before => globalThis.panelFixture.reads.filter(read => read.startsWith('/api/tasks?')).length > before, readsBefore);
+    assert.equal(await form.locator('textarea').inputValue(), draft, 'The 30-second refresh keeps the comment draft');
+    assert.equal(await detail.locator('[role="tab"][aria-selected="true"]').getAttribute('data-tab'), 'comments', 'Refresh leaves the Comments tab selected');
+
+    await page.evaluate(() => { globalThis.panelFixture.failCommentPost = true; });
+    await form.getByRole('button', { name: 'post', exact: true }).click();
+    const failure = detail.locator('.action-error');
+    await failure.waitFor({ state: 'visible' });
+    assert.match(await failure.innerText(), /comment failed: comment refused/, 'A refused post keeps its error feedback');
+    assert.equal(await form.locator('textarea').inputValue(), draft, 'A refused post keeps the unsent draft');
+    assert.equal(await form.getByRole('button', { name: 'post', exact: true }).isDisabled(), false, 'A refused post releases the pending state for retry');
+
+    await page.evaluate(() => { globalThis.panelFixture.holdCommentPost = true; });
+    await form.getByRole('button', { name: 'post', exact: true }).click();
+    await page.waitForFunction(() => globalThis.panelFixture.writes.includes('/api/tasks/PANEL-2/comments'));
+    assert.equal(await form.getByRole('button', { name: 'post', exact: true }).isDisabled(), true, 'Posting disables the submit control while pending');
+    assert.equal(await form.getByRole('button', { name: 'cancel', exact: true }).isDisabled(), true, 'Posting disables cancel while pending');
+    await page.evaluate(() => globalThis.panelFixture.releaseCommentPost());
+    await detail.locator('.comment-card').filter({ hasText: draft }).waitFor({ state: 'visible' });
+    assert.equal(await detail.locator('.comment-card').count(), 1, 'Posting refreshes the empty thread with the new comment');
+    assert.equal(await detail.locator('.comment-card .comment-by').first().innerText(), 'human', 'The refreshed comment keeps the human author');
+    assert.equal(await commentsPanel.locator('.comment-actions .action.comment:visible').count(), 1, 'The Comment action returns after posting');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.emptyCommentDraftRefreshAndPost = true;
+  }
+
   // Selection opens the pane beside a list that stays where it was.
   {
     const { page, errors, context } = await openPage();
@@ -347,7 +544,8 @@ try {
     await reject.waitFor({ state: 'hidden' });
     assert.equal(await crew.inputValue(), 'opus', 'Canceling the reject composer leaves explicit crew intact');
 
-    // Open comment composer.
+    // Open comment composer from its Comments tab, including for the empty thread.
+    await pane(page).getByRole('tab', { name: /^Comments/ }).click();
     await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
     const comment = pane(page).locator('.comment-form');
     await comment.waitFor({ state: 'visible' });
@@ -411,6 +609,7 @@ try {
     const staleCrew = pane(page).locator('#detail-PANEL-14-crew');
     assert.equal(await staleCrew.inputValue(), 'stale-crew', 'The detail starts with the missing explicit crew');
     assert.equal(await staleCrew.getAttribute('data-stale-current-value'), 'stale-crew', 'The select records the stale crew in its dataset');
+    await pane(page).getByRole('tab', { name: /^Comments/ }).click();
     await pane(page).getByRole('button', { name: 'comment', exact: true }).click();
     await pane(page).locator('.comment-form').waitFor({ state: 'visible' });
     assert.equal(await staleCrew.inputValue(), 'stale-crew', 'Draft-held refresh preserves the missing explicit crew');
