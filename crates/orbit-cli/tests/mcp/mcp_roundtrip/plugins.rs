@@ -129,10 +129,42 @@ fn check_brokered_plugin_audit(scope: &str) {
     // an absolute path below a managed run's scratch tempdir exceeds it.
     let socket = "fixture-broker.sock";
     let listener = bind_socket_in(&workspace.work, socket);
+    listener
+        .set_nonblocking(true)
+        .expect("configure fixture broker accept deadline");
     let server = std::thread::spawn(move || {
+        let expected_calls = [
+            "tool run CLI",
+            "derived plugin CLI",
+            "successful MCP call",
+            "MCP bad-plan failure",
+            "MCP busy failure",
+            "tool run bad-plan failure",
+            "explicit-workspace tool run",
+        ];
         let mut requests = Vec::new();
-        for index in 0..7 {
-            let (mut stream, _) = listener.accept().expect("accept forwarded call");
+        for (index, call) in expected_calls.iter().enumerate() {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        panic!("timed out waiting for brokered call {} ({call})", index + 1);
+                    }
+                    Err(error) => {
+                        panic!(
+                            "failed accepting brokered call {} ({call}): {error}",
+                            index + 1
+                        );
+                    }
+                }
+            };
             let mut header = [0u8; 4];
             stream.read_exact(&mut header).expect("request header");
             let size = u32::from_be_bytes(header) as usize;
@@ -147,6 +179,8 @@ fn check_brokered_plugin_audit(scope: &str) {
                 json!({"schema_version":1,"ok":false,"error":{
                     "code":"bad_plan","message":"invalid post","retryable":false,
                     "detail":{"at":"posts[0]"}}})
+            } else if index == 6 {
+                json!({"schema_version":1,"ok":true,"output":{"value":8}})
             } else {
                 json!({"schema_version":1,"ok":true,"output":{"value":7}})
             };
@@ -229,7 +263,8 @@ fn check_brokered_plugin_audit(scope: &str) {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&explicit.stdout).expect("explicit workspace output"),
-        direct
+        json!({"value": 8}),
+        "explicit-workspace call must return the distinct fake-broker reply"
     );
     let requests = server.join().expect("fixture broker thread");
     assert_eq!(requests.len(), 7);
