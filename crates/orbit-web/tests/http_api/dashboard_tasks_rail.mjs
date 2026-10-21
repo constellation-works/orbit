@@ -604,7 +604,7 @@ const readinessCard = id => {
   showCard(id);
   return paneBody.querySelector(`#detail-${id} .readiness-list`);
 };
-const cardHead = id => readinessCard(id).querySelector('.readiness-drain-head').children.map(node => node.textContent);
+const cardHead = id => readinessCard(id).querySelector('.readiness-drain-head').children.slice(0, 2).map(node => node.textContent);
 heldReads.set('ORB-41', holdRead());
 paintCards();
 for (const item of cardTasks) {
@@ -767,7 +767,7 @@ const paintPinned = () => {
 };
 const pinnedWrap = () => paneBody.querySelector('.pinned-task-wrap');
 const pinnedReadiness = () => pinnedWrap().querySelector('.readiness-list');
-const pinnedCardHead = () => pinnedReadiness().querySelector('.readiness-drain-head').children.map(node => node.textContent);
+const pinnedCardHead = () => pinnedReadiness().querySelector('.readiness-drain-head').children.slice(0, 2).map(node => node.textContent);
 const pinnedReads = [];
 context.fetch = path => {
   const url = new URL(path, 'http://dashboard.test');
