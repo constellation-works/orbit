@@ -249,7 +249,14 @@ impl MemberHost for Host<'_> {
             // page, or another pilot may have prepared them since observation.
             let active_preparations = preparation::active_task_pilot_preparations(self.runtime)?;
             for id in &member.task_ids {
-                let task = self.runtime.get_task(id)?;
+                let task = match self.runtime.get_task(id) {
+                    Ok(task) => task,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
                 if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
                     return Ok(MemberAdmission::Retire("task_ineligible".into()));
                 }
@@ -282,8 +289,24 @@ impl MemberHost for Host<'_> {
         if self.trigger.kind == StateTriggerKind::FindingUnverified {
             let active = preparation::active_finding_verifications(self.runtime)?;
             for id in &member.task_ids {
-                let task = self.runtime.get_task(id)?;
-                if !needs_verification(&task, &self.runtime.get_task_history(id)?) {
+                let task = match self.runtime.get_task(id) {
+                    Ok(task) => task,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                // Deletion can also happen between reading the task and its history.
+                let history = match self.runtime.get_task_history(id) {
+                    Ok(history) => history,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                if !needs_verification(&task, &history) {
                     return Ok(MemberAdmission::Retire(
                         "finding_verified_or_ineligible".into(),
                     ));
