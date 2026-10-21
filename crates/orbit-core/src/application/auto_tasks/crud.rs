@@ -283,10 +283,10 @@ impl OrbitRuntime {
     /// consulted. A symlinked `auto_tasks` directory or a non-regular
     /// definition entry is refused before its bytes are read.
     pub fn auto_task_show(&self, name: &str) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-        let Some(root) = self.auto_task_read_root(name)? else {
+        let Some((root, path)) = self.auto_task_read_source(name)? else {
             return Ok(None);
         };
-        self.auto_task_show_at(&root, name)
+        self.auto_task_show_path(&root, &path, name).map(Some)
     }
 
     pub(super) fn auto_task_show_at(
@@ -297,16 +297,31 @@ impl OrbitRuntime {
         let Some(path) = Self::confined_definition_path(root, name)? else {
             return Ok(None);
         };
-        let raw = std::fs::read_to_string(&path)
+        self.auto_task_show_path(root, &path, name).map(Some)
+    }
+
+    fn auto_task_show_path(
+        &self,
+        root: &Path,
+        path: &Path,
+        name: &str,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        let raw = std::fs::read_to_string(path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
+        if definition.name != name {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task file stem '{name}' does not match definition name '{}'",
+                definition.name
+            )));
+        }
         let settings = load_settings_table(&auto_tasks_dir(root))
             .map_err(|error| OrbitError::InvalidInput(format!("auto-task '{name}': {error}")))?;
         if let Some(entry) = settings.get(&definition.name) {
             entry.apply(&mut definition);
             definition.validate()?;
         }
-        Ok(Some(definition))
+        Ok(definition)
     }
 
     /// Apply a present-field patch to a definition.

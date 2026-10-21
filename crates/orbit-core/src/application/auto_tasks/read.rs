@@ -10,12 +10,63 @@ use super::loader::{AutoTaskCollection, AutoTaskLoadError, auto_tasks_dir, colle
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
-    /// The catalog supplying this name. A present but invalid local entry
-    /// refuses the lookup rather than exposing a different shared definition.
-    pub(crate) fn auto_task_read_root(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
+    /// The catalog and actual discovery path supplying this name. Invalid or
+    /// ambiguous local entries refuse lookup rather than exposing a shared body.
+    pub(crate) fn auto_task_read_source(
+        &self,
+        name: &str,
+    ) -> Result<Option<(PathBuf, PathBuf)>, OrbitError> {
         for root in self.auto_task_read_roots() {
-            if Self::confined_definition_path(&root, name)?.is_some() {
-                return Ok(Some(root));
+            // Reuse the canonical lookup's name and directory confinement.
+            // Writers keep using that lookup, never this discovery path.
+            Self::confined_definition_path(&root, name)?;
+            let directory = auto_tasks_dir(&root);
+            let entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(OrbitError::Io(format!(
+                        "inspect auto_tasks directory {}: {error}",
+                        directory.display()
+                    )));
+                }
+            };
+            let mut selected = None;
+            for entry in entries {
+                let path = entry
+                    .map_err(|error| {
+                        OrbitError::Io(format!(
+                            "inspect auto_tasks directory {}: {error}",
+                            directory.display()
+                        ))
+                    })?
+                    .path();
+                if path.file_stem().and_then(|stem| stem.to_str()) != Some(name)
+                    || !is_yaml_definition(&path)
+                {
+                    continue;
+                }
+                if selected.is_some() {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' has multiple definition files in {}; keep one YAML definition per name",
+                        directory.display()
+                    )));
+                }
+                let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                    OrbitError::Io(format!(
+                        "inspect auto-task '{name}' at {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                if !metadata.file_type().is_file() {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' must be a regular definition file directly under auto_tasks"
+                    )));
+                }
+                selected = Some(path);
+            }
+            if let Some(path) = selected {
+                return Ok(Some((root, path)));
             }
         }
         Ok(None)
@@ -90,12 +141,7 @@ impl OrbitRuntime {
                         }
                     };
                     let path = entry.path();
-                    if path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| {
-                            ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
-                        })
+                    if is_yaml_definition(&path)
                         && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
                     {
                         shadowed.insert(stem.to_owned());
@@ -130,4 +176,10 @@ impl OrbitRuntime {
             .sort_by(|a, b| a.definition.name.cmp(&b.definition.name));
         collection
     }
+}
+
+fn is_yaml_definition(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
 }

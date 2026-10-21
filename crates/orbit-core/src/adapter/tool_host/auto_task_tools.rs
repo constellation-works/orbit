@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::{
     AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskTemplatePatch, AutoTaskUpdateParams,
-    ListedAutoTask, cursor_state_path, definition_path, load_cursor_state,
+    ListedAutoTask, cursor_state_path, load_cursor_state,
 };
 
 /// Run one auto-task verb.
@@ -134,12 +134,12 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         runtime.auto_task_enabled(&listed.definition),
         listed.skipped_reason.as_deref(),
     )?;
-    let definition_root = runtime
-        .auto_task_read_root(&name)?
+    let (definition_root, definition_path) = runtime
+        .auto_task_read_source(&name)?
         .ok_or_else(|| runtime.auto_task_missing(&name, true))?;
     value["definition_source"] = json!({
         "root": definition_root,
-        "path": definition_path(&definition_root, &name),
+        "path": definition_path,
     });
     match runtime.auto_task_layering(&name) {
         Ok(layering) => value["layering"] = json!(layering),
