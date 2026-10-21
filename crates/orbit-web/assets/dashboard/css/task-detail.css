@@ -512,7 +512,7 @@
 }
 .task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
 
-/* The pull request, the run and who carried the task, in one card. */
+/* The pull request, the run, who carried the task and its readiness. */
 .task-delivery-card {
   display: flex;
   flex-direction: column;
@@ -529,6 +529,11 @@
 .task-delivery-card .property-row + .property-row { border-top: 1px solid var(--hair); }
 .task-delivery-card .property-row .label { font-size: 12px; line-height: 20px; }
 .task-delivery-card .property-row.fact .value { padding: 0; }
+.task-delivery-card .property-row.readiness { align-items: start; }
+.task-delivery-card .readiness-list { min-width: 0; overflow-wrap: anywhere; }
+.task-delivery-card .readiness-drain-head strong { font-weight: 500; }
+.readiness-drain-reason { color: var(--fg-dim); }
+.readiness-gap-count { color: var(--fg-dim); font-size: 11px; }
 .task-delivery-pr { font-size: 12.5px; font-weight: 500; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {

@@ -1368,6 +1368,7 @@ function buildDrainReadiness(drain, workspace) {
   const head = el("div", { class: "readiness-drain-head" }, [
     dot,
     el("strong", { text: view.poolLabel }),
+    ...(badge ? [el("span", { class: "readiness-drain-reason", text: `· ${badge.text}` })] : []),
   ]);
   const wrap = el("div", { class: "readiness-drain" }, [head]);
   wrap.dataset.pool = view.pool;
@@ -1386,7 +1387,7 @@ function buildDrainReadiness(drain, workspace) {
     blockers.push(run);
   }
   if (blockers.length) wrap.appendChild(line("Waits on", blockers));
-  else if (!badge.dependencies.length) wrap.appendChild(el("div", { class: "readiness-message", text: view.pool === "locks" ? "Lock holder unavailable" : badge.text }));
+  else if (view.pool === "locks") wrap.appendChild(el("div", { class: "readiness-message", text: "Lock holder unavailable" }));
   if (badge.dependencies.length > 0) {
     wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
       el("span", { class: "readiness-dependency" }, [
@@ -1402,7 +1403,7 @@ function buildDrainReadiness(drain, workspace) {
 // then each preparation gap with its severity and its fix. "Ready" is claimed
 // only for a task the drain reports eligible with nothing missing.
 function buildReadinessBlock(readiness, drain, workspace) {
-  const wrap = el("div", { class: "readiness-list" });
+  const wrap = el("div", { class: "value readiness-list" });
   if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
   if (!readiness) return wrap;
   if (readiness.preparing) {
@@ -1417,6 +1418,7 @@ function buildReadinessBlock(readiness, drain, workspace) {
     wrap.appendChild(el("div", { class: "readiness-note", text: eligible ? "Ready: nothing is missing." : "No preparation gaps." }));
     return wrap;
   }
+  wrap.appendChild(el("span", { class: "readiness-gap-count", text: `${gaps.length} ${gaps.length === 1 ? "gap" : "gaps"}` }));
   for (const gap of gaps) {
     const severity = gap.severity === "blocking" ? "blocking" : "advisory";
     wrap.appendChild(el("div", { class: "readiness-gap" }, [
@@ -2862,15 +2864,9 @@ function buildTaskDetail(task, context, drain = null) {
   }
   if (disclosures.children.length) leftCol.appendChild(disclosures);
 
-  // The side column holds what gates the task, then the graph around it; what
-  // the task is and where it stands sits above the tabs.
-  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor });
-
-  const readiness = readinessOf(task);
-  if (readiness || drain) {
-    const count = readiness ? readinessGaps(readiness).length : 0;
-    addField(rightCol, "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id), false, false, count > 0 ? { count } : {});
-  }
+  // The task's state, readiness and delivery sit together above the tabs;
+  // the side column holds the graph around it.
+  const metaBlock = buildTaskMeta(task, context, { editor, showsEditor, drain });
 
   // The delivery card already links the pull request; the rest stay here.
   const otherRefs = (Array.isArray(task.external_refs) ? task.external_refs : []).filter((ref) =>
@@ -2959,7 +2955,7 @@ function buildTaskDetail(task, context, drain = null) {
 // the delivery card gathers the pull request, the run and the hands that
 // carried the task. The pane head carries only the id and title, so nothing
 // here is repeated there, and the timestamps close the detail.
-function buildTaskMeta(task, context, { editor, showsEditor }) {
+function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
   levers.appendChild(buildComplexityUpdateControl(task, context));
@@ -2990,7 +2986,7 @@ function buildTaskMeta(task, context, { editor, showsEditor }) {
   const head = el("div", { class: "task-meta-block" }, [levers]);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
-  const delivery = buildDeliveryCard(task);
+  const delivery = buildDeliveryCard(task, drain);
   if (delivery) head.appendChild(delivery);
   return head;
 }
@@ -3052,7 +3048,7 @@ function buildHandsChain(task) {
   return el("span", { class: "value task-hands" }, chain);
 }
 
-function buildDeliveryCard(task) {
+function buildDeliveryCard(task, drain) {
   const row = (kind, label, value) =>
     el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
   const rows = [];
@@ -3074,6 +3070,8 @@ function buildDeliveryCard(task) {
   if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
   const hands = buildHandsChain(task);
   if (hands) rows.push(row("hands", "Handled by", hands));
+  const readiness = readinessOf(task);
+  if (readiness || drain) rows.push(row("readiness", "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id)));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
