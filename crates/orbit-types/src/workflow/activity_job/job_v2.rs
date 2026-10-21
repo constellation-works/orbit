@@ -409,6 +409,13 @@ pub struct LoopBlock {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub items: Option<String>,
     pub max_iterations: u32,
+    /// Optional elapsed budget in seconds, rendered once at loop entry.
+    /// Zero runs no iterations; an in-flight body is not interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<String>,
+    /// Optional delay between unsuccessful iterations, capped by the budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_seconds: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub break_when: Option<String>,
     pub steps: Vec<JobV2Step>,

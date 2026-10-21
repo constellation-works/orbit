@@ -528,7 +528,71 @@ pub(crate) fn run_deterministic(
         // blocking tasks and the claims holding them, and returns a deferral
         // that ends the gate without a child, leaving the task in backlog.
         CoreDeterministicAction::GateStarvationDefer => {
-            pipeline_actions::gate_starvation_defer(runtime, action, input)
+            let mut normalized = input.clone();
+            if let Some(reservation) = input.get("reservation") {
+                let reservation = if reservation.is_null() {
+                    // A zero/expired budget may run no body at all. Observe
+                    // blockers without ever acquiring a late reservation.
+                    let admission = dependency_admission_for_input(runtime, input)
+                        .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
+                    if !admission.unsatisfiable.is_empty() {
+                        return Err(DispatchError::action_failed(
+                            action,
+                            admission.unsatisfiable_message(),
+                        ));
+                    }
+                    let conflicts = run_deterministic(
+                        runtime,
+                        "context_conflict_check",
+                        &Value::Null,
+                        input,
+                        tool_context.clone(),
+                    )?;
+                    serde_json::json!({
+                        "reserved": false,
+                        "conflicts": conflicts["conflicts"],
+                        "waiting_on_deps": admission.waiting_on,
+                        "footprint_deferred": false,
+                    })
+                } else {
+                    reservation.clone()
+                };
+                for key in ["reserved", "conflicts", "waiting_on_deps"] {
+                    normalized[key] = reservation[key].clone();
+                }
+                normalized["reservation"] = reservation;
+            }
+            if input.get("expired").and_then(Value::as_bool) == Some(true)
+                && normalized["reserved"] == true
+            {
+                // A reservation already in flight can finish after its budget.
+                // Release that late grant before reporting a deferral; it must
+                // never authorize dispatch after expiry.
+                let reservation_id = normalized["reservation"]["reservation_id"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        DispatchError::action_failed(
+                            action,
+                            "late reservation missing reservation_id".to_string(),
+                        )
+                    })?;
+                run_deterministic(
+                    runtime,
+                    "release_locks",
+                    &Value::Null,
+                    &serde_json::json!({"reservation_id": reservation_id}),
+                    tool_context,
+                )?;
+                normalized["reserved"] = Value::Bool(false);
+                normalized["reservation"]["reserved"] = Value::Bool(false);
+            }
+            let mut output = pipeline_actions::gate_starvation_defer(runtime, action, &normalized)?;
+            // Always present, including for legacy callers using flat inputs.
+            output["reservation"] = normalized
+                .get("reservation")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            Ok(output)
         }
         // The gate's first step: the job this bundle is delivered by — the
         // default `task_<mode>_pipeline`, or the job its tasks select with a

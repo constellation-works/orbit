@@ -1362,6 +1362,27 @@ A loop runs either:
 
 The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating. Exhausting the planned iterations without satisfying `break_when` emits `LoopDidNotConverge` but returns a successful loop outcome with `broke: false`; a workflow that requires convergence must check that output.
 
+Optional `timeout_seconds` and `interval_seconds` are templated non-negative,
+finite seconds, rendered once at loop entry. The timeout uses monotonic elapsed
+time, including body execution. Zero runs no body. Expiry is checked before
+each iteration; an in-flight body is not preempted. After a body that did not
+break, the interval delays the next iteration, capped at the remaining budget;
+there is no delay after the last structural iteration. `max_iterations` remains
+an independent backstop. The successful loop output includes `timed_out` and
+`last_output` (the last completed body step's output, or null when none ran),
+alongside `iterations` and `broke`. Readers after a possibly empty loop must use
+that output rather than reference a body step that may never have run.
+
+The shipped admission gate binds these fields to `max_wait_seconds` and
+`poll_interval_seconds`. Its starvation step consumes `last_output`; with no
+attempt, it reads current blockers without acquiring a reservation. Expiry
+therefore still produces an audited successful deferral, without a delivery
+child or a task status change. A body step already in flight may finish after
+expiry: `timed_out` can therefore be true even when `broke` is true. The gate
+releases any such late reservation before deferring. Successful reservations
+within the budget retain normal child
+supervision and terminal reservation cleanup.
+
 ### 8.6 Persisted state for v2 job runs
 
 Every job run is a persisted pipeline run. `orbit run ship`, `orbit.pipeline.invoke` + `orbit.pipeline.wait`, and — after [ORB-10801] — `orbit run job` / `orbit job run` all submit through the same path in `application/job/pipeline/submit.rs`: the run is persisted, a detached worker is spawned, and the caller returns. `orbit run history -j <job_id>` and `orbit run show <run_id>` inspect the returned ID. `--wait` blocks on the submitted run and maps a non-success terminal state onto a nonzero exit.

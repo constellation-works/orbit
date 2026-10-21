@@ -46,6 +46,7 @@ mod execute;
 mod fan_out;
 mod final_recovery;
 mod loop_block;
+pub(crate) mod loop_clock;
 mod parallel;
 mod recovery;
 mod reviewer;

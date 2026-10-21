@@ -23,10 +23,9 @@
 #   them to the iteration ceiling only delays a failure by the full wait
 #   budget. The loop is for edges that can still close.
 # - `wait_for_window` polls by calling `reserve_locks` each iteration. The
-#   reserve step is always executed (never skipped) so its output can be
-#   referenced from `break_when` and from the post-loop starvation guard
-#   without hitting the template engine's "no data recorded for step"
-#   error on skipped-step output references.
+#   loop exposes its last reservation as `last_output`. A zero budget runs
+#   no reservation attempt; the starvation guard probes blockers without
+#   reserving, so expiry never dispatches work or loses blocker evidence.
 # - A resumed published delivery does not wait here. When a final-recovery
 #   `requeue` preserved the task's publication, the next run only adopts its
 #   existing branch and pull request before it edits anything, so a
@@ -37,9 +36,11 @@
 #   before its first agent that may edit, waiting up to `max_wait_seconds`
 #   while other tasks hold it; a re-application of the unchanged published
 #   patch is not an edit. Admission skips the lock check for that task too.
-# - On conflict, `sleep_if_conflict` backs off by `poll_interval_seconds`
-#   before the next iteration; when `reserve.output.reserved` flips to
-#   true the loop breaks.
+# - On conflict, the loop backs off by `poll_interval_seconds`, capped at
+#   the remaining elapsed budget. It checks expiry before the next attempt
+#   and breaks immediately when `reserve.output.reserved` becomes true. If
+#   an in-flight reservation finishes after expiry, the starvation guard
+#   releases it and defers without dispatch.
 # - `max_iterations: 120` is the structural ceiling. The actual wait
 #   budget is enforced by `input.max_wait_seconds`, which the
 #   `starvation_check` step surfaces via the `gate.starvation` audit
@@ -138,6 +139,8 @@ spec:
     - id: wait_for_window
       loop:
         max_iterations: 120
+        timeout_seconds: "{{ input.max_wait_seconds }}"
+        interval_seconds: "{{ input.poll_interval_seconds }}"
         break_when: "{{ steps.reserve.output.reserved }} == true"
         steps:
           - id: reserve
@@ -146,19 +149,13 @@ spec:
               task_ids: "{{ input.task_ids }}"
               ttl_seconds: "{{ input.ttl_seconds }}"
               delivery_job: "{{ steps.delivery.output.job_name }}"
-          - id: sleep_if_conflict
-            when: "{{ steps.reserve.output.reserved }} == false"
-            target: activity:sleep
-            default_input:
-              seconds: "{{ input.poll_interval_seconds }}"
 
     - id: starvation_check
       target: activity:gate_starvation_defer
       default_input:
-        reserved: "{{ steps.reserve.output.reserved }}"
+        reservation: "{{ steps.wait_for_window.output.last_output }}"
+        expired: "{{ steps.wait_for_window.output.timed_out }}"
         task_ids: "{{ input.task_ids }}"
-        conflicts: "{{ steps.reserve.output.conflicts }}"
-        waiting_on_deps: "{{ steps.reserve.output.waiting_on_deps }}"
         max_wait_seconds: "{{ input.max_wait_seconds }}"
 
     - id: dispatch_child
@@ -174,7 +171,7 @@ spec:
           auto_fix: "{{ input.auto_fix }}"
           allowed_crews: "{{ input.allowed_crews }}"
           auto_push: "{{ input.auto_push }}"
-          footprint_deferred: "{{ steps.reserve.output.footprint_deferred }}"
+          footprint_deferred: "{{ steps.starvation_check.output.reservation.footprint_deferred }}"
           footprint_wait_seconds: "{{ input.max_wait_seconds }}"
           footprint_poll_seconds: "{{ input.poll_interval_seconds }}"
         admission_task_ids: "{{ input.task_ids }}"
@@ -187,7 +184,7 @@ spec:
       when: "{{ steps.starvation_check.output.deferred }} == false && {{ steps.dispatch_child.output.status }} != timeout && {{ steps.dispatch_child.output.status }} != pending && {{ steps.dispatch_child.output.status }} != running"
       target: activity:release_locks
       default_input:
-        reservation_id: "{{ steps.reserve.output.reservation_id }}"
+        reservation_id: "{{ steps.starvation_check.output.reservation.reservation_id }}"
 
     - id: require_child_success
       target: activity:pipeline_success_guard
