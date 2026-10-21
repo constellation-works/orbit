@@ -18,8 +18,19 @@ const RUNTIME_KEY: &str = "opencode";
 /// (`$XDG_DATA_HOME/opencode`, default `$HOME/.local/share/opencode`).
 /// An operator who deliberately uses an API key instead names its variable in
 /// `[execution.env].pass`; Orbit never renders a credential onto argv.
+/// The XDG roots and `OPENCODE_CONFIG_DIR` are forwarded here because the
+/// sandbox grants exactly the directories they name; dropping them would
+/// make the CLI resolve HOME defaults while the profile granted overrides.
 /// [ORB-11295]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+const REQUIRED_ENV_VARS: &[&str] = &[
+    "HOME",
+    "PATH",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "OPENCODE_CONFIG_DIR",
+];
 
 pub(crate) struct OpencodeRuntime {
     command: String,

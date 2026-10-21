@@ -14,11 +14,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 use orbit_agent::{Agent, AgentConfig, AgentRequest};
-use orbit_common::security::child_env::allowlisted_child_env;
+use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::workflow::Provider;
 use serde_json::{Value, json};
-use support::{ChildGuard, HOSTILE_ENV, WAIT, isolated, scratch};
+use support::{ChildGuard, HOSTILE_ENV, STATE_ROOT_OVERRIDES, WAIT, isolated, scratch};
 
 struct CliCase {
     provider: &'static str,
@@ -127,6 +127,28 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: None,
     },
 ];
+
+/// State/cache root overrides each provider owns. Shared XDG names belong
+/// only to providers whose sandbox roots resolve through them; every other
+/// provider must receive none of these names.
+fn expected_state_overrides(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "codex" => &["CODEX_HOME"],
+        "claude" => &["CLAUDE_CONFIG_DIR"],
+        "grok" => &["GROK_HOME"],
+        "copilot" => &["COPILOT_HOME", "XDG_CACHE_HOME"],
+        "pi" => &["PI_CODING_AGENT_DIR"],
+        "opencode" => &[
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "OPENCODE_CONFIG_DIR",
+        ],
+        "muse" => &["XDG_CONFIG_HOME", "XDG_DATA_HOME"],
+        _ => &[],
+    }
+}
 
 fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
     args.windows(2)
@@ -308,6 +330,41 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         assert!(
                             vars.contains(&(key, value)),
                             "{} dropped admitted {key}",
+                            case.provider
+                        );
+                    }
+                    // Each synthetic state/cache override reaches only its
+                    // owning adapter; unrelated providers receive none, so
+                    // the child resolves the same root the sandbox grants.
+                    let expected = expected_state_overrides(case.provider);
+                    for (name, value) in STATE_ROOT_OVERRIDES {
+                        if expected.contains(name) {
+                            assert!(
+                                vars.contains(&(*name, *value)),
+                                "{} dropped its state-root override {name}",
+                                case.provider
+                            );
+                        } else {
+                            assert!(
+                                !vars.iter().any(|(key, _)| key == name),
+                                "{} leaked unrelated state-root override {name}",
+                                case.provider
+                            );
+                        }
+                    }
+                    // Absent overrides are not invented: with no override in
+                    // the parent, the composed env carries none and the CLI
+                    // retains its HOME default (matching the sandbox).
+                    let absent_parent: Vec<(String, String)> = vec![
+                        ("HOME".to_string(), "/synthetic-home".to_string()),
+                        ("PATH".to_string(), "/usr/bin".to_string()),
+                    ];
+                    let absent_env =
+                        allowlisted_child_env_from(&absent_parent, &[], spec.required_env_vars);
+                    for (name, _) in STATE_ROOT_OVERRIDES {
+                        assert!(
+                            !absent_env.iter().any(|(key, _)| key == name),
+                            "{} invented absent state-root override {name}",
                             case.provider
                         );
                     }

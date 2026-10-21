@@ -9,7 +9,10 @@ use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 
 const RUNTIME_KEY: &str = "claude";
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+/// `CLAUDE_CONFIG_DIR` is non-secret state-root context: the sandbox grants
+/// exactly the directory it names, so dropping it would make the CLI resolve
+/// `$HOME/.claude` while the profile granted the override.
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CLAUDE_CONFIG_DIR"];
 
 pub(crate) struct ClaudeRuntime {
     command: String,

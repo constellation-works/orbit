@@ -9,6 +9,21 @@ use tempfile::TempDir;
 pub const WAIT: Duration = Duration::from_secs(10);
 const CHILD_MARKER: &str = "PROVIDER_INVOCATION_CHILD";
 
+/// Synthetic non-secret state/cache root overrides, one distinct value per
+/// name, so a recording subprocess can prove each reaches only its owner.
+pub const STATE_ROOT_OVERRIDES: &[(&str, &str)] = &[
+    ("CODEX_HOME", "synthetic-codex-home"),
+    ("CLAUDE_CONFIG_DIR", "synthetic-claude-config-dir"),
+    ("GROK_HOME", "synthetic-grok-home"),
+    ("COPILOT_HOME", "synthetic-copilot-home"),
+    ("PI_CODING_AGENT_DIR", "synthetic-pi-coding-agent-dir"),
+    ("OPENCODE_CONFIG_DIR", "synthetic-opencode-config-dir"),
+    ("XDG_DATA_HOME", "synthetic-xdg-data-home"),
+    ("XDG_CONFIG_HOME", "synthetic-xdg-config-home"),
+    ("XDG_STATE_HOME", "synthetic-xdg-state-home"),
+    ("XDG_CACHE_HOME", "synthetic-xdg-cache-home"),
+];
+
 pub const HOSTILE_ENV: &[&str] = &[
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -46,7 +61,6 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env(CHILD_MARKER, name)
         .env("ORBIT_RUN_ID", "fixture-run")
-        .env("COPILOT_HOME", fixture.path())
         .env("EXPLICIT_PROVIDER_SETTING", "opted-in")
         .args(["--exact", name, "--nocapture", "--test-threads=1"]);
     orbit_common::test_env::clear_inherited_authority(|key| {
@@ -56,6 +70,9 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
     command.env("ORBIT_RUN_ID", "fixture-run");
     for key in HOSTILE_ENV {
         command.env(key, format!("synthetic-{key}"));
+    }
+    for (key, value) in STATE_ROOT_OVERRIDES {
+        command.env(key, value);
     }
     // Use the shared load-tolerant hang guard for isolated provider cases.
     let output = orbit_common::test_env::run_child_test(&mut command, name, fixture.path());
