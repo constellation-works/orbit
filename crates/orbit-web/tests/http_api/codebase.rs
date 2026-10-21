@@ -1982,6 +1982,90 @@ fn codebase_regressions_break_down_and_filter_by_link_dimensions() {
                 },
             );
 
+            // Detail and analytics must classify the same landed fix even
+            // when its declared footprint names another layer. Start with
+            // Show so its cold scan cannot rely on analytics warming facts.
+            let trace_path = fixture.path("detail-query.jsonl");
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+                .with_span_list(false)
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::sync::Mutex::new(
+                    fs::File::create(&trace_path).unwrap(),
+                ))
+                .finish();
+            let guard = tracing::subscriber::set_default(subscriber);
+            for layer in [None, Some("store_migration")] {
+                let mut query = json!({ "path": area, "window": "30d", "min_support": 1 });
+                if let Some(layer) = layer {
+                    query["layer"] = json!(layer);
+                }
+                let detail = fixture
+                    .runtime
+                    .run_tool("orbit.codebase.show", query.clone())
+                    .unwrap();
+                let trace: Vec<Value> = fs::read_to_string(&trace_path)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .filter(|event| {
+                        event["fields"]["message"] == "new"
+                            || event["fields"]["codebase_delivery_observation"] == true
+                    })
+                    .collect();
+                assert_eq!(
+                    operations(&trace, "codebase_landed_diff"),
+                    1,
+                    "Show diffs the receipt once; later scans reuse stored paths: {trace:?}"
+                );
+                assert_eq!(
+                    operations(&trace, "task_history_read"),
+                    7,
+                    "Show reads each task history once; later scans reuse stored facts: {trace:?}"
+                );
+                assert!(
+                    trace
+                        .iter()
+                        .all(|event| event["fields"]["codebase_delivery_observation"] != true),
+                    "history-only Show must not observe delivery for receipt-less done tasks: {trace:?}"
+                );
+                query.as_object_mut().unwrap().remove("path");
+                let analytics = fixture
+                    .runtime
+                    .run_tool("orbit.codebase.analytics", query)
+                    .unwrap();
+                let standing = &detail["rankings"]["regressions"];
+                let ranked = row(&analytics["regressions"], area).unwrap();
+                for count in ["numerator", "denominator"] {
+                    assert_eq!(standing[count], ranked[count], "{layer:?}: {count}");
+                }
+                let detail_links: Vec<Value> = standing["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|task| task["regressions"].as_array().unwrap().clone())
+                    .collect();
+                let analytics_links: Vec<Value> = ranked["regressed_tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|task| task["regressions"].as_array().unwrap().clone())
+                    .collect();
+                assert_eq!(detail_links, analytics_links, "{layer:?}: matching links");
+                let fix = detail_links
+                    .iter()
+                    .find(|link| link["task_id"] == reviewed)
+                    .unwrap();
+                assert_eq!(fix["layer"], "store_migration");
+                assert_eq!(fix["layer_source"], "landed");
+                let expected_links = if layer.is_some() { 1 } else { 3 };
+                assert_eq!(detail_links.len(), expected_links);
+                assert_eq!(analytics["regressions"]["matching_links"], expected_links);
+                assert_eq!(standing["numerator"], if layer.is_some() { 1 } else { 2 });
+            }
+            drop(guard);
+
             let server = fixture.server(false);
             let analytics = |filter: &str| {
                 json_ok(server.get(&format!(
