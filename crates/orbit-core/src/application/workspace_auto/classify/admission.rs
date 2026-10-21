@@ -220,6 +220,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             } else {
                 None
             },
+            max_active_leaf_runs,
             free_slots,
         })
         .map_err(|error| PassError::store(action, "read pending landing repairs", error))?;
