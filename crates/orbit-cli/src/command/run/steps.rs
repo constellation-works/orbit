@@ -4,7 +4,7 @@ pub(crate) use orbit_core::application::job::{
 };
 use orbit_core::runtime::audit::run::RunAuditStep;
 use orbit_core::{JobRun, JobRunStep, NotFoundKind, OrbitError, OrbitRuntime};
-use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{JobTargetType, PipelineState};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -93,17 +93,32 @@ pub(crate) fn resolve_run_step(
     run: &JobRun,
     step_id: &str,
 ) -> Result<RunStepRecord, OrbitError> {
-    if let Some(audit_step) = runtime
-        .collect_run_audit_steps(&run.run_id)?
-        .into_iter()
-        .find(|step| step.step_id == step_id)
-    {
-        return Ok(RunStepRecord::from_audit(audit_step, run.state));
+    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
+    if let Some(audit_step) = audit_steps.iter().find(|step| step.step_id == step_id) {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
     }
 
-    find_stored_run_step(run, step_id)
-        .map(RunStepRecord::from_job_step)
-        .ok_or_else(|| step_not_found(&run.run_id, step_id))
+    let audit_index = step_id
+        .parse::<u32>()
+        .ok()
+        .and_then(|index| audit_steps.iter().find(|step| step.step_index == index));
+    let audit_is_displayed = !audit_steps.is_empty()
+        && run
+            .steps
+            .iter()
+            .all(|step| step.target_type == JobTargetType::Job);
+    if audit_is_displayed && let Some(audit_step) = audit_index {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
+    }
+
+    if let Some(stored_step) = find_stored_run_step(run, step_id) {
+        return Ok(RunStepRecord::from_job_step(stored_step));
+    }
+    if let Some(audit_step) = audit_index {
+        return Ok(RunStepRecord::from_audit(audit_step.clone(), run.state));
+    }
+
+    Err(step_not_found(&run.run_id, step_id))
 }
 
 fn find_stored_run_step<'a>(run: &'a JobRun, step_id: &str) -> Option<&'a JobRunStep> {

@@ -30,15 +30,26 @@ fn seed_interrupted_run(fixture: &Fixture) {
         params![workspace_id, INTERRUPTED],
     )
     .expect("seed run-level step");
-    for (index, step_id) in STEP_IDS.iter().enumerate() {
-        let finished = index + 1 < STEP_IDS.len();
+    seed_audit_steps(fixture, INTERRUPTED, &STEP_IDS);
+}
+
+fn seed_audit_only_run(fixture: &Fixture, run_id: &str) {
+    seed_run_with_state(fixture, run_id, "running");
+    seed_audit_steps(fixture, run_id, &STEP_IDS);
+}
+
+fn seed_audit_steps(fixture: &Fixture, run_id: &str, step_ids: &[&str]) {
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    for (index, step_id) in step_ids.iter().enumerate() {
+        let finished = index + 1 < step_ids.len();
         let mut events = vec![("step_started", index * 2)];
         if finished {
             events.push(("step_finished", index * 2 + 1));
         }
         for (body_kind, offset) in events {
             let ts = format!("2026-10-08T00:{:02}:00+00:00", 26 + offset);
-            let event_id = format!("{INTERRUPTED}-{step_id}-{body_kind}");
+            let event_id = format!("{run_id}-{step_id}-{body_kind}");
             let payload = serde_json::json!({
                 "event_id": event_id,
                 "body_kind": body_kind,
@@ -51,7 +62,7 @@ fn seed_interrupted_run(fixture: &Fixture) {
                 "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
                      event_type, ts, run_id, agent_identity, payload_json)
                  VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5)",
-                params![workspace_id, event_id, ts, INTERRUPTED, payload.to_string()],
+                params![workspace_id, event_id, ts, run_id, payload.to_string()],
             )
             .expect("seed audit event");
         }
@@ -344,6 +355,95 @@ fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
         })
         .collect::<Vec<_>>();
     assert_eq!(rows, ["1", "2", "3", "4", "5"], "{text}");
+}
+
+fn run_show_numeric_step_selectors_follow_displayed_audit_steps() {
+    const AUDIT_ONLY: &str = "jrun-audit-only-step-selector";
+    const STORED: &str = "jrun-stored-step-selector";
+    let fixture = Fixture::terminal();
+    seed_audit_only_run(&fixture, AUDIT_ONLY);
+    seed_interrupted_run(&fixture);
+
+    for run_id in [AUDIT_ONLY, INTERRUPTED] {
+        for (index, step_id) in [("0", "worktree"), ("2", "implement_one")] {
+            let by_index = fixture.json(&[
+                "run",
+                "show",
+                run_id,
+                "--no-reconcile",
+                "--step",
+                index,
+                "--json",
+            ]);
+            let by_id = fixture.json(&[
+                "run",
+                "show",
+                run_id,
+                "--no-reconcile",
+                "--step",
+                step_id,
+                "--json",
+            ]);
+            assert_eq!(by_index, by_id, "run={run_id}, index={index}");
+            assert_eq!(by_index["step"]["target_id"], step_id, "{by_index}");
+        }
+
+        let invalid = fixture
+            .orbit()
+            .args([
+                "run",
+                "show",
+                run_id,
+                "--no-reconcile",
+                "--step",
+                "99",
+                "--json",
+            ])
+            .output()
+            .expect("show nonexistent audit index");
+        assert!(!invalid.status.success(), "{invalid:?}");
+        let stderr = String::from_utf8_lossy(&invalid.stderr);
+        assert!(
+            stderr.contains("step '99' does not match any step"),
+            "{stderr}"
+        );
+    }
+
+    seed_run_with_state(&fixture, STORED, "success");
+    seed_audit_steps(&fixture, STORED, &["audit_target"]);
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
+                target_id, state, started_at, finished_at)
+             VALUES (?1, ?2, 0, 'activity', 'legacy_target', 'success',
+                '2026-10-08T00:00:01+00:00', '2026-10-08T00:00:02+00:00')",
+            params![fixture.workspace_id(), STORED],
+        )
+        .expect("seed legacy stored run step");
+    let by_index = fixture.json(&[
+        "run",
+        "show",
+        STORED,
+        "--no-reconcile",
+        "--step",
+        "0",
+        "--json",
+    ]);
+    let by_target = fixture.json(&[
+        "run",
+        "show",
+        STORED,
+        "--no-reconcile",
+        "--step",
+        "legacy_target",
+        "--json",
+    ]);
+    assert_eq!(by_index, by_target, "legacy numeric selector");
+    assert_eq!(
+        by_target["step"]["target_id"], "legacy_target",
+        "{by_target}"
+    );
 }
 
 /// `orbit run show` and MCP `orbit.workflow.run.show`/`list` choose and
@@ -891,6 +991,10 @@ fn run_show_contracts() {
         (
             "run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
             run_show_prints_human_durations_and_one_based_steps_in_every_human_mode as fn(),
+        ),
+        (
+            "run_show_numeric_step_selectors_follow_displayed_audit_steps",
+            run_show_numeric_step_selectors_follow_displayed_audit_steps as fn(),
         ),
         (
             "every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted",
