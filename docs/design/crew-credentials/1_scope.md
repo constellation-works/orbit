@@ -8,7 +8,7 @@ last_validated: 2026-10-20
 
 # Scope: per-crew credentials (`crews.<name>.env`)
 
-Status: proposal, not started.
+Status: phase 1 (`crews.<name>.env`, [ORB-17287]) implemented; phase 2 not started.
 Bearing: [`[execution.env]`](../../CONFIG.md#executionenv--the-agent-subprocess-environment) is an
 allowlist of names, never values; [provider usage limits](../../CONFIG.md#provider-usage-limits)
 and [auth recovery probes](../../CONFIG.md#executor-authentication-recovery-probes) are keyed by

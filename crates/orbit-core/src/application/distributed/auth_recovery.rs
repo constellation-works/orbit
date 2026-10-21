@@ -93,7 +93,7 @@ impl OrbitRuntime {
                     || relogin_hint(&provider),
                     |probe| probe.relogin_hint.clone(),
                 ),
-                credential_source: auth_credential_source(self, &provider),
+                credential_source: auth_credential_source(self, &provider, &crew.env),
                 next_probe_at: probe.as_ref().map(|_| at + INITIAL_DELAY),
                 attempts: 0,
             },
@@ -110,8 +110,17 @@ impl OrbitRuntime {
             .map(|state| state.pull_drain.pull_auth_recovery)
             .unwrap_or_default();
         let mut incidents = BTreeMap::new();
+        let mut incident_crews = BTreeMap::new();
         for record in self.stores().jobs().local_pull_claims_admitted_by(run_id)? {
             if let Some(incident) = self.pull_auth_incident(&record, &stored)? {
+                if let Some(ClaimMutation::Release(evidence)) = &record.settlement
+                    && let Some(crew) = evidence
+                        .provider_unavailable
+                        .as_ref()
+                        .and_then(|unavailable| unavailable.crew.clone())
+                {
+                    incident_crews.insert(record.request.request_id.clone(), crew);
+                }
                 incidents.insert(record.request.request_id, incident);
             }
         }
@@ -197,7 +206,16 @@ impl OrbitRuntime {
             if !reserved {
                 continue;
             }
-            let outcome = run_auth_probe(self, &provider, &probe, run_id, &self.paths().repo_root);
+            let crew_env =
+                self.auth_probe_crew_env(ids.iter().filter_map(|id| incident_crews.get(id)));
+            let outcome = run_auth_probe(
+                self,
+                &provider,
+                &crew_env,
+                &probe,
+                run_id,
+                &self.paths().repo_root,
+            );
             let passed = outcome.as_ref().is_ok_and(|outcome| outcome.passed);
             let finished = Utc::now();
             self.stores()
@@ -226,6 +244,34 @@ impl OrbitRuntime {
             }
         }
         Ok(())
+    }
+}
+
+impl OrbitRuntime {
+    /// The `[crews.<name>] env` a provider's probe runs with: that of the
+    /// crews whose leaves reported the incidents, when they agree, so a
+    /// probe checks the credential those leaves used. Exclusions are still
+    /// keyed by provider, so incidents from crews with different `env` probe
+    /// with the provider's shared environment.
+    fn auth_probe_crew_env<'a>(
+        &self,
+        crews: impl Iterator<Item = &'a String>,
+    ) -> Vec<orbit_types::identity::CrewEnvVar> {
+        let registry = self.context.settings().crews();
+        let mut envs = crews
+            .map(|name| {
+                registry
+                    .get(name)
+                    .map(|crew| crew.env.clone())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        envs.sort();
+        envs.dedup();
+        match envs.as_slice() {
+            [env] => env.clone(),
+            _ => Vec::new(),
+        }
     }
 }
 

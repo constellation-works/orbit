@@ -133,13 +133,20 @@ pub(crate) fn dispatch_workflow(
 }
 
 /// [ORB-14777] Warn once on stderr, at a job start, naming each
-/// `execution.env.pass` variable this environment does not hold. Agents the
-/// run starts inherit this environment, so a missing worker token otherwise
-/// falls back to another login without a sign. Names only, never values; the
-/// same names are recorded on the run. A warning, not a refusal: optional
-/// provider keys can legitimately be absent.
+/// `execution.env.pass` variable and crew `env` source this environment does
+/// not hold. Agents the run starts inherit this environment, so a missing
+/// worker token otherwise falls back to another login without a sign, and a
+/// crew whose source is missing has its activities refused. Names only, never
+/// values; the same names are recorded on the run. A warning, not a refusal:
+/// optional provider keys can legitimately be absent.
 pub(crate) fn warn_unset_env_pass(runtime: &OrbitRuntime) {
-    if let Some(warning) = runtime.unset_env_pass_warning() {
+    for warning in [
+        runtime.unset_env_pass_warning(),
+        runtime.unset_crew_env_warning(),
+    ]
+    .into_iter()
+    .flatten()
+    {
         eprintln!("warning: {warning}");
     }
 }

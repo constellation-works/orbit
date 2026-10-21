@@ -52,6 +52,7 @@ use tracing_subscriber::fmt::MakeWriter;
 include!("agent_stall.rs");
 include!("config_paths.rs");
 include!("config_store.rs");
+include!("crew_env.rs");
 include!("default_crew.rs");
 include!("fallbacks.rs");
 include!("ignored_crew_attribution.rs");

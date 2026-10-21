@@ -16,6 +16,8 @@ fn facts(pass: &[&str], clock: ClockCredentials) -> WorkerTokenFacts {
     WorkerTokenFacts {
         macos: true,
         claude_routed: true,
+        crew_credentialed: false,
+        crew_sources_missing_from_clock: Vec::new(),
         pass: names(pass),
         clock,
         pass_home: PassHome::Global(PathBuf::from("/home/u/.orbit/config.toml")),

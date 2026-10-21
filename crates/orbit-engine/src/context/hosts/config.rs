@@ -16,6 +16,10 @@ pub struct CrewConfig {
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
+    /// The crew's `[crews.<name>] env` entries, names only. Dispatch overlays
+    /// them on the agent environment through
+    /// [`crate::RuntimeHost::crew_agent_subprocess_environment`].
+    pub env: Vec<orbit_types::identity::CrewEnvVar>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

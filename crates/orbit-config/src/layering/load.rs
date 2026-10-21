@@ -104,6 +104,7 @@ pub(crate) fn resolve_workspace_file_document(
 ) -> Result<ResolvedConfig, OrbitError> {
     let mut workspace = parse_config_document(workspace_path, raw)?;
     reject_workspace_machine_table(&workspace.value, workspace_path)?;
+    reject_workspace_crew_env(&workspace.value, workspace_path)?;
     let mut global = parse_config_document(global_path, global_raw)?;
     translate_layers(Some(&mut global), Some(&mut workspace))?;
     for document in [&global, &workspace] {
@@ -192,6 +193,7 @@ fn load_layered_resolved_with_staged(
     }
     if let Some(workspace_document) = &workspace {
         reject_workspace_machine_table(&workspace_document.value, &workspace_document.path)?;
+        reject_workspace_crew_env(&workspace_document.value, &workspace_document.path)?;
     }
 
     // Missing files still admit an empty document: environment defaults and
@@ -302,6 +304,34 @@ fn resolve_operation_layers(
     ]);
     policy.ensure_one_review_layer()?;
     Ok(policy)
+}
+
+/// Refuse `[crews.<name>] env` in a workspace `config.toml`, naming the crew.
+///
+/// A crew's `env` copies host variables (credentials, typically) into its
+/// agents. A checkout must not be able to choose which host secrets its
+/// agents read, so the key is admitted only from the global file, like
+/// `[machine]`.
+pub(crate) fn reject_workspace_crew_env(
+    document: &toml::Value,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    let Some(crews) = document.get("crews").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    let Some(crew) = crews
+        .iter()
+        .find(|(_, entry)| entry.get("env").is_some())
+        .map(|(name, _)| name.trim())
+    else {
+        return Ok(());
+    };
+    Err(OrbitError::InvalidInput(format!(
+        "[crews.{crew}].env is not a workspace setting: remove it from '{}'. A crew's env \
+         passes host variables (credentials) to its agents, so it is read only from the \
+         global config.toml; `orbit config set --global crews.{crew}.env '[...]'` edits it",
+        redact_home_dir(&path.display().to_string())
+    )))
 }
 
 /// Refuse a `[machine]` table in a workspace `config.toml`.

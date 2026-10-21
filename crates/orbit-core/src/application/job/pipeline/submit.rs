@@ -380,8 +380,7 @@ impl OrbitRuntime {
         )?
         .into_result()?;
         self.preflight_git_protection()?;
-        let crews = self
-            .drain_crews_without_worker_credential(self.canonical_allowed_crews(allowed_crews)?)?;
+        let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )

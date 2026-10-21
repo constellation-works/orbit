@@ -394,6 +394,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         NullRuntimeHost::agent_subprocess_environment(self, required_env_vars)
     }
+    fn crew_agent_subprocess_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        required_env_vars: &[&str],
+    ) -> Vec<(String, String)> {
+        NullRuntimeHost::crew_agent_subprocess_environment(self, crew_env, required_env_vars)
+    }
     fn requires_claude_worker_credential(&self) -> bool {
         NullRuntimeHost::requires_claude_worker_credential(self)
     }

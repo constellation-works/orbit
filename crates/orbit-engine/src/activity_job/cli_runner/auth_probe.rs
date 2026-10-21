@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
+use orbit_types::identity::CrewEnvVar;
 use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
 use super::launcher::{orbit_tool_env, resolve_provider_launcher};
@@ -22,10 +23,18 @@ pub struct AuthProbeOutcome {
     pub credential_source: String,
 }
 
-/// Credential origin visible to a leaf after applying the host's env allowlist.
-/// Cache/keychain labels describe the fallback; Orbit does not read credentials.
-pub fn auth_credential_source(host: &dyn RuntimeHost, provider: &str) -> String {
-    credential_source(provider, &host.agent_subprocess_environment(&[]))
+/// Credential origin visible to a leaf of a crew with `crew_env` entries after
+/// applying the host's env allowlist and the crew overlay. Cache/keychain
+/// labels describe the fallback; Orbit does not read credentials.
+pub fn auth_credential_source(
+    host: &dyn RuntimeHost,
+    provider: &str,
+    crew_env: &[CrewEnvVar],
+) -> String {
+    credential_source(
+        provider,
+        &host.crew_agent_subprocess_environment(crew_env, &[]),
+    )
 }
 
 fn credential_source(provider: &str, env: &[(String, String)]) -> String {
@@ -45,11 +54,13 @@ fn credential_source(provider: &str, env: &[(String, String)]) -> String {
     "provider credential cache (no passed token identified)".into()
 }
 
-/// Run a declared probe with the leaf launcher, cleared allowlisted environment,
-/// sandbox and process-tree timeout. No activity tools or broker are granted.
+/// Run a declared probe with the leaf launcher, cleared allowlisted environment
+/// (with the probed crew's `env` overlay), sandbox and process-tree timeout.
+/// No activity tools or broker are granted.
 pub fn run_auth_probe(
     host: &dyn RuntimeHost,
     provider: &str,
+    crew_env: &[CrewEnvVar],
     probe: &AuthProbe,
     run_id: &str,
     cwd: &Path,
@@ -88,6 +99,7 @@ pub fn run_auth_probe(
         host,
         provider,
         prepared.effective,
+        crew_env,
         invocation.required_env_vars,
     );
     let source = credential_source(provider, &env);

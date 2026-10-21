@@ -831,6 +831,7 @@ function crewRow(crew, payload) {
         : null,
     ]),
     crew.description ? el("span", { class: "config-crew-description", text: crew.description }) : null,
+    crewEnvLine(crew.env),
   ]);
   const usedBy = el("span", { class: "config-crew-usage" }, referenced.length
     ? referenced.map((reference) => el("span", { class: "config-crew-use", text: reference }))
@@ -853,6 +854,17 @@ function crewRow(crew, payload) {
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
+}
+
+// A crew's `env` entries (`NAME` or `NAME=SOURCE`): the variables its agents
+// receive on top of `execution.env.pass`. The server sends names only.
+function crewEnvLine(env) {
+  if (!Array.isArray(env) || env.length === 0) return null;
+  return el("span", {
+    class: "config-crew-env mono",
+    text: `env ${env.join(", ")}`,
+    title: "Variables this crew's agents receive on top of execution.env.pass (NAME, or NAME=SOURCE to read another variable). Set only in the global config.",
+  });
 }
 
 function displayCrewValue(value) {
@@ -940,6 +952,19 @@ function crewEditor(crew, payload, isNew) {
       const list = chipListInput(Array.isArray(current) ? current : [], draft, field);
       rows.push(fieldRow(field, list.node));
       fields[field] = list.read;
+      continue;
+    }
+    if (field === "env") {
+      // Global config only: an unchanged list is omitted so saving another
+      // field to the workspace file never writes an `env` key it would refuse.
+      const was = Array.isArray(current) ? current : [];
+      const list = chipListInput(was, draft, field);
+      rows.push(fieldRow(field, list.node));
+      fields[field] = () => {
+        const next = list.read();
+        if (next.length === was.length && next.every((entry, index) => entry === was[index])) return undefined;
+        return next.length ? next : null;
+      };
       continue;
     }
     const input = el("input", { class: "config-input mono" });

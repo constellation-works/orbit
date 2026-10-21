@@ -22,7 +22,7 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 - **Tables** layer down to individual settings; **scalars and arrays** replace the global value.
 - **Named crews** layer by crew name and field: a workspace `[crews.sol]` holding only `model = "gpt-6-astra"` overrides that one field of the global `sol` crew.
 - **Security keys** (`execution.codex.sandbox`, `execution.codex.approval_policy`, `execution.env.pass`) never inherit from global once a workspace file exists; an omitted one takes its built-in default. A workspace file holding only `[plugin_enablement]` does not count, so those keys keep inheriting.
-- `[machine]` is global-only and `[plugin_enablement]` workspace-only; either in the wrong file is refused at load, naming the file.
+- `[machine]` and each crew's [`env`](#per-crew-credentials-env) are global-only and `[plugin_enablement]` workspace-only; any of them in the wrong file is refused at load, naming the file.
 
 `.orbit/config.yaml` (it stores `workspace_id`) is the workspace identity file, not runtime config.
 
@@ -798,6 +798,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 | `effort` | No | Reasoning effort (below). Omitted leaves the provider's default. |
 | `description` | No | Summary. Trimmed; blank becomes absent. |
 | `tags` | No | Discovery labels. Trimmed, blanks dropped, sorted and deduplicated. |
+| `env` | No | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only; see [per-crew credentials](#per-crew-credentials-env). |
 
 ```toml
 [crews.sol]
@@ -851,7 +852,7 @@ orbit config set crews.gemini.enabled true
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns each checkout's effective normalized crews with `enabled` (schema version 3), or `crews_error` when its config cannot be read.
 
-**Dashboard.** **Settings › Crews** lists provider, model, usage **Limit** ([provider usage limits](#provider-usage-limits)), effort, tags, layer and **Used by** (inline field labels at 900 px or less). **Used by** is resolved server-side from the default and review crews, the final-recovery and complexity pools, and enabled auto-tasks with an explicit crew whose plugin is active; if the auto-task listing fails, it omits them and logs a warning, and crew writes still work.
+**Dashboard.** **Settings › Crews** lists provider, model, usage **Limit** ([provider usage limits](#provider-usage-limits)), effort, tags, layer and **Used by** (inline field labels at 900 px or less), and a crew's `env` entries under its name. **Used by** is resolved server-side from the default and review crews, the final-recovery and complexity pools, and enabled auto-tasks with an explicit crew whose plugin is active; if the auto-task listing fails, it omits them and logs a warning, and crew writes still work.
 
 ### System work draws from the complexity pools
 
@@ -927,6 +928,30 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 - An Antigravity crew needs an `agy models` slug; a bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
 **Retired crew shapes** fail load with migration guidance: `planner` / `implementer` / `reviewer` sub-tables (use flat `model` and `provider`); `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it); `[agent.<role>]` tables (use `[crews.<name>]` plus `workflow.default_crew`).
+
+### Per-crew credentials (`env`)
+
+Every crew of a provider reads its credential from the same agent environment, so by default they share one account. A crew's `env` list points that crew alone at another one, such as an API key with prepaid credits next to a Claude subscription:
+
+```toml
+# ~/.orbit/config.toml (global only)
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus-5-5"
+effort = "high"
+env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
+```
+
+- **`NAME`** passes `NAME` from the launching process (as a [`pass`](#executionenv--the-agent-subprocess-environment) entry does) to this crew's agents only.
+- **`NAME=SOURCE`** gives this crew's agents `NAME` with the value of `SOURCE` from the launching process, or from `~/.orbit/clock.env` for [clock-started runs](#executionenv--the-agent-subprocess-environment). Keep the source under a name no CLI reads (`ANTHROPIC_CREDITS_API_KEY_1`), so interactive shells and other crews are unaffected and different crews can use different keys. The agent never receives `SOURCE` itself.
+- **Names only, never values.** Both sides must be variable names (letters, digits and `_`, not starting with a digit), and no side may be an `ORBIT_*` name. A malformed entry, or two entries for one `NAME`, fails load naming the crew and entry.
+- **Global config only.** A workspace `config.toml` that sets `crews.<name>.env` fails load naming the crew, and `orbit config set` refuses it without `--global`, so a checkout cannot choose which host secrets its agents read. Set it with `orbit config set --global crews.opus-credits.env '["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]'`.
+- **The crew's entry wins.** It replaces the same name from `pass`. When it sets a Claude credential (`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`), the other one is removed from that crew's agents, so exactly the credential the crew chose is present. Other crews keep the shared `pass` environment.
+- **An unset source excludes the crew.** A drain or ship start (`orbit run auto`, `--pull` included, `orbit run ship`, MCP and the dashboard) reports each crew whose source is unset or empty in its `warning`, and `orbit run job` warns on stderr; each names the crew, source and variable, and records them on the run (`Unset crew env:` in `orbit run show`, `run.crew_env_unset` in JSON, the dashboard run detail). The drain's crew window leaves the crew out (a pull drain's preflight lists it as excluded), and an activity dispatched as that crew anyway, such as an explicit `--input crew=`, is refused before its provider starts rather than run on the provider's default login. `orbit doctor`'s `env-pass` row reports it.
+- **Everywhere the agent environment goes.** The overlay applies to implementer, reviewer, recovery and explorer agents and to a pull drain's [authentication probe](#executor-authentication-recovery-probes) for that crew. A detached worker receives each source by name (name-only `systemd-run --setenv` under [containment](#worker-containment)) and composes the crew's environment itself.
+- **Limits stay per provider.** [Usage limits](#provider-usage-limits), [provider failure holds](#provider-failure-holds), pull-drain authentication exclusions and `provider_limit_budgets` are still keyed by provider: a subscription usage limit also holds a crew on its own key, and a failed key excludes the provider's other crews, until crew-level accounting lands.
+
+`orbit config show` and `config get crews.<name>.env` print the entries as written, and the dashboard shows them under the crew's name; none of them, `orbit doctor`, run records or logs ever print a value.
 
 ### Repairing a config that already names a crew with a colon
 
@@ -1165,6 +1190,8 @@ Recognized usage-limit texts: Antigravity's `Individual quota reached … Resets
 **Pull drains and claimed leaves.** An authentication failure releases the claim and excludes every crew of that provider (aliases included); a declared [`auth_probe`](#executor-authentication-recovery-probes) can re-admit them in the same window. A capacity failure excludes only the leaf's crew, since another model may have room, and only for a backoff: 10 minutes from when the leaf ended, doubling with each further capacity failure of that crew in the window up to an hour. The exclusion carries `until` and the crew is runnable again in the same window once it passes; while it holds the owner's before-PR or before-landing review crew, the drain requests nothing and its `Requests held:` line names the review's timing and when the backoff lifts. A usage limit releases the claim with failure class `provider` and `provider_limit: true`, which does not count against the task's release budget and excludes no crew itself; the follower's own limit record excludes the provider's crews until the reading lapses.
 
 ### Provider usage limits
+
+Limits are read and applied per provider account as logged in on this host; a crew with its own [`env`](#per-crew-credentials-env) credential is still held and gated with its provider until crew-level accounting lands.
 
 A hold learns of a limit only after a run fails on it. Delivery admission also reads this host's [limit record](#provider-failure-holds) before dispatch and stops routing to a crew whose provider account, as logged in here, is at or near a window's limit.
 
@@ -1556,7 +1583,7 @@ auth_probe:
 
 - `args` replaces the activity argv and uses the same resolved executor command and launcher.
 - `success.kind` is `exit_zero`, or `stdout_contains` with non-empty `text`; both require exit zero. `timeout_seconds` is 1–120.
-- A probe gets the leaf runner's cleared environment plus `[execution.env].pass`, provider-required and fixed entries, sandbox resolution and provider carve-outs (the macOS login keychain included), bounded process-tree supervision, and no Orbit activity tool grants. Without explicit `allow_fallback`, a sandbox refusal keeps the exclusion and backoff.
+- A probe gets the leaf runner's cleared environment plus `[execution.env].pass` (with the [`env`](#per-crew-credentials-env) of the crew whose leaves failed, when they agree), provider-required and fixed entries, sandbox resolution and provider carve-outs (the macOS login keychain included), bounded process-tree supervision, and no Orbit activity tool grants. Without explicit `allow_fallback`, a sandbox refusal keeps the exclusion and backoff.
 
 `orbit doctor`, `orbit run show <drain>` and the dashboard drain panel show provider, host, exclusion time, auth class, re-login hint, credential origin and next probe time; doctor reads the record and calls no provider. Credential origin names a passed `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) by name only, else the macOS keychain or provider cache: the configured route, not a keychain read or proof of which credential the CLI used. To avoid sharing a rotating Desktop login, pass a dedicated `claude setup-token` credential as `CLAUDE_CODE_OAUTH_TOKEN`.
 
@@ -1587,9 +1614,9 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 
 **Worker scope.** The same admitted names are given to a detached pipeline worker. On Linux, containment forwards them with name-only `systemd-run --setenv=NAME`, so the values stay in the child environment and never appear in `systemd-run` or worker argv. An explicit worker edit, such as a toolchain `PATH` or removing `ORBIT_ROOT`, wins over the admitted snapshot. See [worker containment](#worker-containment).
 
-**Clock-started runs.** launchd (macOS) or a systemd user timer (Linux) starts `orbit clock tick` with no login environment. The tick reads `~/.orbit/clock.env` (created comment-only, mode `0600`, by `orbit routine init --install-clock`) and gives each discovered workspace's runs the names that workspace's effective `pass` admits, as child-environment defaults; the tick's own process environment is never changed. A non-empty value already in the tick's environment wins, and an empty one can be filled from the file. A dry run loads nothing. Unit files never contain a secret. A `clock.env` that is a symlink, owned by another user, or group- or world-readable is refused as a load error (the tick still runs). `orbit clock tick --json` reports loaded names as `clock_env_loaded`, never values. Sandboxed agents can't read `clock.env` itself ([SECURITY.md](../SECURITY.md#sandbox-model-and-known-limits)).
+**Clock-started runs.** launchd (macOS) or a systemd user timer (Linux) starts `orbit clock tick` with no login environment. The tick reads `~/.orbit/clock.env` (created comment-only, mode `0600`, by `orbit routine init --install-clock`) and gives each discovered workspace's runs the names that workspace's effective `pass` admits, and the sources its crews' [`env`](#per-crew-credentials-env) entries read, as child-environment defaults; the tick's own process environment is never changed. A non-empty value already in the tick's environment wins, and an empty one can be filled from the file. A dry run loads nothing. Unit files never contain a secret. A `clock.env` that is a symlink, owned by another user, or group- or world-readable is refused as a load error (the tick still runs). `orbit clock tick --json` reports loaded names as `clock_env_loaded`, never values. Sandboxed agents can't read `clock.env` itself ([SECURITY.md](../SECURITY.md#sandbox-model-and-known-limits)).
 
-**Claude on macOS.** A Claude activity with neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` in its environment is refused before `claude` starts, rather than fall back to the Claude Desktop login, which the Desktop revokes mid-run. A drain submitted on such a host (local or `--pull`) excludes the Claude crews from its crew window instead, so it claims only work another provider can run, and its submission names the remediation once; an explicit `--allow-crew` that names only Claude crews is refused. `orbit doctor`'s `claude-worker-token` row warns ahead of time, naming the `pass` list or `clock.env` that lacks the token; a `clock.env` token under a name `pass` omits counts as lacking.
+**Claude on macOS.** A Claude activity with neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` in its environment is refused before `claude` starts, rather than fall back to the Claude Desktop login, which the Desktop revokes mid-run. The check reads the crew's composed environment, so a crew whose [`env`](#per-crew-credentials-env) maps its own `ANTHROPIC_API_KEY` runs without the shared token. A drain submitted on such a host (local or `--pull`) excludes the Claude crews that would be refused from its crew window instead, so it claims only work it can run, and its submission names the remediation once; an explicit `--allow-crew` that names only such crews is refused. `orbit doctor`'s `claude-worker-token` row warns ahead of time, naming the `pass` list or `clock.env` that lacks the token, or a crew credential source `clock.env` lacks; a `clock.env` token under a name `pass` omits counts as lacking.
 
 ---
 

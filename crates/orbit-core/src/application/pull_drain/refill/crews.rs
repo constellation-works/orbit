@@ -48,16 +48,23 @@ pub(super) fn crew_window(
 
 /// The window's provider preflight [ORB-13941]: every configured crew this
 /// host could dispatch now, resolved the way dispatch resolves it — enabled,
-/// its provider's executor resolvable, and that executor's CLI found where a
-/// leaf would launch it. Cheap: no provider process is started. An
-/// unauthenticated CLI passes here and is caught by its first claimed leaf.
-/// Only auth-excluded providers with a declared probe may recover later.
+/// every `[crews.<name>] env` source set, its provider's executor resolvable,
+/// and that executor's CLI found where a leaf would launch it. Cheap: no
+/// provider process is started. An unauthenticated CLI passes here and is
+/// caught by its first claimed leaf. Only auth-excluded providers with a
+/// declared probe may recover later.
 fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
     let registry = runtime.configured_crew_registry_projection();
+    let unset_env = runtime.unset_crew_env();
     let mut runnable = Vec::new();
     let mut excluded = Vec::new();
     for crew in &registry.crews {
-        let unusable = if crew.enabled {
+        let unset = unset_env.iter().find(|unset| unset.crew == crew.name);
+        let unusable = if let Some(unset) = unset {
+            // A crew whose credential source is unset would run on the
+            // provider's default login instead; dispatch refuses it.
+            Some(format!("{} is unset on this host", unset.describe()))
+        } else if crew.enabled {
             match RuntimeHost::resolve_cli_executor(runtime, &crew.provider) {
                 Ok(executor) => runtime
                     .locate_provider_launcher(&executor.command)

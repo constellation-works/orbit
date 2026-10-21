@@ -16,7 +16,11 @@ starts, with an error naming the variable. A drain started without the token
 claims no Claude work: its crew window excludes the Claude crews, and the
 submission says so. An explicit `--allow-crew` that names only Claude crews is
 refused. Such a drain usually means a shell that skipped `~/.zprofile`; start
-it from a login shell.
+it from a login shell. A Claude crew whose global `[crews.<name>] env` maps its
+own credential (`env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]`) is
+checked on that composed environment instead: it runs without the shared
+token, and only its source needs exporting (and, for the clock, a line in
+`clock.env`).
 
 ## Set it up
 
@@ -52,7 +56,8 @@ $EDITOR ~/.orbit/clock.env           # CLAUDE_CODE_OAUTH_TOKEN=<token>
 - One `NAME=value` per line; `#` comments, a leading `export `, and one pair of
   quotes around the value are accepted. Nothing is expanded.
 - Only names in the effective `execution.env.pass` of the workspaces the tick
-  evaluates are loaded; everything else in the file is ignored. `ORBIT_*`
+  evaluates, and the sources their crews' `env` entries read, are loaded;
+  everything else in the file is ignored. `ORBIT_*`
   names are never loaded.
 - A non-empty value already set in the tick's own environment wins over the file;
   an empty value can be filled from the file. Credentials are passed as
@@ -75,5 +80,7 @@ pass-listed credential the timer-started runs need.
 uses Claude, it warns if the workspace's effective `pass` omits the token or
 the installed clock has no token in `clock.env` that the same `pass` admits (a
 `clock.env` holding only a name the workspace's `pass` omits is a mismatch, and
-the row names it). `env-pass` separately reports
-pass-listed names the current shell does not hold.
+the row names it). A routed Claude crew that maps its own credential through
+`env` needs neither: the row instead warns when an installed clock's
+`clock.env` lacks that crew's source. `env-pass` separately reports
+pass-listed names and crew `env` sources the current shell does not hold.

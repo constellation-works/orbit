@@ -374,6 +374,8 @@ export function renderRunDetailMeta() {
   if (requestsHeld) wrap.appendChild(requestsHeld);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
+  const unsetCrewEnv = buildUnsetCrewEnv(run.crew_env_unset);
+  if (unsetCrewEnv) wrap.appendChild(unsetCrewEnv);
   const passWarning = buildPassWarning(run);
   if (passWarning) wrap.appendChild(passWarning);
   const waiting = buildStillWaiting(run.drain_last_pass || null, run);
@@ -466,6 +468,25 @@ function buildUnsetEnvPass(names) {
   panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
     el("strong", { text: "Unset env: " }),
     el("span", { text: `${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)` }),
+  ]));
+  return panel;
+}
+
+// Crews whose `[crews.<name>] env` sources were unset where this run was
+// submitted (names only), matching the CLI's `Unset crew env:` line.
+function buildUnsetCrewEnv(crews) {
+  if (!Array.isArray(crews) || crews.length === 0) return null;
+  const describe = (crew) => {
+    const sources = (Array.isArray(crew?.env) ? crew.env : []).map((entry) => {
+      const [name, source] = String(entry).split("=");
+      return source ? `${source} (for ${name})` : name;
+    });
+    return `crew \`${crew?.crew ?? "?"}\` env source ${sources.join(", ")}`;
+  };
+  const panel = el("div", { class: "child-dispatch-panel" });
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Unset crew env: " }),
+    el("span", { text: `${crews.map(describe).join("; ")} (unset where this run was submitted: a drain leaves such a crew out of its window, and its activities are refused)` }),
   ]));
   return panel;
 }

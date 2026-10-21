@@ -95,6 +95,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         proc_allowed_programs: None,
         proc_disallowed_programs: None,
         trusted_host_execution: false,
+        crew_env: Vec::new(),
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
         &pair.follower,
