@@ -16,6 +16,8 @@ impl TaskCommitBoundary {
     /// claim captured [ORB-13895]. Acceptance passes the owner's observation
     /// and requires it for before-PR evidence; approval and landing recheck
     /// the pinned evidence, and any observation they carry, the same way.
+    /// Returns reviewer-baseline known reds to record with owner acceptance;
+    /// host-gated known reds are recorded from the validation logs instead.
     pub(super) fn validate_handoff_review(
         &self,
         handoff: &TaskHandoff,
@@ -23,7 +25,7 @@ impl TaskCommitBoundary {
         observed: Option<&HandoffReviewObservation>,
         require_observation: bool,
         light: &[orbit_types::task::LightDeliveryDecision],
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Vec<KnownRedValidation>, OrbitError> {
         use HandoffReviewRefusal as R;
         // No candidate or PR exists to review. The owner independently
         // verifies the clean-base report and, unless it is a
@@ -35,14 +37,14 @@ impl TaskCommitBoundary {
                     "NoDiff carries no before-PR review",
                 ));
             }
-            return Ok(());
+            return Ok(Vec::new());
         }
         // [ORB-16855] A `skip-review` candidate within the owner's
         // light-delivery paths carries no review, whatever the claim captured.
         if handoff.review == HandoffReview::not_required()
             && self.light_delivery_applies(handoff, light, orbit_types::task::SKIP_REVIEW_TAG)?
         {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let Some(contract) = &ship.review else {
             if ship.before_pr
@@ -54,7 +56,7 @@ impl TaskCommitBoundary {
                     "the claim captured no review contract",
                 ));
             }
-            return Ok(());
+            return Ok(Vec::new());
         };
         if contract.required_validation_commands.is_none() {
             return Err(review_refused(
@@ -291,7 +293,12 @@ impl TaskCommitBoundary {
                 "the handoff pins host evidence the certificate did not count",
             ));
         }
-        Ok(())
+        Ok(certificate
+            .known_red
+            .into_iter()
+            .filter(|known| known.evidence_artifact != orbit_types::workflow::REVIEW_GATE_ARTIFACT)
+            .map(|known| known.validation)
+            .collect())
     }
 }
 

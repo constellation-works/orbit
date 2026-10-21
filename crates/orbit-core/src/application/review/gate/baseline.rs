@@ -527,6 +527,11 @@ pub(super) fn record_known_red(
     task_ids: &[String],
     known_red: &[HostKnownRed],
 ) -> Result<(), OrbitError> {
+    // The accepted certificate carries these decisions to the owner, which
+    // records them atomically with the handoff. A leaf owns no task history.
+    if runtime.worker_invocation().is_some() {
+        return Ok(());
+    }
     for known in known_red
         .iter()
         .filter(|known| known.evidence_artifact != REVIEW_GATE_ARTIFACT)
@@ -545,31 +550,47 @@ pub(super) fn record_known_red(
                 .unwrap_or_else(|| "no failure named".to_string())
         ));
         for task_id in task_ids {
-            runtime.with_mutation(|| {
-                let updated = runtime.stores().task_records().update(
-                    task_id,
-                    TaskRecordUpdateParams {
-                        actor: "system".into(),
-                        append_history: vec![TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: "system".to_string(),
-                            event: KNOWN_RED_VALIDATION_EVENT.to_string(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: Some(TaskDecision::KnownRedValidation(record.clone())),
-                        }],
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    updated,
-                    OrbitEvent::TaskUpdated {
-                        id: task_id.clone(),
-                    },
-                ))
-            })?;
+            runtime
+                .stores()
+                .tasks()
+                .with_task_write_lock(task_id, &mut || {
+                    // Read and append under one lock: a replay repairs partial
+                    // settlement without duplicating a completed decision.
+                    if runtime.get_task_history(task_id)?.iter().any(|entry| {
+                        entry.event == KNOWN_RED_VALIDATION_EVENT
+                            && KnownRedValidation::from_entry(entry).as_ref() == Some(record)
+                    }) {
+                        return Ok(());
+                    }
+                    runtime.with_mutation(|| {
+                        let updated = runtime.stores().task_records().update(
+                            task_id,
+                            TaskRecordUpdateParams {
+                                actor: "system".into(),
+                                append_history: vec![TaskHistoryEntry {
+                                    at: Utc::now(),
+                                    by: "system".to_string(),
+                                    event: KNOWN_RED_VALIDATION_EVENT.to_string(),
+                                    note: Some(note.clone()),
+                                    from_status: None,
+                                    to_status: None,
+                                    operation_id: None,
+                                    decision: Some(TaskDecision::KnownRedValidation(
+                                        record.clone(),
+                                    )),
+                                }],
+                                ..Default::default()
+                            },
+                        )?;
+                        Ok((
+                            updated,
+                            OrbitEvent::TaskUpdated {
+                                id: task_id.clone(),
+                            },
+                        ))
+                    })?;
+                    Ok(())
+                })?;
         }
     }
     Ok(())

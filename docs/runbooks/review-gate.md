@@ -458,7 +458,12 @@ certificate's `known_red` names the command, record id, pinned base, final
 candidate, run and tests, and coverage counts the record only through that
 entry. `review-baseline.json` records the check's `decision` as `known_red`,
 and each task gets a `known_red_validation` history event, which `pr_open`
-lists under `## Known-red validation`. A build or lint error, a run that
+lists under `## Known-red validation`. Settlement replay restores missing
+history decisions without duplicating ones already recorded. A claimed leaf
+carries reviewer-baseline decisions in its certificate and writes no local
+task history; the owner records those decisions atomically when it accepts
+the handoff. Host-gated known reds continue to come from the claim's
+validation logs. A build or lint error, a run that
 names no failure, a timeout, a deferred sandbox path, or a held check
 elsewhere in the review still holds it as below.
 
