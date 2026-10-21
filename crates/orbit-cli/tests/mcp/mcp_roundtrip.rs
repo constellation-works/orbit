@@ -3120,8 +3120,32 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
     let workspace = McpWorkspace::init();
     let task_id = author_task(&workspace, "Managed executor routing");
     let args = generate_managed_mcp_config(&workspace);
+    let expected_args = [
+        "mcp",
+        "serve",
+        "--operator",
+        "--workspace",
+        "ws_mcp-roundtrip",
+    ];
+    assert_eq!(
+        args, expected_args,
+        "bootstrap must generate a bound operator launch"
+    );
+    assert_eq!(
+        generate_managed_mcp_config(&workspace),
+        expected_args,
+        "re-running bootstrap must preserve one operator flag and workspace binding"
+    );
 
-    let mut client = spawn_generated_server(&workspace, &workspace.work, &args);
+    // Launch outside any checkout, without initialize metadata or payload
+    // selectors: only the generated argv can supply workspace authority.
+    let mut client = spawn_generated_server(&workspace, &workspace.home, &args);
+    let runs = client.call_tool_ok("orbit_workflow_run_list", json!({}));
+    assert_eq!(
+        runs["items"],
+        json!([]),
+        "generated operator authority must reach a governed tool"
+    );
 
     // The advertised schema must tell this session the truth: it is bound, so
     // the selector is optional here.
@@ -3145,7 +3169,7 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
         "a managed session must update a task without naming a workspace"
     );
 
-    // An explicit selector still overrides, and still validates: naming a
+    // An explicit selector for the bound workspace is accepted. Naming a
     // workspace that does not exist fails closed rather than falling back to
     // the binding.
     let explicit = client.call_tool_ok(
