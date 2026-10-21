@@ -140,9 +140,12 @@ In a linked worktree, `show` and `list` inspect checkout-local candidate
 definitions first and fall back by name to the registered workspace's catalog.
 `show` reports the root and file that supplied the body; its settings and plugin
 provenance come from that same catalog. A disabled or invalid local definition
-does not expose a shared replacement. Writes and `mint` keep their existing
-checkout scope; inspecting a shared definition does not authorize changing or
-minting it from a worktree. An empty worktree catalog can be a Linux sandbox
+does not expose a shared replacement. Inspection accepts `.yaml` and `.yml`
+(case-insensitive extensions) and reports the actual file path. If multiple
+files in one catalog have the same name, `show` refuses the ambiguous lookup.
+Writes and `mint` still require the canonical `<name>.yaml` file and keep their
+existing checkout scope; inspecting a shared definition does not authorize
+changing or minting it from a worktree. An empty worktree catalog can be a Linux sandbox
 write anchor and does not hide workspace definitions.
 `orbit doctor` diagnoses both catalogs with their own settings and manifests.
 

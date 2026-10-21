@@ -221,17 +221,18 @@ impl OrbitRuntime {
     }
 
     fn auto_task_definition_path(&self, definition: &AutoTaskDefinition) -> PathBuf {
-        self.auto_task_inspection_dir(definition)
-            .join(format!("{}.yaml", definition.name))
+        self.auto_task_read_source(&definition.name)
+            .ok()
+            .flatten()
+            .map(|(_, path)| path)
+            .unwrap_or_else(|| super::loader::definition_path(&self.local_root(), &definition.name))
     }
 
     fn auto_task_inspection_dir(&self, definition: &AutoTaskDefinition) -> PathBuf {
-        let root = self
-            .auto_task_read_root(&definition.name)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| self.local_root());
-        crate::application::auto_tasks::auto_tasks_dir(&root)
+        self.auto_task_definition_path(definition)
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| super::loader::auto_tasks_dir(&self.local_root()))
     }
 
     /// The id of a still-open instance of `definition`'s prior mints, if any.

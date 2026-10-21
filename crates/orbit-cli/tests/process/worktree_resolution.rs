@@ -526,6 +526,209 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     );
 }
 
+fn auto_task_show_keeps_alternate_extension_candidates_local() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let main_repo = temp.path().join("repo");
+    let linked = temp.path().join("candidate");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::SeededRepo::new(&main_repo)
+        .host_default_branch()
+        .readme("# orbit\n")
+        .build();
+    crate::git_repo::run(
+        &main_repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "candidate",
+            linked.to_str().unwrap(),
+        ],
+    );
+    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let shared = fs::canonicalize(main_repo.join(".orbit")).unwrap();
+    let local = fs::canonicalize(&linked).unwrap().join(".orbit");
+    write_auto_task_fixture(&shared, "Shared enabled body");
+    let shared_path = shared.join("auto_tasks/candidate-probe.yaml");
+    let shared_bytes = fs::read_to_string(&shared_path)
+        .unwrap()
+        .replace("enabled: false", "enabled: true");
+    fs::write(&shared_path, &shared_bytes).unwrap();
+    for extension in ["yml", "YML", "Yml"] {
+        write_auto_task_fixture(&local, "Local disabled body");
+        let canonical = local.join("auto_tasks/candidate-probe.yaml");
+        let alternate = canonical.with_extension(extension);
+        fs::rename(&canonical, &alternate).unwrap();
+        fs::write(
+            local.join("auto_tasks/.orbit-auto-task-settings.json"),
+            r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"high"}}}"#,
+        )
+        .unwrap();
+        let shown = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert_eq!(
+            shown["description"], "Local disabled body",
+            "extension {extension}"
+        );
+        assert_eq!(shown["enabled"], false);
+        assert_eq!(
+            shown["definition_source"]["root"],
+            local.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            shown["definition_source"]["path"],
+            alternate.to_string_lossy().as_ref()
+        );
+        assert_eq!(shown["layering"]["settings"]["priority"], "high");
+        let listed = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        let rows: Vec<_> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["name"] == "candidate-probe")
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["description"], shown["description"]);
+        assert_eq!(rows[0]["enabled"], false);
+        for args in [
+            vec!["auto-task", "mint", "candidate-probe"],
+            vec![
+                "auto-task",
+                "update",
+                "candidate-probe",
+                "--description",
+                "forbidden",
+            ],
+            vec!["auto-task", "toggle", "candidate-probe", "on"],
+            vec![
+                "auto-task",
+                "recover",
+                "candidate-probe",
+                "--adopt-settings",
+                "--reason",
+                "probe",
+            ],
+            vec!["auto-task", "reset", "candidate-probe", "--reason", "probe"],
+        ] {
+            let mut command = orbit_command(&linked, &home, &args, None);
+            if args[1] == "reset" {
+                command.env("ORBIT_OPERATOR", "1");
+            }
+            let refused = command.output().unwrap();
+            assert!(
+                !refused.status.success(),
+                "alternate read must not grant write authority: {args:?}"
+            );
+            let message = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                message.contains("no such auto-task")
+                    || message.contains("must be stored at its canonical .yaml path"),
+                "local canonical lookup must refuse {args:?}: {refused:?}"
+            );
+        }
+        let candidate_body = fs::read_to_string(&alternate).unwrap();
+        fs::write(
+            &alternate,
+            format!("# provenance: plugin:absent-probe@1.0.0\n{candidate_body}"),
+        )
+        .unwrap();
+        let plugin = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
+        assert!(
+            plugin["skipped_reason"]
+                .as_str()
+                .unwrap()
+                .contains(alternate.to_str().unwrap())
+        );
+        let visible = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !visible
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe")
+        );
+        let all = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--all", "--format", "json"],
+            None,
+        );
+        assert!(
+            all.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe"
+                    && row["inactive_plugin"]["namespace"] == "absent-probe")
+        );
+        // A second file with the same stem must not choose an arbitrary body.
+        write_auto_task_fixture(&local, "Ambiguous canonical body");
+        let duplicate = run_orbit_output(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert!(!duplicate.status.success());
+        let refusal: Value = serde_json::from_slice(&duplicate.stderr).unwrap();
+        assert_eq!(refusal["code"], "invalid_input");
+        fs::remove_file(&canonical).unwrap();
+        fs::write(&alternate, "name: [malformed").unwrap();
+        let malformed = run_orbit_output(
+            &linked,
+            &home,
+            &["auto-task", "show", "candidate-probe", "--json"],
+            None,
+        );
+        assert!(
+            !malformed.status.success(),
+            "malformed {extension} must shadow shared body"
+        );
+        let refusal: Value = serde_json::from_slice(&malformed.stderr).unwrap();
+        assert_eq!(refusal["code"], "invalid_input");
+        let malformed_list = run_orbit_json(
+            &linked,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !malformed_list
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == "candidate-probe"),
+            "list must not reveal the shared body either"
+        );
+        assert_eq!(fs::read_to_string(&shared_path).unwrap(), shared_bytes);
+        assert!(
+            !canonical.exists(),
+            "refused writes must not create canonical definition"
+        );
+        fs::remove_file(&alternate).unwrap();
+    }
+}
+
 fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -2613,6 +2816,10 @@ fn checkout_routing_contracts_1() {
             "workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation",
             workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation
                 as fn(),
+        ),
+        (
+            "auto_task_show_keeps_alternate_extension_candidates_local",
+            auto_task_show_keeps_alternate_extension_candidates_local as fn(),
         ),
         (
             "auto_task_show_reports_and_honors_the_selected_definition_source",

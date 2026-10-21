@@ -231,8 +231,8 @@ impl OrbitRuntime {
     /// body, its settings entry, and for a fork the fields that differ from
     /// the bundled default.
     pub fn auto_task_layering(&self, name: &str) -> Result<AutoTaskLayering, OrbitError> {
-        let root = self
-            .auto_task_read_root(name)?
+        let (root, path) = self
+            .auto_task_read_source(name)?
             .ok_or_else(|| self.auto_task_missing(name, true))?;
         let dir = auto_tasks_dir(&root);
         let table = load_settings_table(&dir).map_err(settings_error)?;
@@ -245,7 +245,6 @@ impl OrbitRuntime {
                 settings_fields: Vec::new(),
             });
         };
-        let path = definition_file(&dir, name);
         let on_disk = fs::read_to_string(&path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         let tracked = manifest_digest(&dir, name)?;
