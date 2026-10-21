@@ -184,7 +184,7 @@ claims to be. Fields are additive and nullable; absent means unknown.
 ## Epic is a tag, not a pipeline
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
 
 ### Context
 
