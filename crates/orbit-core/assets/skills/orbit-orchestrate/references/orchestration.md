@@ -442,20 +442,20 @@ orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
 
-A blocked task whose failure handoff published a `[BLOCKED]` PR is not moved
-with a plain `--status backlog`: its next run would refuse the unauthenticated
-publication. Once the task's run has stopped, an operator resumes that
-candidate with `orbit task requeue <task-id> --reason '<why>'` (MCP
-`orbit.task.requeue`); while the run is live the requeue is refused, since its
-failure handoff may still be publishing. Add `--discard-candidate` to close the
-task's undelivered Orbit PRs and rerun fresh, which a changed task
-specification requires; `orbit task update <task-id> --status backlog
---discard-candidate` is the same discard and closure without a recorded
-requeue decision. A claimed leaf that failed or escalated with a committed
-candidate publishes no `[BLOCKED]` PR; the owner keeps its candidate (the
-task's `claim_candidate_kept` history event), and the same requeue reports and
-resumes it (`resumes.source: claim`) under the same specification and discard
-rules.
+Every blocked-to-backlog return, including a plain
+`orbit task update <task-id> --status backlog`, runs the same publication
+pre-flight as `orbit task requeue`. Once the task's run has stopped, an
+operator can use `orbit task requeue <task-id> --reason '<why>'` (MCP
+`orbit.task.requeue`) to resume that candidate; while the run is live the
+requeue is refused, since its failure handoff may still be publishing. Add
+`--discard-candidate` to close the task's undelivered Orbit PRs and rerun fresh,
+which a changed task specification requires; `orbit task update <task-id>
+--status backlog --discard-candidate` is the same discard and closure without a
+recorded requeue decision. A claimed leaf that failed or escalated with a
+committed candidate publishes no `[BLOCKED]` PR; the owner keeps its candidate
+(the task's `claim_candidate_kept` history event), and the same requeue reports
+and resumes it (`resumes.source: claim`) under the same specification and
+discard rules.
 
 For blocks caused by a missing provider launcher or by transient
 infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`
