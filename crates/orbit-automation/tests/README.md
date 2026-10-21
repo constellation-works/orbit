@@ -34,7 +34,9 @@ temporary definition roots and in-process fakes, and change no durable Orbit
 or process-wide state.
 `scheduling/definition_symlinks.rs` shows that auto-task and routine discovery
 refuses a symlinked definitions directory (including `routines/local`) and
-ignores a symlinked definition file.
+ignores a symlinked definition file. Auto-task catalog links are refused even
+when their target is missing, so a broken local catalog cannot enable shared
+fallback.
 `scheduling/routine_sweep.rs` drives `run_sweep_core` with a scripted dispatch.
 A dispatch that overruns the tick deadline defers the next workspace without
 touching its cursor. An `overlap: forbid` slot whose run is marked interrupted

@@ -6,7 +6,10 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 
-use super::loader::{AutoTaskCollection, AutoTaskLoadError, auto_tasks_dir, collect_auto_tasks};
+use super::loader::{
+    AutoTaskCollection, AutoTaskLoadError, AutoTasksDirectoryError, auto_tasks_dir,
+    collect_auto_tasks, validated_auto_tasks_dir,
+};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -106,55 +109,60 @@ impl OrbitRuntime {
         if local == self.shared_root() {
             return collection;
         }
-        let directory = auto_tasks_dir(&local);
-        if std::fs::symlink_metadata(&directory)
-            .is_ok_and(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
-        {
-            if collection.errors.is_empty() {
-                collection.errors.push(AutoTaskLoadError {
-                    path: Some(directory),
-                    message: "auto_tasks must be a regular directory directly under the workspace Orbit directory".into(),
-                });
+        // Overlay discovery must use the same canonical directory boundary as
+        // loading. Never rebuild an unchecked path for the second scan.
+        let directory = match validated_auto_tasks_dir(&local) {
+            Ok(directory) => Some(directory),
+            Err(AutoTasksDirectoryError::Missing) => None,
+            Err(error) => {
+                if collection.errors.is_empty() {
+                    collection.errors.push(AutoTaskLoadError {
+                        path: Some(auto_tasks_dir(&local)),
+                        message: error.to_string(),
+                    });
+                }
+                return collection;
             }
-            return collection;
-        }
+        };
         // Discovery errors that apply to the entire local catalog fail closed.
-        if collection
-            .errors
-            .iter()
-            .any(|error| error.path.as_ref() == Some(&directory))
-        {
+        if collection.errors.iter().any(|error| {
+            error.path.as_ref().is_some_and(|path| {
+                Some(path) == directory.as_ref() || path == &auto_tasks_dir(&local)
+            })
+        }) {
             return collection;
         }
         let mut shadowed = BTreeSet::new();
-        match std::fs::read_dir(&directory) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(error) => {
-                            collection.errors.push(AutoTaskLoadError {
-                                path: Some(directory.clone()),
-                                message: error.to_string(),
-                            });
-                            return collection;
+        if let Some(directory) = directory {
+            match std::fs::read_dir(&directory) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(entry) => entry,
+                            Err(error) => {
+                                collection.errors.push(AutoTaskLoadError {
+                                    path: Some(directory.clone()),
+                                    message: error.to_string(),
+                                });
+                                return collection;
+                            }
+                        };
+                        let path = entry.path();
+                        if is_yaml_definition(&path)
+                            && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+                        {
+                            shadowed.insert(stem.to_owned());
                         }
-                    };
-                    let path = entry.path();
-                    if is_yaml_definition(&path)
-                        && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
-                    {
-                        shadowed.insert(stem.to_owned());
                     }
                 }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                collection.errors.push(AutoTaskLoadError {
-                    path: Some(directory),
-                    message: error.to_string(),
-                });
-                return collection;
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    collection.errors.push(AutoTaskLoadError {
+                        path: Some(directory),
+                        message: error.to_string(),
+                    });
+                    return collection;
+                }
             }
         }
         let mut shared = collect_auto_tasks(&self.shared_root());

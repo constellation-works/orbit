@@ -56,9 +56,12 @@ pub struct AutoTaskCollection {
     pub errors: Vec<AutoTaskLoadError>,
 }
 
+/// Why a catalog directory could not be admitted for discovery.
 #[derive(Debug)]
-enum AutoTasksDirectoryError {
+pub enum AutoTasksDirectoryError {
+    /// The Orbit root or its auto-task directory does not exist.
     Missing,
+    /// The directory could not be resolved or is outside its expected location.
     Invalid(String),
 }
 
@@ -67,7 +70,9 @@ enum AutoTasksDirectoryError {
 /// The runtime supplies the Orbit root, while the directory name is fixed by
 /// this module. Canonicalizing both components and requiring the exact direct
 /// child prevents a symlinked `auto_tasks` directory from redirecting a scan.
-fn validated_auto_tasks_dir(orbit_dir: &Path) -> Result<PathBuf, AutoTasksDirectoryError> {
+/// Inspecting the leaf first also rejects dangling links instead of treating
+/// them as an absent catalog that permits shared-catalog fallback.
+pub fn validated_auto_tasks_dir(orbit_dir: &Path) -> Result<PathBuf, AutoTasksDirectoryError> {
     let canonical_orbit_dir = match fs::canonicalize(orbit_dir) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -81,6 +86,12 @@ fn validated_auto_tasks_dir(orbit_dir: &Path) -> Result<PathBuf, AutoTasksDirect
         }
     };
     let expected_dir = canonical_orbit_dir.join(AUTO_TASKS_DIR);
+    if fs::symlink_metadata(&expected_dir).is_ok_and(|metadata| !metadata.is_dir()) {
+        return Err(AutoTasksDirectoryError::Invalid(format!(
+            "auto_tasks directory must be a regular directory directly under {}",
+            canonical_orbit_dir.display()
+        )));
+    }
     let canonical_dir = match fs::canonicalize(&expected_dir) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
