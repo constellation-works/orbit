@@ -191,7 +191,7 @@ and is preserved and reported; a comment-only edit remains managed.
 
 ```bash
 orbit task locks list                      # files held by active tasks and reservations
-orbit task locks release <reservation_id>  # operator escape hatch
+orbit task locks release <reservation_id> --confirm  # operator escape hatch
 ```
 
 The dashboard's **Locks held** card uses the same listing, including active
