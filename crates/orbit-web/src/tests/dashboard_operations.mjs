@@ -625,6 +625,32 @@ const startedCommand = get('drain-started-command').textContent;
 assert(startedCommand === 'orbit run auto \\\n    --workspace ws-one \\\n    --for 4h \\\n    --concurrency 3 \\\n    --auto-concurrency enforce \\\n    --allow-crew opus,sol \\\n    --hard-complexity-crews opus:3,sol:1 \\\n    --xhard-complexity-crews \\\n    --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
 get('drain-start-like').click();
 assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
+// Cloning must not extend a recorded window to the composer's default merely
+// because its duration is absent from the preset buttons. Check the public
+// Start-like action through confirmation and the HTTP submission, including
+// a preset and a one-pass control.
+for (const [seconds, window] of [[900, '15m'], [91, '91s'], [14400, '4h'], [null, 'once']]) {
+  runDetailFixture.run.input.for_seconds = seconds;
+  await fetchAndRenderOperations();
+  const recordedCommand = get('drain-started-command').textContent;
+  get('drain-start-like').click();
+  await fetchAndRenderOperations();
+  assert(startCommand() === recordedCommand, `cloning ${window} keeps its command across a readiness poll: ${startCommand()}`);
+  const selected = [...startBody.querySelectorAll('.drain-durations [aria-pressed="true"]')];
+  const label = window === 'once' ? 'One pass' : window;
+  assert(selected.length === 1 && selected[0].textContent === label, `cloning ${window} shows its selected duration`);
+  const postsBeforeClone = autoPosts().length;
+  const start = startBody.querySelector('.drain-start');
+  assert(start && !start.disabled, `cloning ${window} can be submitted`);
+  start.click(); await tick(); await tick(); await tick();
+  assert(autoPosts().length === postsBeforeClone + 1, `cloning ${window} submits exactly once`);
+  assert(confirmations.at(-1).includes(`Duration: ${window === 'once' ? 'one pass' : window} ·`), `cloning ${window} confirms the recorded duration`);
+  const cloned = autoPosts().at(-1).body;
+  assert(window === 'once'
+    ? cloned.one_pass === true && !Object.hasOwn(cloned, 'for_duration')
+    : cloned.for_duration === window && !Object.hasOwn(cloned, 'one_pass'),
+  `cloning ${window} preserves the HTTP window semantics: ${JSON.stringify(cloned)}`);
+}
 startBody.querySelector('.drain-crews-bulk button').click();
 for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
 modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));

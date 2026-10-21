@@ -307,7 +307,7 @@ export function drainCommandBlock(parts, { id = null, note = "" } = {}) {
 export function startDrainLike(settings) {
   const next = freshChoices();
   next.source = settings.source;
-  next.window = DRAIN_WINDOWS.some(([value]) => value === settings.window) ? settings.window : next.window;
+  next.window = settings.window;
   next.concurrency = settings.concurrency ? String(settings.concurrency) : "";
   next.mode = settings.source === "pull" ? "" : settings.mode || "";
   next.complete = settings.source !== "pull" && settings.complete === true;
@@ -508,6 +508,10 @@ function modeControl(payload, reasons, rerender) {
 }
 
 function windowSection(payload, source, reasons, form, rerender) {
+  // Recorded CLI windows may have durations outside the quick-start presets.
+  // Keep the copied duration visible and selected until another is chosen.
+  const windows = DRAIN_WINDOWS.some(([value]) => value === choices.window)
+    ? DRAIN_WINDOWS : [...DRAIN_WINDOWS, [choices.window, choices.window]];
   const label = el("span", { class: "drain-field-label", text: "Window length" });
   label.id = "auto-drain-duration-label";
   const help = choices.window === "once"
@@ -516,7 +520,7 @@ function windowSection(payload, source, reasons, form, rerender) {
   return section("Window", [
     el("div", { class: "drain-field drain-field-duration" }, [
       fieldHead(label, choices.window === "once" ? "no --for" : "--for", help),
-      segmented("Window duration", DRAIN_WINDOWS, choices.window, {
+      segmented("Window duration", windows, choices.window, {
         focus: "duration",
         extraClass: "drain-durations",
         onPick: (value) => { choices.window = value; rerender(); },
