@@ -218,6 +218,12 @@ field allowlist; the others leave their field rules to the verb's handler
 For versioned inputs whose protocol-skew refusal must precede shape validation,
 use the host's `prepare_operation_input` hook before `parse_input` (drain pull).
 
+If a handler accepts legacy value shapes beyond `ParamType`'s strict types,
+preserve them in the noun's `normalize_input` hook. It runs after host preparation
+and guarded-mode preemption, before `parse_input`. Task writes normalize selected
+string booleans and a single relation object; search normalizes string booleans.
+Keep equivalent normalization at a direct core entry that bypasses the tool.
+
 Unknown-field refusal starts in warn-and-audit mode for the noun; the refusal
 flip is a separate change after the 30-day compatibility window.
 
