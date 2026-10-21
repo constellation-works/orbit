@@ -135,29 +135,35 @@ fn active_timer_with_infinite_next_elapse_waits_for_the_service_tick() {
     }
 }
 
-/// Substitute `launchctl` plus a temp sweep log. Guards the doctor signal that
-/// an unloaded agent or a sweep log older than the tick interval is not ok,
-/// while a loaded agent with a fresh log is.
+/// Substitute `launchctl` plus temporary sweep logs. Guards the doctor signal
+/// for an unloaded agent, a log beyond the tick deadline, duration variance,
+/// rotation gaps, and a never-written initial log.
 #[cfg(unix)]
 #[test]
 fn launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log() {
+    let status_for = |root: &Path, loaded| {
+        let probe = LaunchdHealthProbe::at(root).unwrap();
+        clock_status_with(
+            root,
+            ClockPlatform::Launchd,
+            &Launchctl { loaded },
+            Some(&probe),
+            None,
+        )
+        .unwrap()
+    };
+
     for (name, loaded, stale) in [
         ("not loaded", false, false),
         ("stale log", true, true),
         ("loaded and fresh", true, false),
     ] {
         let root = tempfile::tempdir().unwrap();
-        let probe = LaunchdHealthProbe::at(root.path()).unwrap();
-        let status = clock_status_with(
-            root.path(),
-            ClockPlatform::Launchd,
-            &Launchctl { loaded },
-            Some(&probe),
-            None,
-        )
-        .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let status = status_for(root.path(), loaded);
         let age = if stale {
-            Duration::from_secs(status.configured_cadence_seconds.saturating_add(120))
+            Duration::from_secs(status.configured_cadence_seconds)
+                .saturating_add(TICK_DEADLINE)
+                .saturating_add(Duration::from_secs(1))
         } else {
             Duration::ZERO
         };
@@ -184,6 +190,27 @@ fn launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log() {
             }
         }
     }
+
+    let root = tempfile::tempdir().unwrap();
+    let status = status_for(root.path(), true);
+    assert!(status.loaded && status.enabled);
+    write_sweep_log(
+        root.path(),
+        Duration::from_secs(status.configured_cadence_seconds)
+            .saturating_add(Duration::from_secs(1)),
+    );
+    assert!(doctor_clock_not_running_issue(&status, root.path()).is_none());
+
+    let root = tempfile::tempdir().unwrap();
+    let status = status_for(root.path(), true);
+    assert!(status.loaded && status.enabled);
+    write_rotated_sweep_log(root.path(), Duration::ZERO);
+    assert!(doctor_clock_not_running_issue(&status, root.path()).is_none());
+
+    let root = tempfile::tempdir().unwrap();
+    let status = status_for(root.path(), true);
+    let issue = doctor_clock_not_running_issue(&status, root.path()).expect("missing first log");
+    assert!(issue.contains("sweep.log has not been written"), "{issue}");
 }
 
 struct Launchctl {
@@ -238,4 +265,12 @@ fn write_sweep_log(root: &Path, age: Duration) {
         file.set_modified(SystemTime::now().checked_sub(age).unwrap())
             .unwrap();
     }
+}
+
+fn write_rotated_sweep_log(root: &Path, age: Duration) {
+    let path = root.join("logs").join("sweep.log.20261021T000000000Z");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_modified(SystemTime::now().checked_sub(age).unwrap())
+        .unwrap();
 }
