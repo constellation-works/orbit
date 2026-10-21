@@ -4776,7 +4776,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
 /// is a read. A denied, absent canonical partition must not refuse that read,
 /// nor may the fallback silently allow a subsequent mutation.
 #[cfg(unix)]
-fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
+fn absent_unwritable_partition_keeps_cli_tool_reads_observational() -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     let workspace = McpWorkspace::init();
@@ -4790,13 +4790,22 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
     let original = std::fs::metadata(&partitions)
         .expect("partition parent metadata")
         .permissions();
-    std::fs::set_permissions(&partitions, std::fs::Permissions::from_mode(0o500))
-        .expect("deny partition creation");
-    if std::fs::create_dir(partitions.join("probe")).is_ok() {
-        // Root can ignore mode bits; the mount regression covers that host.
+    std::fs::set_permissions(
+        &partitions,
+        std::fs::Permissions::from_mode(read_only_fixture_mode(0o500)),
+    )
+    .expect("deny partition creation");
+    let probe = std::fs::create_dir(partitions.join("probe"));
+    if probe.is_ok() {
+        // A writable probe cannot exercise the creation-denial path.
         std::fs::set_permissions(&partitions, original).expect("restore partition permissions");
-        return;
+        return false;
     }
+    assert_eq!(
+        probe.expect_err("partition creation denied").kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "the fixture must refuse writes through permissions"
+    );
     let before = snapshot_fixture_state(&[&partitions]);
     let read = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
@@ -4839,6 +4848,7 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
         after, before,
         "reads and refused writes must create no partition files or directories"
     );
+    true
 }
 
 /// ORB-12097: `readonly_orbit_command` must scrub the managed-run authority a
@@ -4954,7 +4964,7 @@ fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
 /// It does not replace the mount test — a `--ro-bind` also refuses the sidecar
 /// creation and directory writes that permission bits here still allow.
 #[cfg(unix)]
-fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
+fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     let workspace = McpWorkspace::init();
@@ -5011,8 +5021,22 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
         .map(|suffix| PathBuf::from(format!("{}{suffix}", registry.display())))
         .collect();
     for file in &registry_files {
-        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o400))
-            .unwrap_or_else(|error| panic!("make {} read-only: {error}", file.display()));
+        std::fs::set_permissions(
+            file,
+            std::fs::Permissions::from_mode(read_only_fixture_mode(0o400)),
+        )
+        .unwrap_or_else(|error| panic!("make {} read-only: {error}", file.display()));
+    }
+    for file in &registry_files {
+        match std::fs::OpenOptions::new().write(true).open(file) {
+            Ok(_) => return false,
+            Err(error) => assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "verify write denial for {}: {error}",
+                file.display()
+            ),
+        }
     }
     let before: Vec<Vec<u8>> = registry_files
         .iter()
@@ -5041,6 +5065,7 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
         "observing must not change the registry database, WAL, or SHM"
     );
     drop(registry_holder);
+    true
 }
 
 /// The mount test's other read-only surface, carried on every Unix runner: the
@@ -5052,7 +5077,7 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
 /// It does not replace the mount test: permission bits still allow directory
 /// and sidecar writes a `--ro-bind` refuses outright.
 #[cfg(unix)]
-fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
+fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     let workspace = McpWorkspace::init();
@@ -5093,14 +5118,23 @@ fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
     let original = std::fs::metadata(&state_dir)
         .expect("canonical state metadata")
         .permissions();
-    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o500))
-        .expect("make the canonical state directory read-only");
-    if std::fs::File::create(state_dir.join("probe")).is_ok() {
+    std::fs::set_permissions(
+        &state_dir,
+        std::fs::Permissions::from_mode(read_only_fixture_mode(0o500)),
+    )
+    .expect("make the canonical state directory read-only");
+    let probe = std::fs::File::create(state_dir.join("probe"));
+    if probe.is_ok() {
         // A user that ignores the mode bits (typically root) cannot reproduce
         // the creation denial this fixture is about.
         std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
-        return;
+        return false;
     }
+    assert_eq!(
+        probe.expect_err("semantic index creation denied").kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "the fixture must refuse writes through permissions"
+    );
 
     let listed = orbit_ok(
         McpWorkspace::orbit_command(&worktree, &workspace.home)
@@ -5137,6 +5171,7 @@ fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
         !semantic_db.exists(),
         "an unavailable index must not be created by a read"
     );
+    true
 }
 
 /// Pin the registry's current snapshot so every write that follows stays in the
@@ -6265,24 +6300,79 @@ fn live_runtime_and_app_presentation() {
 }
 
 #[cfg(unix)]
+fn read_only_fixture_mode(mode: u32) -> u32 {
+    // The subprocess regression leaves owner writes enabled to deterministically
+    // reproduce a host (such as root) that can write despite read-only mode bits.
+    if std::env::var("ORBIT_TEST_WRITABLE_READ_ONLY_FIXTURE").as_deref() == Ok("1") {
+        mode | 0o200
+    } else {
+        mode
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn observational_read_only_stores() {
     for (name, check) in [
         (
             "absent_unwritable_partition_keeps_cli_tool_reads_observational",
-            absent_unwritable_partition_keeps_cli_tool_reads_observational as fn(),
+            absent_unwritable_partition_keeps_cli_tool_reads_observational as fn() -> bool,
         ),
         (
             "read_only_registry_files_keep_uncheckpointed_wal_reads_observational",
-            read_only_registry_files_keep_uncheckpointed_wal_reads_observational as fn(),
+            read_only_registry_files_keep_uncheckpointed_wal_reads_observational as fn() -> bool,
         ),
         (
             "absent_global_semantic_index_keeps_read_only_cli_reads_observational",
-            absent_global_semantic_index_keeps_read_only_cli_reads_observational as fn(),
+            absent_global_semantic_index_keeps_read_only_cli_reads_observational as fn() -> bool,
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");
-        check();
-        orbit_common::test_env::record_scenario_pass(name);
+        if check() {
+            orbit_common::test_env::record_scenario_pass(name);
+        } else {
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIP: {name}: host permits writes to the read-only fixture"
+            );
+        }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn observational_read_only_stores_report_unavailable_coverage() {
+    const TEST: &str = "mcp_roundtrip::observational_read_only_stores";
+    let root = tempdir().expect("read-only coverage regression scratch");
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .args(["--exact", TEST, "--nocapture"])
+        .env("ORBIT_TEST_WRITABLE_READ_ONLY_FIXTURE", "1");
+    let output = test_env::run_child_test(&mut command, TEST, root.path());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut remaining: Vec<&str> = stderr.lines().collect();
+    for name in [
+        "absent_unwritable_partition_keeps_cli_tool_reads_observational",
+        "read_only_registry_files_keep_uncheckpointed_wal_reads_observational",
+        "absent_global_semantic_index_keeps_read_only_cli_reads_observational",
+    ] {
+        let notice = format!("SKIP: {name}: host permits writes to the read-only fixture");
+        assert!(
+            remaining.contains(&notice.as_str()),
+            "missing {notice}: {stderr}"
+        );
+        remaining.retain(|line| *line != notice);
+    }
+    assert!(
+        !stderr
+            .lines()
+            .any(|line| line.starts_with("qa-scenario-pass:")),
+        "unavailable read-only coverage must receive no scenario-pass credit: {stderr}"
+    );
+    // Consume only the three intentional skips checked above; forward any
+    // unexpected notices through the normal child-test contract.
+    test_env::assert_child_test_passed(TEST, output.status, output.stdout, remaining.join("\n"));
 }
