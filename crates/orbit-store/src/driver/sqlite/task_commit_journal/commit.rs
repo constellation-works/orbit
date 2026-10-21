@@ -124,6 +124,10 @@ impl Store {
                 ).map_err(sqlite_store_error)?;
             }
 
+            if let Some(entry) = &effects.census {
+                super::upsert_executor_census_in(tx.connection(), &workspace_id, entry)?;
+            }
+
             let reservation_id = reserved
                 .as_ref()
                 .and_then(|result| result.reservation_id.clone());

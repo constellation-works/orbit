@@ -3,6 +3,7 @@
 
 pub(super) mod auto_admission;
 pub(crate) mod backlog_exclusion;
+pub(crate) mod census;
 pub(crate) mod claim_holders;
 pub(super) mod cpu_light;
 pub(super) mod gap_fit;

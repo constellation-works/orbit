@@ -187,6 +187,11 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // eligible population before they even reach the selection rule.
     let review = crate::application::review::input_run_review_admission(runtime, input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    // [ORB-17304] The owner declares its census row on each pass of its
+    // local drain, before the snapshot orders against it.
+    if let Some(run_id) = drain_run_id(input) {
+        runtime.record_owner_census(run_id);
+    }
     let mut snapshot =
         backlog_snapshot(runtime, action, allowlist.as_ref(), &pools, review.as_ref())?;
     // A live leaf may carry a task that has since closed; its claim and its

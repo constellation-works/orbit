@@ -119,7 +119,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | Requests identify admissions and claims identify attempts | [4_decisions.md](./4_decisions.md#requests-identify-admissions-and-claims-identify-attempts) | [ORB-12488] | recorded |
 | Owner ordering does not require a materialized queue | [4_decisions.md](./4_decisions.md#owner-ordering-does-not-require-a-materialized-queue) | [ORB-12488] | recorded |
-| Scarcity-aware admission order: work only the requester can run leads its band | [specs/task-pull.md](./specs/task-pull.md#scarcity-aware-order-planned); [4_decisions.md](./4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run) | [ORB-17304] | planned |
+| Scarcity-aware admission order: work only the requester can run leads its band | `census_dispatch_order` in [census.rs](../../../crates/orbit-store/src/contracts/task/coordination/census.rs); [specs/task-pull.md](./specs/task-pull.md#executor-census-and-affinity); [4_decisions.md](./4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run) | [ORB-17304] | done |
 | Landing consumes durable evidence and explicit completion authority | [4_decisions.md](./4_decisions.md#landing-consumes-durable-evidence-and-explicit-completion-authority) | [ORB-12488] | recorded |
 | Owner is the always-on host | [4_decisions.md](./4_decisions.md#the-owner-is-the-always-on-host-that-followers-can-reach) | [ORB-12488] | recorded |
 | Epic is a tag, not a pipeline | [4_decisions.md](./4_decisions.md#epic-is-a-tag-not-a-pipeline) | [ORB-12488] | recorded |

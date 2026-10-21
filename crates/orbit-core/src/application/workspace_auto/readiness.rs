@@ -308,7 +308,11 @@ pub fn explain_workspace_auto_readiness(
             .values()
             .filter(|task| task.status == TaskStatus::Backlog)
             .collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(&mut backlog, &snapshot.expiring_batches);
+        sort_tasks_for_automatic_dispatch(
+            &mut backlog,
+            &snapshot.expiring_batches,
+            &snapshot.dispatch_order,
+        );
         backlog
             .into_iter()
             .take(limit)

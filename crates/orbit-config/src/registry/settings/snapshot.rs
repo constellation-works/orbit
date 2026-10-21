@@ -194,6 +194,12 @@ impl ConfigSnapshot {
             .unwrap_or(crate::aliases::ShellProbeMode::Interactive)
     }
 
+    /// The admitted `workflow.admission_affinity`.
+    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
+        orbit_types::task::AdmissionAffinityReach::parse(&self.workflow_admission_affinity)
+            .unwrap_or_default()
+    }
+
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
     pub fn purpose_crews(&self) -> crate::PurposeCrewPools {
         crate::PurposeCrewPools::new([

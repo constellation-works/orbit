@@ -13,6 +13,9 @@
 
 use crate::contracts::TaskReservationReserveResult;
 
+pub(crate) use census::upsert_executor_census_in;
+
+mod census;
 mod commit;
 mod coordination;
 mod journal;

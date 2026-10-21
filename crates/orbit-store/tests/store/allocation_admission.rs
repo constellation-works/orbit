@@ -19,6 +19,9 @@
 //    receipt written as text before that field still replays.
 //  - A pull naming the work its host has room for is granted only a task in
 //    that list.
+//  - Within a band, a pull takes work only its executor can run among the
+//    live executor census first; each pull's census row lands with its
+//    receipt and stays live while its machine holds a claim.
 //
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared, a disposable `HOME`, and a bounded wait.
@@ -1244,8 +1247,17 @@ impl Coordinated {
         request: &AdmissionRequest,
         ordering: &AdmissionOrdering,
     ) -> Result<AdmissionLookup, OrbitError> {
+        self.try_pull_as("machine-a", request, ordering)
+    }
+
+    fn try_pull_as(
+        &self,
+        machine_id: &str,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+    ) -> Result<AdmissionLookup, OrbitError> {
         let location = ExecutionLocation {
-            machine_id: "machine-a".into(),
+            machine_id: machine_id.into(),
             machine_name: Some("display".into()),
         };
         self.backends.commit_boundary.admit_task(

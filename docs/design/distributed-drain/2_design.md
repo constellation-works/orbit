@@ -48,11 +48,13 @@ its tasks. The federated mux cannot detect the collision; this is a runbook step
 The **ready queue** is a logical owner-side query over `backlog` tasks whose dependencies are all
 `done`, ordered by the automatic-dispatch comparator (corrective tags, task-ID tie-breaker). No
 materialized table is required; any projection is advisory until admission revalidates it.
-Followers never compute readiness or priority. Pull admission adds owner-relative OS affinity
-inside a priority ([ORB-14938]). The planned
-[scarcity-aware order](./specs/task-pull.md#scarcity-aware-order-planned) ([ORB-17304]) widens
-this: work only the requesting executor can run leads its band, judged against the live
-executor census.
+Followers never compute readiness or priority. The owner orders each admission, pull and
+owner-local alike, against its live
+[executor census](./specs/task-pull.md#executor-census-and-affinity) ([ORB-17304]): one row per
+executor machine, upserted with each pull receipt and on each pass of the owner's local drain,
+live for ten minutes or while its machine holds a claim. Within a band, work only the
+requesting executor can run leads, and among the rest work fewer live executors can run;
+`workflow.admission_affinity` narrows that to a priority (`priority`) or turns it off.
 
 `orbit.task.pull` is an owner-only `control_plane` tool; its contract is
 [specs/task-pull.md](./specs/task-pull.md). Candidate selection, readiness and footprint
@@ -1459,9 +1461,10 @@ Acceptance criteria, not reported as passing.
 - **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial
   landing and per-host compiler caches.
 - **Placement is first-fit and capacity-blind.** Admission takes the first eligible task in the
-  owner's order for the requesting executor. Until [ORB-17304] lands, a scarce host (the only
-  one running a crew or OS) takes fungible work while work only it can run waits. Even after
-  that, the census tracks liveness, not free slots.
+  owner's order for the requesting executor. The census puts work only that executor can run
+  first, but it tracks liveness, not free slots: a fungible task can wait while the only other
+  executor that could run it is saturated. `workflow.admission_affinity = "priority"` is the
+  escape hatch, bounding that wait to one priority.
 - **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References
@@ -1501,7 +1504,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
 - [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
-- [ORB-17304] — plans the scarcity-aware admission order against the live executor census (§2, §9).
+- [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

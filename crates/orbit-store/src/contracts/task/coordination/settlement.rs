@@ -536,4 +536,7 @@ pub(crate) struct ClaimCommitEffects {
     /// The claim id and bound run a worker's evidence write was authenticated
     /// against, which the owner stamps on coverage it commits [ORB-15962].
     pub claimed_submission: Option<(String, ClaimRun)>,
+    /// The requesting executor's census row an admission upserts with its
+    /// receipt [ORB-17304].
+    pub census: Option<super::ExecutorCensusEntry>,
 }

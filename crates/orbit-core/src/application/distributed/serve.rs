@@ -37,8 +37,9 @@ use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
     ClaimAttribution, ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation,
-    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase, HandoffObservation,
-    HandoffReviewObservation, JobRunQuery, KnownRedObservation, KnownRedOsAcceptance,
+    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase, ExecutorCapability,
+    HandoffObservation, HandoffReviewObservation, JobRunQuery, KnownRedObservation,
+    KnownRedOsAcceptance,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
@@ -772,19 +773,31 @@ impl crate::OrbitRuntime {
                 Default::default()
             }
         };
+        // The owner's own repair pull takes a stopped landing's repair and
+        // nothing from the backlog, which its local drain admits through the
+        // owner wave [ORB-17303].
+        let repairs_only = self.is_owner_repair_pull(identity, request)?;
+        // [ORB-17304] The backlog is ordered against the live executor
+        // census, the requester declaring itself by this request.
+        let census = (!repairs_only)
+            .then(|| {
+                self.executor_census(
+                    &identity.location().machine_id,
+                    ExecutorCapability::of_request(request),
+                )
+            })
+            .flatten();
         boundary.admit_task(
             identity,
             request,
             &AdmissionOrdering {
-                owner_os: self.host_os(),
+                affinity: self.admission_affinity(),
+                census,
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),
                 tag_instructions: Some(self.captured_tag_instructions(&request.ship)),
                 executor_host_os: self.executor_host_os_limits()?,
-                // The owner's own repair pull takes a stopped landing's
-                // repair and nothing from the backlog, which its local drain
-                // admits through the owner wave [ORB-17303].
-                repairs_only: self.is_owner_repair_pull(identity, request)?,
+                repairs_only,
             },
             owner_binary_version(),
             &self.paths().repo_root,

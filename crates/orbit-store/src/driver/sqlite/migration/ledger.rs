@@ -556,12 +556,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_retention_analytics,
     },
+    // ORB-17304: each executor's latest declared capability per workspace,
+    // which admission orders against. A new table only, which an older
+    // binary never reads, so drains on older binaries keep writing.
+    Migration {
+        version: 55,
+        name: "executor_census",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_executor_census,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 54;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 55;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

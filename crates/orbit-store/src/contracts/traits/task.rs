@@ -105,6 +105,24 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Option<orbit_types::workflow::SteeringWatermark>, OrbitError> {
         Ok(None)
     }
+    /// Upsert one executor's census row [ORB-17304]: the owner's own,
+    /// written by its local drain. A store without a coordination journal
+    /// keeps no census.
+    fn record_executor_census(
+        &self,
+        _entry: &crate::contracts::ExecutorCensusEntry,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+    /// The census rows live at `now`: seen within the liveness window, or
+    /// of a machine holding a claimed or running claim. A store without a
+    /// coordination journal reads an empty census.
+    fn live_executor_census(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        Ok(Vec::new())
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
