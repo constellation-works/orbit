@@ -307,7 +307,7 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                             | "legacy_codeql"
                             | "legacy_wildcard_app"
                             | "successful_dependent_read"
-                    ) || case.starts_with("actual_");
+                    ) || case == "actual_ci";
                     let result = orbit_engine::test_support::with_vcs_retry_wait(
                         |_| {},
                         || complete_infrastructure(&host, &fx),
