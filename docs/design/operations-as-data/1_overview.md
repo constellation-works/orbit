@@ -2,7 +2,7 @@
 title: Operations as Data — Overview
 owner: claude
 last_updated: 2026-10-20
-last_validated: 2026-10-18
+last_validated: 2026-10-20
 status: Accepted
 feature: operations-as-data
 doc_role: overview
