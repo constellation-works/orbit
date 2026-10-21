@@ -333,7 +333,8 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
         ),
         // Routines are loaded and reconciled from the shared catalog. A linked
         // worktree's `local_dir` is its own `.orbit` and must not hide a fault
-        // in the catalog the loader and sweep read. Auto-tasks stay local.
+        // in the catalog the loader and sweep read. Auto-task writes stay
+        // local; inspection also diagnoses the shared fallback catalog below.
         ManagedCatalog::names_only(
             ArtifactKind::Routine,
             runtime.shared_root().join("routines"),
@@ -350,8 +351,17 @@ impl OrbitRuntime {
     /// contract that one broken subsystem never hides the rest.
     pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
         let mut report = Vec::new();
-        for catalog in managed_catalogs(self) {
+        for mut catalog in managed_catalogs(self) {
             let mut health = diagnose_catalog(self, &catalog);
+            if catalog.kind == ArtifactKind::AutoTask && self.local_root() != self.shared_root() {
+                // Both catalogs can supply an inspected definition. Diagnose
+                // each with its own settings and manifest, retaining local
+                // candidate faults as well as faults in the shared catalog.
+                catalog.dir = auto_tasks_dir(&self.shared_root());
+                let shared = diagnose_catalog(self, &catalog);
+                health.scanned += shared.scanned;
+                health.findings.extend(shared.findings);
+            }
             if catalog.kind == ArtifactKind::Skill
                 && let Some(base) = self.global_root().parent()
             {

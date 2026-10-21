@@ -136,6 +136,16 @@ orbit auto-task delete <name> --reason "<why>"   # remove it for good
 orbit auto-task restore <name>          # reinstate a deleted shipped default
 ```
 
+In a linked worktree, `show` and `list` inspect checkout-local candidate
+definitions first and fall back by name to the registered workspace's catalog.
+`show` reports the root and file that supplied the body; its settings and plugin
+provenance come from that same catalog. A disabled or invalid local definition
+does not expose a shared replacement. Writes and `mint` keep their existing
+checkout scope; inspecting a shared definition does not authorize changing or
+minting it from a worktree. An empty worktree catalog can be a Linux sandbox
+write anchor and does not hide workspace definitions.
+`orbit doctor` diagnoses both catalogs with their own settings and manifests.
+
 On a shipped default, `toggle` and `update` of settings fields — `enabled`,
 the schedule, dedupe, and the template's crew, priority, complexity, and added
 tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and

@@ -1,11 +1,12 @@
 //! Auto-task CRUD [ORB-10149]: the shared domain surface behind both the CLI
 //! (`orbit auto-task …`) and the MCP tools (`orbit.auto_task.*`). Definitions
 //! are YAML under `<local_orbit_dir>/auto_tasks/<name>.yaml`;
-//! these methods are the single choke point that reads/writes them, so both
+//! linked-worktree reads fall back per name to the shared workspace catalog.
+//! These methods are the single choke point that reads/writes them, so both
 //! entry points stay consistent. A managed worker's `orbit.auto_task.*` writes
 //! are routed to the owner host before reaching this surface, so its
 //! `local_orbit_dir` is the registered checkout the host clock reads.
-//! Direct CLI calls from a linked worktree still use that worktree's root.
+//! Direct CLI writes from a linked worktree still use that worktree's root.
 //! Disabling is a `toggle`; removal is the separate audited delete in
 //! [`super::delete`].
 //!
@@ -264,7 +265,7 @@ impl OrbitRuntime {
     /// as a `faulty` row on the `orbit doctor` artifacts surface, so a
     /// definition that silently stopped firing is discoverable [ORB-10800].
     pub fn auto_task_list(&self) -> Result<Vec<AutoTaskDefinition>, OrbitError> {
-        let collection = collect_auto_tasks(&self.paths().local_dir);
+        let collection = self.collect_readable_auto_tasks();
         require_loaded(&collection)?;
         Ok(collection
             .definitions
@@ -273,21 +274,33 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Show one effective definition by name, or `None` if no regular
-    /// in-scope file exists.
+    /// Show one effective definition by name, preferring the checkout-local
+    /// file and falling back to the shared workspace catalog. Settings come
+    /// from the same catalog as the body. `None` means neither has the name.
     ///
     /// Absolute paths, parent-directory traversal, and any other name that is
     /// not a single definition stem are rejected before the filesystem is
     /// consulted. A symlinked `auto_tasks` directory or a non-regular
     /// definition entry is refused before its bytes are read.
     pub fn auto_task_show(&self, name: &str) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-        let Some(path) = self.confined_definition_path(name)? else {
+        let Some(root) = self.auto_task_read_root(name)? else {
+            return Ok(None);
+        };
+        self.auto_task_show_at(&root, name)
+    }
+
+    pub(super) fn auto_task_show_at(
+        &self,
+        root: &Path,
+        name: &str,
+    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+        let Some(path) = Self::confined_definition_path(root, name)? else {
             return Ok(None);
         };
         let raw = std::fs::read_to_string(&path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
-        let settings = load_settings_table(&auto_tasks_dir(&self.paths().local_dir))
+        let settings = load_settings_table(&auto_tasks_dir(root))
             .map_err(|error| OrbitError::InvalidInput(format!("auto-task '{name}': {error}")))?;
         if let Some(entry) = settings.get(&definition.name) {
             entry.apply(&mut definition);
@@ -419,19 +432,20 @@ impl OrbitRuntime {
     ///
     /// An unknown name is an `InvalidInput` error naming the definition.
     /// Escaped lookups fail the same way, before a task is created: mint loads
-    /// the definition only through [`Self::auto_task_show`].
+    /// the definition only through the confined checkout-local lookup. Shared
+    /// definitions exposed by read fallback do not become mint authority.
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         // Fail closed before admission. This copy is not mint authority: a
         // concurrent delete can remove the file before the lock is held.
-        let preloaded = self.require_auto_task(name)?;
+        let preloaded = self.require_local_auto_task(name)?;
         self.validate_required_tools(&preloaded.template.required_tools)?;
         // Same sidecar lock as `with_cursor_lock` and `auto_task_delete`.
         // Do not load or save the cursor: bytes stay unchanged, and a
         // malformed cursor must not block an explicit mint.
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
-            let definition = self.require_auto_task(name)?;
+            let definition = self.require_local_auto_task(name)?;
             self.validate_required_tools(&definition.template.required_tools)?;
             let task = mint_task(self, &definition)?;
             Ok(task)
@@ -445,14 +459,17 @@ impl OrbitRuntime {
     /// a path. The directory and file checks use `symlink_metadata`, which
     /// does not follow the final component, and only a regular file is
     /// returned for reading.
-    fn confined_definition_path(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
+    pub(super) fn confined_definition_path(
+        root: &Path,
+        name: &str,
+    ) -> Result<Option<PathBuf>, OrbitError> {
         if !in_scope_lookup_name(name) {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task lookup '{name}' is not an in-scope definition name"
             )));
         }
 
-        let definitions = auto_tasks_dir(&self.paths().local_dir);
+        let definitions = auto_tasks_dir(root);
         match std::fs::symlink_metadata(&definitions) {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -472,7 +489,7 @@ impl OrbitRuntime {
             }
         }
 
-        let path = definition_path(&self.paths().local_dir, name);
+        let path = definition_path(root, name);
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -493,9 +510,12 @@ impl OrbitRuntime {
         Ok(Some(path))
     }
 
-    fn require_auto_task(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
-        self.auto_task_show(name)?
-            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
+    pub(crate) fn require_local_auto_task(
+        &self,
+        name: &str,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.auto_task_show_at(&self.paths().local_dir, name)?
+            .ok_or_else(|| self.auto_task_missing(name, false))
     }
 
     pub(super) fn require_validated_auto_task(
