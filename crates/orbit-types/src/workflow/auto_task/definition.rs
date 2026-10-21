@@ -78,7 +78,7 @@ pub struct SweepCursorRecord {
     /// Branch the cursor commit belongs to.
     #[serde(rename = "ref")]
     pub reference: String,
-    /// Commit the sweep examined through (full 40-character SHA).
+    /// Commit the sweep examined through (a full 40- or 64-character object id).
     pub cursor: String,
 }
 
@@ -91,9 +91,11 @@ impl SweepCursorRecord {
                 self.schema_version
             )));
         }
-        if self.cursor.trim().is_empty() {
+        if !matches!(self.cursor.len(), 40 | 64)
+            || !self.cursor.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(WorkflowError::Invalid(
-                "sweep cursor must name a commit".to_string(),
+                "sweep cursor must be a full 40- or 64-character hexadecimal commit id".to_string(),
             ));
         }
         Ok(())

@@ -133,8 +133,8 @@ fn spawned_from_coordinator(payload: &Value) -> bool {
 /// Parse the coordinator's tool contracts, then exercise roll-up dedupe and
 /// cursor selection through the public runtime and scheduler.
 #[test]
-fn qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior() {
-    if !isolated("qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior") {
+fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
+    if !isolated("qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep") {
         return;
     }
     let source = BUNDLED_AUTO_TASKS
@@ -335,6 +335,54 @@ fn qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior() {
         scheduler_report(&runtime, due + Duration::minutes(1)).action,
         "would_fire",
         "a commit beyond the completed roll-up cursor permits the next sweep"
+    );
+
+    // A symbolic cursor can resolve to the current tip just like the valid
+    // SHA above. It must be treated as inconclusive so the next tick mints.
+    let symbolic_cursor = runtime
+        .add_task(TaskAddParams {
+            title: "Sweep with a symbolic cursor".into(),
+            task_type: Some(TaskType::Chore),
+            tags: tags_of(rollup).into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &symbolic_cursor.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    SWEEP_CURSOR_ARTIFACT,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "ref": "sweep-fixture",
+                        "cursor": "sweep-fixture"
+                    })
+                    .to_string(),
+                )],
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    complete(&runtime, &symbolic_cursor.id);
+
+    let next_tick = run_auto_task_scheduler_at(
+        &runtime,
+        due + Duration::minutes(1),
+        SchedulerOptions::default(),
+    )
+    .unwrap();
+    assert!(next_tick.errors.is_empty(), "{next_tick:?}");
+    assert_eq!(next_tick.reports.len(), 1, "{next_tick:?}");
+    assert_eq!(next_tick.reports[0].action, "fired", "{next_tick:?}");
+    assert!(
+        runtime
+            .open_auto_task_instance(&definition)
+            .unwrap()
+            .is_some(),
+        "an inconclusive symbolic cursor leaves the next sweep eligible to mint"
     );
 }
 
