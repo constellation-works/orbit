@@ -8,10 +8,11 @@
 //! claimed leaf its provider refused releases its claim, and the owner
 //! records the same hold with the release
 //! ([`OrbitRuntime::claimed_provider_failure_hold`]). Capacity and
-//! unavailability exclude the crew the run used; a refusal excludes every
-//! crew of the refusing provider, since the content would be refused again on
-//! any of them. A usage limit belongs to the provider account, so it excludes
-//! every crew of that provider too, or only those on the model the limit
+//! unavailability exclude the crew the run used, or the failing account's
+//! crews when an activity used another provider or account; a refusal excludes
+//! every crew of the refusing provider, since the content would be refused
+//! again on any of them. A usage limit belongs to the provider account, so it
+//! excludes every crew of that provider too, or only those on the model the limit
 //! names [ORB-14695]. The exclusion lasts until the hold's `not_before`: the
 //! reset a limit reported, else a backoff that grows with each consecutive
 //! hold.
@@ -115,14 +116,14 @@ impl OrbitRuntime {
     /// The failing provider is the one the failure names, else the run
     /// crew's. A refusal excludes every configured crew of that provider;
     /// capacity and unavailability exclude the run's crew, or every crew of
-    /// the provider when the failing step ran on a provider other than the
-    /// run crew's (a reviewer, say). A usage limit excludes every crew whose
-    /// provider parses to the same one, or only those on the model the limit
-    /// names when that matches some of them. [ORB-17288] Only crews of the
-    /// failing account count for a limit and for a step on another provider:
-    /// the crew the failure names as its account, else the provider's crews
-    /// without `env`. A hold that still stands from an earlier run keeps its
-    /// crews excluded, so successive failures narrow the draw.
+    /// the failing account when the step ran on a provider or account other
+    /// than the run crew's (a reviewer, say). A usage limit excludes every
+    /// crew whose provider parses to the same one, or only those on the model
+    /// the limit names when that matches some of them. [ORB-17288] Only crews
+    /// of the failing account count for a limit and for a step on another provider
+    /// or account: the crew the failure names as its account, else the
+    /// provider's crews without `env`. A hold that still stands from an
+    /// earlier run keeps its crews excluded, so successive failures narrow the draw.
     ///
     /// A usage limit's hold lasts until the reset the provider reported,
     /// clamped to between [`MIN_LIMIT_HOLD`] and [`MAX_LIMIT_HOLD`] from
@@ -228,6 +229,10 @@ impl OrbitRuntime {
             .as_deref()
             .and_then(|crew| registry.get(crew))
             .map(|crew| crew.assignment.provider.clone());
+        let run_account = run_crew
+            .as_deref()
+            .and_then(|crew| registry.get(crew))
+            .and_then(Crew::account);
         let provider = error_message
             .and_then(failed_provider)
             .map(ToOwned::to_owned)
@@ -262,7 +267,9 @@ impl OrbitRuntime {
                 )
             }),
             ProviderFailureClass::Capacity | ProviderFailureClass::Unavailable => {
-                if provider.is_some() && run_provider != provider {
+                if provider.is_some()
+                    && (run_provider != provider || run_account != account.as_deref())
+                {
                     provider_crews(true)
                 } else {
                     Vec::new()

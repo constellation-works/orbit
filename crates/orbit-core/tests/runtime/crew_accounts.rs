@@ -163,6 +163,91 @@ fn a_usage_limit_holds_only_the_crews_of_the_failing_account() {
     );
 }
 
+/// A reviewer on the credits account can fail without holding the run's
+/// healthy subscription account.
+fn a_subscription_run_holds_only_its_failing_credits_activity() {
+    mixed_account_auth_failure("opus", Some("opus-credits"), &["opus-credits"]);
+}
+
+/// A failure without an account token belongs to the default login, even
+/// when the run uses an env crew of the same provider.
+fn a_credits_run_holds_only_its_failing_subscription_activity() {
+    mixed_account_auth_failure("opus-credits", None, &["opus", "sonnet"]);
+}
+
+fn mixed_account_auth_failure(run_crew: &str, account: Option<&str>, excluded: &[&str]) {
+    let mut fx = fixture_with_global(GLOBAL, &workspace(""));
+    fx.runtime = fx
+        .runtime
+        .with_automation_machine_identity(Some("hm_this_host".into()));
+    let task = fx.task(run_crew);
+    let run = fx.admit(&task, run_crew);
+    let failure = provider_failure_text(
+        ProviderFailureClass::Unavailable,
+        "claude",
+        "claude provider authentication failure (HTTP 401)",
+    );
+    let failure = account.map_or_else(
+        || failure.clone(),
+        |account| with_failed_account(&failure, account),
+    );
+    fx.fail(&run, &format!("step `review`: {failure}"));
+
+    let hold = fx.last_hold(&task);
+    assert_eq!(hold.class, ProviderFailureClass::Unavailable);
+    assert_eq!(hold.provider.as_deref(), Some("claude"));
+    assert_eq!(hold.account.as_deref(), account);
+    assert_eq!(hold.machine.as_deref(), Some("hm_this_host"));
+    assert_eq!(hold.excluded_crews, excluded);
+    assert!(
+        fx.admitted(&task, &[run_crew]),
+        "the run's healthy account can take the held task"
+    );
+
+    let store =
+        orbit_store::compose::provider_limit_store_from_store(fx.runtime.sqlite_store().unwrap());
+    let outages = store.provider_crew_outages(Utc::now()).unwrap();
+    let mut outage_crews = outages
+        .iter()
+        .map(|outage| outage.crew.as_str())
+        .collect::<Vec<_>>();
+    outage_crews.sort();
+    assert_eq!(
+        outage_crews, excluded,
+        "only the failing account has host outages"
+    );
+    for outage in &outages {
+        assert_eq!(outage.provider.as_deref(), Some("claude"));
+        assert_eq!(outage.run_id, run);
+        assert_eq!(
+            outage.until.timestamp_micros(),
+            hold.not_before.timestamp_micros()
+        );
+    }
+
+    // Remove the task hold from admission: later tasks must still avoid
+    // the failing account because its outage is stored on this host.
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for crew in ["opus", "sonnet", "opus-credits"] {
+        let later = fx.task(crew);
+        let admitted = fx.admitted(&later, &[crew]);
+        assert_eq!(
+            admitted,
+            !excluded.contains(&crew),
+            "later {crew} tasks avoid only the failing account: {:?}",
+            (!admitted).then(|| fx.exclusion(&later, &[crew]))
+        );
+    }
+}
+
 /// A hold stored before accounts were named carries no account and keeps
 /// excluding exactly the crews it lists, the credits crew included.
 fn a_hold_stored_before_accounts_were_named_applies_as_written() {
@@ -300,6 +385,8 @@ fn a_crew_budget_gates_the_crew_from_its_own_ledger_spend() {
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     crew_account_scenarios,
+    a_subscription_run_holds_only_its_failing_credits_activity,
+    a_credits_run_holds_only_its_failing_subscription_activity,
     a_usage_limit_holds_only_the_crews_of_the_failing_account,
     a_hold_stored_before_accounts_were_named_applies_as_written,
     a_default_login_reading_does_not_limit_a_crew_account,
