@@ -174,6 +174,11 @@ pub struct AutoTaskDefinition {
     /// not advanced past the last completed sweep's recorded cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_if_unchanged: Option<SkipIfUnchanged>,
+    /// Opt-in mint-time precondition: skip while no blocked task has a block
+    /// episode awaiting blocked-task triage. Which episodes qualify is the
+    /// host's rule; this only switches the check on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub skip_unless_blocked_candidates: bool,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -336,6 +341,10 @@ impl std::fmt::Display for DedupePolicy {
 
 const fn default_true() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 const fn default_task_type() -> TaskType {

@@ -312,6 +312,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -439,6 +440,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => true,
@@ -752,6 +754,7 @@ fn artifact_target<'a>(
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => {

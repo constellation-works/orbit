@@ -67,6 +67,16 @@ pub trait AutoTaskDispatch {
         definition: &AutoTaskDefinition,
         precondition: &SkipIfUnchanged,
     ) -> Result<ChangeProbe, OrbitError>;
+
+    /// Evidence for a `skip_unless_blocked_candidates` precondition: whether
+    /// any blocked task has a block episode awaiting triage at `now`. Hosts
+    /// that cannot answer report [`BlockedCandidateProbe::Unknown`] (or an
+    /// error) and the scheduler mints.
+    fn probe_blocked_candidates(
+        &self,
+        definition: &AutoTaskDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<BlockedCandidateProbe, OrbitError>;
 }
 
 /// What a host could establish about the integration branch since the last
@@ -87,8 +97,24 @@ pub enum ChangeProbe {
     Unknown { reason: String },
 }
 
+/// What a host could establish about blocked tasks awaiting triage. As with
+/// [`ChangeProbe`], only [`BlockedCandidateProbe::None`] suppresses a mint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockedCandidateProbe {
+    /// No block episode qualifies. `blocked` counts the blocked tasks read.
+    None { blocked: usize },
+    /// These tasks have a block episode awaiting triage.
+    Qualifying { task_ids: Vec<String> },
+    /// Nothing conclusive; the scheduler mints and records `reason`.
+    Unknown { reason: String },
+}
+
 /// Machine-readable reason token recorded for a suppressed mint.
 pub const UNCHANGED_SINCE_LAST_SWEEP: &str = "unchanged_since_last_sweep";
+
+/// Reason token recorded when `skip_unless_blocked_candidates` suppresses a
+/// mint.
+pub const NO_BLOCKED_CANDIDATES: &str = "no_blocked_candidates";
 
 /// Per-definition outcome of one scheduler pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,25 +392,10 @@ fn dry_run_definition(
                     ..skipped(definition, "dedupe_open")
                 });
             }
-            if let Some(precondition) = &definition.skip_if_unchanged
-                && let ChangeProbe::Unchanged {
-                    cursor: cursor_sha,
-                    tip,
-                    cursor_task_id,
-                } = probe(host, definition, precondition)
-            {
-                let reason = skip_reason(&AutoTaskSkipRecord {
-                    at: now.to_rfc3339(),
-                    slot: slot.clone(),
-                    reason: UNCHANGED_SINCE_LAST_SWEEP.to_string(),
-                    reference: precondition.reference.clone(),
-                    cursor_sha,
-                    tip_sha: tip,
-                    cursor_task_id,
-                });
+            if let Precondition::Skip(record) = preconditions(host, definition, &slot, now) {
                 return Ok(AutoTaskFireReport {
                     slot: Some(slot),
-                    ..skipped(definition, &reason)
+                    ..skipped(definition, &skip_reason(&record))
                 });
             }
             Ok(AutoTaskFireReport {
@@ -440,54 +451,39 @@ fn fire_locked(
                     ..skipped(definition, "dedupe_open")
                 });
             }
-            if let Some(precondition) = &definition.skip_if_unchanged {
-                match probe(host, definition, precondition) {
-                    ChangeProbe::Unchanged {
-                        cursor: cursor_sha,
-                        tip,
-                        cursor_task_id,
-                    } => {
-                        let record = AutoTaskSkipRecord {
-                            at: now.to_rfc3339(),
-                            slot: slot.clone(),
-                            reason: UNCHANGED_SINCE_LAST_SWEEP.to_string(),
-                            reference: precondition.reference.clone(),
-                            cursor_sha: cursor_sha.clone(),
-                            tip_sha: tip.clone(),
-                            cursor_task_id: cursor_task_id.clone(),
-                        };
-                        let reason = skip_reason(&record);
-                        // The slot is deliberately left unconsumed: the next
-                        // commit past the cursor fires the pending occurrence
-                        // immediately, exactly as `dedupe_open` does.
-                        session.state.definitions.insert(
-                            definition.name.clone(),
-                            AutoTaskCursor {
-                                last_skip: Some(record),
-                                ..cursor
-                            },
-                        );
-                        session.save()?;
-                        return Ok(AutoTaskFireReport {
-                            slot: Some(slot),
-                            ..skipped(definition, &reason)
-                        });
+            match preconditions(host, definition, &slot, now) {
+                Precondition::Skip(record) => {
+                    let reason = skip_reason(&record);
+                    // The slot is deliberately left unconsumed: the next
+                    // commit past the cursor, or the next qualifying block,
+                    // fires the pending occurrence immediately, exactly as
+                    // `dedupe_open` does.
+                    session.state.definitions.insert(
+                        definition.name.clone(),
+                        AutoTaskCursor {
+                            last_skip: Some(record),
+                            ..cursor
+                        },
+                    );
+                    session.save()?;
+                    Ok(AutoTaskFireReport {
+                        slot: Some(slot),
+                        ..skipped(definition, &reason)
+                    })
+                }
+                Precondition::Proceed => fire_slot(host, definition, session, cursor, slot, now),
+                // Fail open, and say why: an unanswerable precondition must
+                // never be the reason a sweep stops running.
+                Precondition::Inconclusive { token, reason } => {
+                    let mut report = fire_slot(host, definition, session, cursor, slot, now)?;
+                    if report.reason.is_none() {
+                        report.reason = Some(format!(
+                            "{token} precondition inconclusive; minted: {reason}"
+                        ));
                     }
-                    ChangeProbe::Changed { .. } => {}
-                    // Fail open, and say why: an unanswerable precondition
-                    // must never be the reason a sweep stops running.
-                    ChangeProbe::Unknown { reason } => {
-                        let mut report = fire_slot(host, definition, session, cursor, slot, now)?;
-                        if report.reason.is_none() {
-                            report.reason = Some(format!(
-                                "{UNCHANGED_SINCE_LAST_SWEEP} precondition inconclusive; minted: {reason}"
-                            ));
-                        }
-                        return Ok(report);
-                    }
+                    Ok(report)
                 }
             }
-            fire_slot(host, definition, session, cursor, slot, now)
         }
     }
 }
@@ -622,6 +618,87 @@ fn fire_slot(
     }
 }
 
+/// What a definition's mint-time preconditions decided for one due slot.
+enum Precondition {
+    /// None is configured, or every configured one found work.
+    Proceed,
+    /// A precondition found nothing to do.
+    Skip(AutoTaskSkipRecord),
+    /// A precondition could not answer; the fire mints anyway.
+    Inconclusive { token: &'static str, reason: String },
+}
+
+/// Evaluate every configured precondition. A conclusive skip from either
+/// suppresses the mint; an inconclusive one never does.
+fn preconditions(
+    host: &dyn AutoTaskDispatch,
+    definition: &AutoTaskDefinition,
+    slot: &str,
+    now: DateTime<Utc>,
+) -> Precondition {
+    let mut decision = Precondition::Proceed;
+    if let Some(precondition) = &definition.skip_if_unchanged {
+        match probe(host, definition, precondition) {
+            ChangeProbe::Unchanged {
+                cursor,
+                tip,
+                cursor_task_id,
+            } => {
+                return Precondition::Skip(AutoTaskSkipRecord {
+                    at: now.to_rfc3339(),
+                    slot: slot.to_string(),
+                    reason: UNCHANGED_SINCE_LAST_SWEEP.to_string(),
+                    reference: precondition.reference.clone(),
+                    cursor_sha: cursor,
+                    tip_sha: tip,
+                    cursor_task_id,
+                    detail: None,
+                });
+            }
+            ChangeProbe::Changed { .. } => {}
+            ChangeProbe::Unknown { reason } => {
+                decision = Precondition::Inconclusive {
+                    token: UNCHANGED_SINCE_LAST_SWEEP,
+                    reason,
+                };
+            }
+        }
+    }
+    if definition.skip_unless_blocked_candidates {
+        let probe = host
+            .probe_blocked_candidates(definition, now)
+            .unwrap_or_else(|error| BlockedCandidateProbe::Unknown {
+                reason: format!("probe failed: {error}"),
+            });
+        match probe {
+            BlockedCandidateProbe::None { blocked } => {
+                return Precondition::Skip(AutoTaskSkipRecord {
+                    at: now.to_rfc3339(),
+                    slot: slot.to_string(),
+                    reason: NO_BLOCKED_CANDIDATES.to_string(),
+                    reference: String::new(),
+                    cursor_sha: String::new(),
+                    tip_sha: String::new(),
+                    cursor_task_id: None,
+                    detail: Some(format!(
+                        "{blocked} blocked task(s) read; no block episode awaits triage"
+                    )),
+                });
+            }
+            BlockedCandidateProbe::Qualifying { .. } => {}
+            BlockedCandidateProbe::Unknown { reason } => {
+                if matches!(decision, Precondition::Proceed) {
+                    decision = Precondition::Inconclusive {
+                        token: NO_BLOCKED_CANDIDATES,
+                        reason,
+                    };
+                }
+            }
+        }
+    }
+    decision
+}
+
 /// Ask the host, folding a host-side error into the fail-open answer so a
 /// broken probe can never stop a definition from minting.
 fn probe(
@@ -637,8 +714,12 @@ fn probe(
     }
 }
 
-/// The audit row's reason: the token plus the two SHAs it was decided on.
+/// The audit row's reason: the token plus what it was decided on — the two
+/// SHAs for a branch comparison, the recorded detail otherwise.
 fn skip_reason(record: &AutoTaskSkipRecord) -> String {
+    if let Some(detail) = &record.detail {
+        return format!("{}: {detail}", record.reason);
+    }
     format!(
         "{}: {} tip {} is already covered by cursor {}{}",
         record.reason,

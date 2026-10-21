@@ -47,8 +47,9 @@ pub struct AutoTaskCursor {
     /// consumed-slot checkpoint so a retry can reconcile or refuse to remint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<AutoTaskPendingClaim>,
-    /// Most recent `skip_if_unchanged` decision, so an operator surface can
-    /// explain why a due definition minted nothing. Cleared by the next fire.
+    /// Most recent mint-time precondition skip (`skip_if_unchanged` or
+    /// `skip_unless_blocked_candidates`), so an operator surface can explain
+    /// why a due definition minted nothing. Cleared by the next fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_skip: Option<AutoTaskSkipRecord>,
 }
@@ -60,18 +61,27 @@ pub struct AutoTaskSkipRecord {
     pub at: String,
     /// Scheduled slot that was left unconsumed.
     pub slot: String,
-    /// Machine-readable reason token, e.g. `unchanged_since_last_sweep`.
+    /// Machine-readable reason token: `unchanged_since_last_sweep` or
+    /// `no_blocked_candidates`.
     pub reason: String,
-    /// Branch whose tip was compared.
-    #[serde(rename = "ref")]
+    /// Branch whose tip was compared. Empty for a skip no branch decided.
+    #[serde(rename = "ref", default, skip_serializing_if = "String::is_empty")]
     pub reference: String,
-    /// Cursor commit recorded by the last completed sweep.
+    /// Cursor commit recorded by the last completed sweep. Empty for a skip
+    /// no branch decided.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cursor_sha: String,
-    /// Tip commit of `ref` at the time of the skip.
+    /// Tip commit of `ref` at the time of the skip. Empty for a skip no
+    /// branch decided.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tip_sha: String,
     /// Sweep task the cursor was read from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_task_id: Option<String>,
+    /// What a precondition with no branch to compare decided on, such as how
+    /// many blocked tasks it read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// In-flight admission evidence for one scheduled slot.

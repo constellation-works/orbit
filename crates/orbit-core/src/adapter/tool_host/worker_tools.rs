@@ -74,6 +74,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -305,6 +306,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::Requeue
+            | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject

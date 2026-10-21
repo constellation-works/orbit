@@ -185,10 +185,11 @@ fn prepare(
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             Ok(ListView::default())
         }
-        // Reject and delete have no command line.
+        // Block triage, reject and delete have no command line.
         TaskVerb::LocksList
         | TaskVerb::Eligible
         | TaskVerb::Lint
+        | TaskVerb::BlockTriage
         | TaskVerb::Reject
         | TaskVerb::Delete => Ok(ListView::default()),
     }
@@ -414,7 +415,7 @@ fn render(
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
-        TaskVerb::RetryHandoff | TaskVerb::Reject | TaskVerb::Delete => {
+        TaskVerb::RetryHandoff | TaskVerb::BlockTriage | TaskVerb::Reject | TaskVerb::Delete => {
             Ok(Payload::document(value).into())
         }
     }

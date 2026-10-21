@@ -401,8 +401,20 @@ impl OrbitRuntime {
         })
     }
 
-    /// Final-recovery requeues recorded in the trailing `window`.
-    fn recent_requeues(&self, task_id: &str, window: Duration) -> Result<usize, OrbitError> {
+    /// Final-recovery requeues recorded in the trailing `window`: the one
+    /// count the requeue bound reads, shared by final recovery and the
+    /// blocked-task triage. A caller that cannot read it must not requeue.
+    pub(crate) fn recent_requeues(
+        &self,
+        task_id: &str,
+        window: Duration,
+    ) -> Result<usize, OrbitError> {
+        #[cfg(test)]
+        if FAIL_REQUEUE_COUNT_READ.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Store(
+                "injected requeue count read failure".to_string(),
+            ));
+        }
         let since = Utc::now() - window;
         Ok(self
             .get_task_history(task_id)?
@@ -505,6 +517,7 @@ impl OrbitRuntime {
 #[cfg(test)]
 thread_local! {
     pub(in super::super) static FAIL_SIDE_EFFECT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(in super::super) static FAIL_REQUEUE_COUNT_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Plan {

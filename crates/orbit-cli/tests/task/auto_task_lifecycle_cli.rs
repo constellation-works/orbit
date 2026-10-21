@@ -1097,6 +1097,24 @@ fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
             }
         }
     }
+    // The blocked-task triage's precondition is what keeps it from minting
+    // an empty task every hour; `show` must say it is there.
+    let triage = fixture.json(&["auto-task", "show", "blocked-task-triage", "--json"]);
+    assert_eq!(triage["skip_unless_blocked_candidates"], true);
+    let shown = fixture
+        .command(&["auto-task", "show", "blocked-task-triage"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown = String::from_utf8(shown).unwrap();
+    assert!(
+        shown.lines().any(|line| line
+            .trim_start()
+            .starts_with("skip_unless_blocked_candidates:")),
+        "{shown}"
+    );
     assert!(
         deliveries > 0 && preconditions > 0 && tool_calls > 0 && run_reads > 0,
         "the seeded defaults must exercise every check: {deliveries} deliveries, \

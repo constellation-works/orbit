@@ -34,6 +34,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
         | TaskVerb::ArtifactGet
         | TaskVerb::ReviewReset
         | TaskVerb::Requeue
+        | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
         | TaskVerb::RetryHandoff
         | TaskVerb::Reject

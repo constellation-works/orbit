@@ -1,5 +1,5 @@
 //! The task review and lifecycle verbs: `reconcile_review`, `review_reset`,
-//! `requeue`, `retry_handoff`, `reject` and `delete`.
+//! `requeue`, `block_triage`, `retry_handoff`, `reject` and `delete`.
 //!
 //! The two review verbs and `requeue` are operator commands on MCP and on the CLI, and
 //! refuse an undeclared field, as their hand-written tools did. A managed
@@ -278,6 +278,66 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
             "Discard the published or kept candidate and rerun from scratch",
         ),
     ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
+    EnumValue::plain("candidates"),
+    EnumValue::plain("requeue"),
+    EnumValue::plain("propose"),
+    EnumValue::plain("report"),
+];
+
+/// Read the block episodes awaiting triage, or record one triage decision on
+/// a blocked task: the blocked-task triage's agent surface.
+pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
+    verb: TaskVerb::BlockTriage,
+    cli_path: &[],
+    tool_name: "orbit.task.block_triage",
+    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    // `candidates` only reads, but the decisions write.
+    effect: Effect::Write,
+    params: &[
+        &[
+            WORKSPACE_PARAM,
+            required(mcp_only(
+                "action",
+                ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
+                "candidates, requeue, propose, or report",
+            )),
+            mcp_only(
+                "id",
+                ParamType::String,
+                "requeue, propose, report: the blocked task",
+            ),
+            free_text(mcp_only(
+                "blocker",
+                ParamType::String,
+                "requeue, propose, report: the escalation reason, quoted in the comment",
+            )),
+            free_text(mcp_only(
+                "reason",
+                ParamType::String,
+                "requeue: the repair applied and why the task can run again; report: the specific action only a human can take",
+            )),
+            mcp_only(
+                "options",
+                ParamType::Array,
+                "propose: two or three {summary, consequences, replacement} objects; replacement is the exact text for each changed description section or criterion",
+            ),
+            mcp_only(
+                "recommended",
+                ParamType::Integer,
+                "propose: 1-based index of the recommended option",
+            ),
+        ],
+        IDENTITY_PARAMS,
+    ],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,

@@ -553,6 +553,7 @@ fn definition_json(
                 "cursor_sha": skip.cursor_sha,
                 "tip_sha": skip.tip_sha,
                 "cursor_task_id": skip.cursor_task_id,
+                "detail": skip.detail,
             })),
         })),
         "last_minted_task_id": last_minted_task_id,

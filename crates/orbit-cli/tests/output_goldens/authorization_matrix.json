@@ -892,6 +892,17 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.task.block_triage",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.task.delete",
     "required_any": [
       "operator"

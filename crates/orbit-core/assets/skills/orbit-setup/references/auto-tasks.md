@@ -112,6 +112,18 @@ The shipped `code-review`, `qa-sweep` and `qa-full-sweep` defaults carry the
 block against the workspace's base branch. Delivery-triggered definitions do not need it — they
 never fire on a quiet tree.
 
+## Skipping a tick when nothing is blocked
+
+`skip_unless_blocked_candidates: true` — also a definition-file field — mints
+only when at least one blocked task's current block episode awaits triage,
+under the rule the [blocked-task triage](automation.md#blocked-task-triage)
+applies. Otherwise the tick skips with reason `no_blocked_candidates` and a
+detail naming how many blocked tasks it read. The skip is reported and kept
+on the cursor like a `skip_if_unchanged` skip, and `orbit auto-task show
+<name>` displays both the precondition and the last skip. It fails open too:
+a probe that cannot read the blocked tasks mints and records why. The
+shipped `blocked-task-triage` default carries it.
+
 ## Managing definitions
 
 ```bash
@@ -227,9 +239,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The ten seeded definitions
+## The eleven seeded definitions
 
-`orbit workspace init` seeds all ten, disabled, except any you deleted (see
+`orbit workspace init` seeds all eleven, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -313,6 +325,14 @@ plugin being removed.
   `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
+- **`blocked-task-triage`** (`medium`) — hourly, minted only when a block
+  episode awaits triage (`skip_unless_blocked_candidates`). Reads each
+  escalated block once and records one disposition through
+  `orbit.task.block_triage`: a mechanical block is requeued within the
+  final-recovery requeue bound it shares with final recovery, a decision
+  block gets one comment proposing two or three options with replacement
+  text, and a human-only block is reported. Tagged `no-diff-expected`; it
+  holds no operator-only tool. → [automation.md](automation.md#blocked-task-triage)
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
   evidence, and on an owner the failure and release settlements its followers'
   claimed leaves sent (`orbit run settlements --no-reconcile`), for failures

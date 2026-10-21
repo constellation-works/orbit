@@ -78,6 +78,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.add",
             "orbit.task.artifact.get",
             "orbit.task.artifact.put",
+            "orbit.task.block_triage",
             "orbit.task.eligible",
             "orbit.task.list",
             "orbit.task.reconcile_review",

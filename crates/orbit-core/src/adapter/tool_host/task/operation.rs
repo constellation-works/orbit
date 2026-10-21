@@ -101,6 +101,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
             let response = runtime.requeue_blocked_task(&id, &reason, discard)?;
             Ok((response, Some(id)))
         }
+        TaskVerb::BlockTriage => block_triage(runtime, caller, &input),
         TaskVerb::ReconcileReview => reviewed(
             crate::application::review::reconciliation::reconcile_review(
                 runtime,
@@ -159,6 +160,98 @@ fn reviewed(value: Result<Value, OrbitError>) -> Result<(Value, Option<String>),
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     Ok((value, id))
+}
+
+/// `orbit.task.block_triage`: the candidate list, or one triage decision.
+fn block_triage(
+    runtime: &OrbitRuntime,
+    caller: ToolCaller<'_>,
+    input: &OperationInput,
+) -> Result<(Value, Option<String>), OrbitError> {
+    use crate::application::task::{BlockTriageDecision, BlockTriageRequest, TriageOption};
+
+    let action = input.required_string("action")?;
+    if action == "candidates" {
+        return Ok((
+            runtime.blocked_triage_candidates_json(chrono::Utc::now())?,
+            None,
+        ));
+    }
+    let id = input.required_string("id")?;
+    let reason = || {
+        input.optional_string("reason").and_then(|reason| {
+            reason.ok_or_else(|| {
+                OrbitError::InvalidInput(format!("block triage `{action}` needs `reason`"))
+            })
+        })
+    };
+    let decision = match action.as_str() {
+        "requeue" => BlockTriageDecision::Requeue { repair: reason()? },
+        "report" => BlockTriageDecision::Report {
+            human_action: reason()?,
+        },
+        "propose" => {
+            let options = input
+                .as_value()
+                .get("options")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "block triage `propose` needs `options`: two or three {summary, consequences, replacement} objects"
+                            .into(),
+                    )
+                })?
+                .iter()
+                .map(|option| {
+                    let text = |key: &str| {
+                        option
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .ok_or_else(|| {
+                                OrbitError::InvalidInput(format!(
+                                    "every proposal option needs a string `{key}`"
+                                ))
+                            })
+                    };
+                    Ok(TriageOption {
+                        summary: text("summary")?,
+                        consequences: text("consequences")?,
+                        replacement: text("replacement")?,
+                    })
+                })
+                .collect::<Result<Vec<_>, OrbitError>>()?;
+            let recommended = input
+                .as_value()
+                .get("recommended")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "block triage `propose` needs `recommended`: the 1-based option index"
+                            .into(),
+                    )
+                })?;
+            BlockTriageDecision::Propose {
+                options,
+                recommended: usize::try_from(recommended).unwrap_or(usize::MAX),
+            }
+        }
+        other => {
+            return Err(OrbitError::InvalidInput(format!(
+                "block triage action `{other}` is not one of candidates, requeue, propose or report"
+            )));
+        }
+    };
+    let requested_by = runtime
+        .actor()
+        .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())?;
+    let response = runtime.record_block_triage(&BlockTriageRequest {
+        task_id: id.clone(),
+        blocker: input.optional_string("blocker")?.unwrap_or_default(),
+        decision,
+        requested_by,
+    })?;
+    Ok((response, Some(id)))
 }
 
 /// `orbit.task.reject`.
