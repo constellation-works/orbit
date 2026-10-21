@@ -309,8 +309,8 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 **Implemented (warn mode)** on friction, auto-task, drain, workspace claim,
 search, task artifacts and locks, the task read verbs, and the workflow-run
 tools other than `orbit.workflow.auto`: unknown fields are reported, not yet
-refused. The task writes, the operator review, requeue and retry tools
-(`reconcile_review`, `review_reset`, `requeue`, `retry_handoff`) and
+refused. The task writes, the operator review, triage, requeue and retry tools
+(`reconcile_review`, `review_reset`, `requeue`, `block_triage`, `retry_handoff`) and
 `orbit.workflow.auto` declare `unknown_fields: Refuse`; the inactive `reject`
 and `delete` warn. The task writes refuse because `orbit.task.add` and
 `orbit.task.update` refused unknown fields before they migrated; the refusal
