@@ -383,8 +383,8 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .fleet-host { min-width: 0; }
 .fleet-host-name {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 4px;
-  padding-bottom: 4px; border-bottom: 1px solid var(--hair); color: var(--fg-dim);
-  font: 600 11px var(--font-mono); letter-spacing: 0.02em;
+  padding-bottom: 4px; border-bottom: 1px solid var(--hair); color: var(--fg-soft);
+  font: 600 13px/1.3 var(--font-sans); letter-spacing: 0;
 }
 .fleet-host-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .fleet-host-count { flex: 0 0 auto; color: var(--fg-mute); font: 400 11px var(--font-sans); }
