@@ -690,13 +690,15 @@ older binaries must not reinterpret schema v2 as time-only work.
 Implement tests at the shared domain/store boundaries using existing sibling
 test layouts and fake clocks/providers; add no generic harness. Include end-to-end
 fixtures exercising actual job/task creation and crash recovery, not only due math.
-Required repository gates are `make ci-fast`, `make ci-test-affected`,
-`make ci-lint` and `make goldens`; `make ci-fast` runs no Rust tests, while
-the affected-test gate covers changed crates and their workspace dependents
-([validation and CI](../../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
-is the PR merge gate. Documentation validation checks source/relative links
-(`scripts/check-doc-links.py`) and index generation
-(`scripts/generate-doc-indexes.sh --check`); metadata, YAML consistency and
+Follow the current [workspace gate guidance](../../../CLAUDE.md#gates) for
+delivery validation: run focused behavior checks for the changed contract,
+Clippy for changed crates, and `make goldens` when CLI help, MCP text, or
+another golden surface changes. Whole-workspace commands are not blanket local
+pre-handoff gates; the delivery pipeline owns required PR checks and any
+configured final validation. Documentation validation uses
+`python3 scripts/check-doc-links.py`; when an indexed row changes, regenerate
+with `make docs-index` and verify with
+`scripts/generate-doc-indexes.sh --check`. Metadata, YAML consistency and
 timeline invariants are not yet automated.
 
 Extend existing routine/auto-task/task/run/audit projections with effective trigger
