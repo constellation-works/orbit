@@ -258,8 +258,8 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
 }
 
 /// Coverage evidence is read only after its action stops, when nobody can fix
-/// it, so a file that does not parse as the schema is refused at put with the
-/// exact parse error and stores nothing; a well-formed file is accepted.
+/// it, so malformed coverage must name the field, type and template recovery
+/// at put and store nothing; well-formed evidence bytes remain unchanged.
 fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
     use crate::admission_audit::tool_support::run_tool_as_operator;
 
@@ -289,24 +289,9 @@ fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
         result
     };
 
-    let error = put(r#"{"schema_version":1,"batch_id":{}}"#).expect_err("malformed evidence");
-    let orbit_common::OrbitError::InvalidInput(message) = error else {
-        panic!("expected invalid input, got {error}");
-    };
-    assert!(
-        message.contains("invalid type: map, expected a string at line 1 column"),
-        "the caller needs serde's exact error to fix the file: {message}"
-    );
-    assert!(
-        runtime
-            .get_task_artifact(&task.id, "automation-coverage.json")
-            .expect("read artifact")
-            .is_none()
-    );
-
     let revision = json!({"commit": "c1", "tree": "t1"});
-    put(&json!({
-        "schema_version": 1,
+    let evidence = json!({
+        "schema_version": 2,
         "batch_id": "batch",
         "consumer": "consumer",
         "epoch": "epoch",
@@ -319,11 +304,87 @@ fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
         "examined_commits": ["c1"],
         "examined_deliveries": ["pr:owner/repo:1"],
         "examination_complete": true,
+        "delivery_examinations": [{
+            "delivery": "pr:owner/repo:1",
+            "examined_paths": ["src/lib.rs"],
+            "skipped_paths": [],
+            "verdict": {"findings": ["finding-id"]},
+            "rationale": "Reviewed the complete changed path and filed the observed defect.",
+        }],
         "checks": [{"subject": "range", "method": "review", "observation": "examined"}],
-        "findings": [],
-    })
-    .to_string())
-    .expect("well-formed evidence is stored");
+        "findings": ["finding-id"],
+    });
+    // Audit excerpts do not reveal which string contained a map. Exercise
+    // identity, list and nested check fields so the next refusal records it.
+    for (pointer, field) in [
+        ("/batch_id", "batch_id"),
+        ("/examined_commits/0", "examined_commits[0]"),
+        ("/examined_deliveries/0", "examined_deliveries[0]"),
+        ("/checks/0/observation", "checks[0].observation"),
+        ("/findings/0", "findings[0]"),
+        (
+            "/delivery_examinations/0/verdict/findings/0",
+            "delivery_examinations[0].verdict.findings[0]",
+        ),
+    ] {
+        let mut malformed = evidence.clone();
+        *malformed.pointer_mut(pointer).expect("fixture field") = json!({"id": "wrong shape"});
+        let error = put(&malformed.to_string()).expect_err("map in a string field");
+        let orbit_common::OrbitError::InvalidInput(message) = error else {
+            panic!("expected invalid input, got {error}");
+        };
+        for expected in [
+            field,
+            "invalid type: map, expected a string",
+            "assigned task",
+            "evidence template",
+            "re-put",
+        ] {
+            assert!(
+                message.contains(expected),
+                "artifact refusal must identify the field, type and recovery ({expected}): {message}"
+            );
+        }
+        assert!(
+            runtime
+                .get_task_artifact(&task.id, "automation-coverage.json")
+                .expect("read artifact")
+                .is_none(),
+            "invalid coverage must be refused before attachment: {field}"
+        );
+    }
+    // Wrapping serde must preserve unknown-field and trailing-input refusals.
+    let mut unknown = evidence.clone();
+    unknown["extra"] = json!(true);
+    for malformed in [unknown.to_string(), format!("{evidence} {{}}"), "{".into()] {
+        put(&malformed).expect_err("strict JSON evidence parsing");
+        assert!(
+            runtime
+                .get_task_artifact(&task.id, "automation-coverage.json")
+                .expect("read artifact")
+                .is_none()
+        );
+    }
+    let content = evidence.to_string();
+    put(&content).expect("well-formed completed evidence is stored");
+    assert_eq!(
+        runtime
+            .get_task_artifact(&task.id, "automation-coverage.json")
+            .expect("read artifact")
+            .expect("accepted coverage")
+            .content,
+        content.as_bytes(),
+        "valid evidence bytes must be preserved unchanged"
+    );
+    // Old receipts still decode; acceptance/settlement owns schema-version
+    // policy, not the artifact parser.
+    let mut legacy = evidence;
+    legacy["schema_version"] = json!(1);
+    legacy
+        .as_object_mut()
+        .expect("object")
+        .remove("delivery_examinations");
+    put(&legacy.to_string()).expect("legacy evidence remains parseable");
 }
 
 // Related boundary scenarios share the isolated table fixture.

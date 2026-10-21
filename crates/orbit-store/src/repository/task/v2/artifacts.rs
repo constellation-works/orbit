@@ -249,12 +249,21 @@ impl TaskV2Store {
             // Settlement reads these bytes only after the action stops, when
             // nobody can fix them; refusing here hands the submitter the
             // exact error while its run can still re-put the file.
-            if artifact.path == COVERAGE_ARTIFACT
-                && let Err(error) = serde_json::from_slice::<CoverageEvidence>(&artifact.content)
-            {
-                return Err(OrbitError::InvalidInput(format!(
-                    "{COVERAGE_ARTIFACT} is not valid coverage evidence: {error}"
-                )));
+            if artifact.path == COVERAGE_ARTIFACT {
+                let invalid_coverage = |error| {
+                    OrbitError::InvalidInput(format!(
+                        "{COVERAGE_ARTIFACT} is not valid coverage evidence: {error}; \
+                         correct the named field using the assigned task's evidence template \
+                         (preserve its version and frozen identity), then re-put the corrected file"
+                    ))
+                };
+                let mut decoder = serde_json::Deserializer::from_slice(&artifact.content);
+                serde_path_to_error::deserialize::<_, CoverageEvidence>(&mut decoder)
+                    .map_err(|error| invalid_coverage(error.to_string()))?;
+                // Like from_slice, reject anything after the one JSON value.
+                decoder
+                    .end()
+                    .map_err(|error| invalid_coverage(error.to_string()))?;
             }
         }
         if let Some(artifact) = artifacts.iter().find(|a| a.path == COVERAGE_ARTIFACT)
