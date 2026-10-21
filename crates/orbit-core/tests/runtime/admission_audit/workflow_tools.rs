@@ -1,11 +1,16 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{STABLE_TOKEN_PREFIX, current_pid_namespace};
+use orbit_engine::RuntimeHost;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::tool_support::{managed_tool_env_guard, run_tool_as_operator, test_runtime};
 use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
+use orbit_tools::ToolContext;
+use orbit_types::policy::Role;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
+use std::collections::BTreeSet;
 
 /// The default-named ship job. Loaded from the *global* orbit root, so a
 /// fixture has to seed it there rather than in the workspace's `.orbit`.
@@ -159,6 +164,29 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
         json!({"id": source_run_id}),
     ));
     assert!(resume.contains("managed runs cannot dispatch"), "{resume}");
+
+    let managed_show = runtime.run_tool_with_context_and_role(
+        "orbit.workflow.run.show",
+        json!({"id": source_run_id}),
+        Role::Admin,
+        ToolContext {
+            session_context: ToolSessionContext {
+                effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                ..ToolSessionContext::default()
+            },
+            ..ToolContext::default()
+        },
+    );
+    assert!(
+        matches!(managed_show, Err(OrbitError::CapabilityDenied(_))),
+        "{managed_show:?}"
+    );
+    run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": source_run_id}),
+    )
+    .expect("operator run show remains available");
 
     // The denial is the guard's, so nothing was dispatched: the seeded source
     // run is still the only run in the workspace.
