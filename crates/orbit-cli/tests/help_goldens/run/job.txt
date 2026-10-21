@@ -11,13 +11,13 @@ Options:
           Input key=value pairs passed to all job steps (repeatable). Example: --input task_id=T123 --input base=main
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --wait
           Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --timeout-seconds <TIMEOUT_SECONDS>
           Wait deadline in seconds (0..=21600); requires --wait

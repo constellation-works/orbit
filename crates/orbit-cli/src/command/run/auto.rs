@@ -18,219 +18,64 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
     after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --for 2h --review before-landing\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
-                  The drain re-lists the whole backlog every pass.\n\
-                  Owner/local drains count every in-flight child against `--concurrency` and\n\
-                  refill a slot as soon as its child finishes.\n\
-                  A replica's pull drain uses the same value as an admission ceiling, with\n\
-                  bounded before-landing review credit. Before each claim, it counts\n\
-                  `occupied - min(reviewing, N)` against N.\n\
-                  A leaf becomes reviewing after the owner's persisted before-landing\n\
-                  admission has `applies=true`; validation and publishing before that\n\
-                  boundary count as implementing. Later review revalidation and handoff\n\
-                  remain reviewing.\n\
-                  The credit is capped at N, but reviewing leaves can exceed N as\n\
-                  replacements reach review.\n\
-                  With an unchanged N and no pre-existing excess, pull occupancy stays at\n\
-                  most 2N and implementing leaves at most N.\n\
-                  Lowering N preserves running leaves, so existing excess can remain\n\
-                  temporarily.\n\
-                  See `orbit run show` for claimed leaves by stage. Review rebuilds still\n\
-                  compete for repository build-budget slots.\n\n\
-                  `--complete` is blanket authorization: it applies to every task the drain\n\
-                  admits for the whole window, including work that reaches the backlog after\n\
-                  the run starts. The drain is asynchronous, so this prints the durable run ID\n\
-                  and returns without knowing the eventual outcome.\n\n\
-                  `--auto-fix` lets the drain repair the pull requests it opens. Each one is\n\
-                  watched for merge blockers: a required check that fails on its head, or a\n\
-                  conflict with its base, goes to the run's own repair pipeline, which commits\n\
-                  the repair, reruns required validation and pushes it to the same pull\n\
-                  request, then watches the new head. Pending checks are waited on. Review\n\
-                  requirements, unreadable or non-workflow checks, runner and network failures,\n\
-                  and other administrative blockers stop without an agent. Repair crews come\n\
-                  from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`,\n\
-                  under `--allow-crew` and the host's provider limits. Each pull request gets\n\
-                  at most 3 repairs in total, and one per head and blocker, across retries and\n\
-                  restarts. `--auto-fix` never merges:\n\
-                  without `--complete` the tasks stay in `review` once the pull request is\n\
-                  mergeable; with it, completion merges as usual. Pull requests only; local\n\
-                  delivery is unaffected.\n\n\
-                  `--complete` never approves `proposed` work; `--approve-proposed` does.\n\
-                  With it, the drain pilots the qualifying proposed tasks (tagged\n\
-                  `no-diff-expected`, or with context files and an assessed complexity) in\n\
-                  the background, one batch at a time, and approves each one the pilot\n\
-                  verifies: no duplicate, already-landed, conflict or warning finding. That\n\
-                  includes tasks filed after the window opens. Backlog work keeps starting\n\
-                  while a pilot runs, and the pass that sees it finish admits what it\n\
-                  approved. Each approval's history note names the drain run. Other tasks stay proposed; `orbit run show` and\n\
-                  `orbit run readiness` count the approvals and give each hold's reason.\n\
-                  A task tagged `no-auto-approve` is never approved automatically; it is held\n\
-                  with that reason until a human approves it.\n\
-                  Approval does not bypass `--allow-crew` or the complexity pools.\n\n\
-                  `--review` adds a second-agent review before landing to every task this\n\
-                  window admits, when workspace policy applies none. It can only add review:\n\
-                  the layer `review.timing` already applies is accepted unchanged, and the\n\
-                  other layer, a workspace that sets neither\n\
-                  `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`,\n\
-                  a workspace that delivers locally and `--pull` are refused before the drain\n\
-                  starts. With it, a backlog task routed to local delivery is held, not started.\n\n\
-                  Complexity pools select only for tasks without an explicit crew.\n\
-                  The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
-                  Each CLI pool replaces its matching workflow pool for this drain.\n\
-                  Empty pools and unset complexity use the existing default crew chain.\n\
-                  Selections are recorded at admission and retained on retries/resume.\n\
-                  Pools do not restrict manual crew choices.\n\n\
-                  `--allow-crew` restricts this one run to the named crews, for its window\n\
-                  only. It edits no configuration and reassigns nothing: a backlog task whose\n\
-                  crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
-                  names it. To actually move that work, reassign its crew yourself. Tasks a\n\
-                  different invocation already has in flight keep running.\n\n\
-                  With `--pull`, `--allow-crew` limits the crews this replica declares to the\n\
-                  owner for the window, so the owner never hands it a task on another crew;\n\
-                  that work stays in the owner's backlog. The owner's before-PR review crew is\n\
-                  not restricted by it, but must still run here.\n\n\
-                  `--pull <SELECTOR>` runs on a replica checkout instead. The owner named by\n\
-                  the host-qualified selector orders the work and admits one claim at a\n\
-                  time; each claim runs here as a leaf that ends at a pull request handed\n\
-                  back to the owner, which keeps landing authority. The selector must name\n\
-                  this replica's own owner and workspace, and the owner's probe must admit\n\
-                  this executor, before anything is submitted. Without `--for` (or with\n\
-                  `--for 0s`) it makes one admission pass, claiming up to `--concurrency`\n\
-                  tasks, and requests no replacements. The drain keeps settling its\n\
-                  claims with the owner after the window closes, until none is left. Each\n\
-                  leaf also delivers its own handoff or failure when it ends, so a leaf\n\
-                  still settles if its drain was stopped or cancelled.\n\n\
-                  `--stop` ends new admissions for this workspace's active auto coordinator.\n\
-                  You do not need a run ID. Already admitted workers keep running under the\n\
-                  completion authority they were started with; this is not cancellation.\n\
-                  To cancel those workers, `orbit run cancel <RUN_ID> --confirm` each child.\n\
-                  On a replica, `--stop` also delivers every pull settlement still recorded\n\
-                  for any owner, and ends unlaunched claims that no running pull drain will\n\
-                  carry, so it is also how to flush settlements an earlier, cancelled drain\n\
-                  left behind. Otherwise a second `--stop`, or `--stop` with no active\n\
-                  coordinator, is a no-op.\n\n\
-                  Inspect submitted runs with `orbit run history -j workspace_auto_pipeline` and\n\
-                  `orbit run show <RUN_ID>`."
+                  Prints the run ID and returns; follow it with `orbit run show <RUN_ID>`.\n\
+                  Run-wide flags cover every task the window admits, even ones filed later.\n\
+                  Details: the orbit-orchestrate skill, references/orchestration.md."
 )]
 pub struct AutoCommand {
-    /// How long to keep draining, e.g. `30m`, `2h`. Without it, or with
-    /// `0s`, the run makes one admission pass and admits nothing more. The
-    /// window bounds only the start of new work: a task already being shipped
-    /// when it expires still finishes. `orbit run extend` lengthens a running
-    /// drain's window in place.
+    /// How long to keep admitting work, e.g. `30m`, `2h` (default: one pass).
     #[arg(long = "for", value_name = "DURATION")]
     pub for_duration: Option<String>,
-    /// Admission ceiling (default 5). Owner/local drains count every in-flight
-    /// child; pull drains also apply the bounded before-landing review credit
-    /// described below.
+    /// Maximum tasks in flight (default 5).
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
-    /// Forecast admission mode for this local drain: off, shadow or enforce.
-    /// Omitted, follows machine.auto_concurrency.mode on each admission pass.
-    /// Explicit overrides survive restart/resume. Host thresholds and provider
-    /// limits refresh next pass; invalid config keeps the previous policy.
-    /// Pull drains inherit their executor host mode and refuse this override.
+    /// Forecast admission mode (default: `machine.auto_concurrency.mode`).
     #[arg(long, value_name = "MODE", value_parser = ["off", "shadow", "enforce"])]
     pub auto_concurrency: Option<String>,
-    /// Authorize this drain to finish delivery and move the tasks it ships to
-    /// `done`, instead of leaving them in `review` for a separate approval.
-    /// This is blanket authorization for every task the drain admits during its
-    /// whole window, not just the backlog visible right now. Off by default.
-    /// It does not approve `proposed` work; `--approve-proposed` does that.
+    /// Land shipped tasks and mark them `done` instead of leaving them in `review`.
     #[arg(long)]
     pub complete: bool,
-    /// Approve qualifying `proposed` tasks into the backlog on every pass of
-    /// this drain, including tasks filed while the window is open. A task
-    /// qualifies with the `no-diff-expected` tag, or with context files and
-    /// an assessed complexity. It must then pass task-pilot verification:
-    /// no duplicate, already-landed, conflict or warning finding. Tasks that
-    /// fail, and tasks tagged `no-auto-approve`, stay proposed, and the drain
-    /// reports why. Off by default.
+    /// Approve `proposed` tasks that pass task-pilot verification.
     #[arg(long)]
     pub approve_proposed: bool,
-    /// Repair the pull requests this drain opens when a required check fails
-    /// on their head or their branch conflicts with its base: the run's
-    /// repair pipeline fixes, validates and pushes the repair, then watches
-    /// the new head. Each pass also hands such an Orbit pull request whose
-    /// task no run is delivering any more back to its delivery's completion
-    /// step for a repair; operator holds and `no-auto-approve` tasks are left
-    /// alone. Repair crews come from `workflow.purpose_crews.auto_fix`, else
-    /// `workflow.low_complexity_crews`. This never merges; `--complete` still
-    /// decides that. Off by default.
+    /// Repair failing checks and conflicts on the pull requests this drain opens.
     #[arg(long)]
     pub auto_fix: bool,
-    /// Add this review layer before landing to the window when workspace
-    /// policy applies none; every task it admits inherits it. `before-pr`
-    /// holds PR creation for a reviewer, `before-landing` reviews the open PR
-    /// before it lands. The layer workspace policy already applies is
-    /// accepted unchanged; the other one is refused, as are a workspace that
-    /// sets neither `workflow.purpose_crews.pre_landing_review` nor
-    /// `workflow.purpose_crews.review`, local delivery and `--pull` (the owner
-    /// decides the review of its claims). Omitted, workspace policy decides.
+    /// Add a review layer before landing when workspace policy has none.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
-    /// Restrict this run to these configured crews, e.g. when a provider is
-    /// unavailable or its budget is spent. Repeatable and comma-separated.
-    /// Every name must be configured here; an unknown or empty one fails
-    /// before anything is dispatched. Omitted, the drain runs every crew, as
-    /// before. This is scoped to this run's window only — no workspace
-    /// configuration is changed, no task is reassigned, and nothing another
-    /// invocation is already running is cancelled. With `--pull`, only tasks
-    /// on these crews are claimed from the owner.
+    /// Start only tasks on these crews (repeatable, comma-separated).
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Require a systemd user scope for the coordinator and every leaf worker
-    /// it starts. Treats machine.worker_containment as strict for this drain.
+    /// Require a systemd user scope for the coordinator and every worker.
     #[arg(long)]
     pub strict_worker_containment: bool,
-    /// Random crew pool for unassigned low-complexity tasks. Entries are
-    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
-    /// bare or all weighted. Overrides the matching workflow pool; pass the
-    /// flag with no names to disable it.
+    /// Crew pool for unassigned low-complexity tasks (`crew` or `crew:weight`).
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub low_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned medium-complexity tasks. Entries are
-    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
-    /// bare or all weighted. Overrides the matching workflow pool; pass the
-    /// flag with no names to disable it.
+    /// Crew pool for unassigned medium-complexity tasks (`crew` or `crew:weight`).
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub medium_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned hard-complexity tasks. Entries are
-    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
-    /// bare or all weighted. Overrides the matching workflow pool; pass the
-    /// flag with no names to disable it.
+    /// Crew pool for unassigned hard-complexity tasks (`crew` or `crew:weight`).
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub hard_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned xhard-complexity tasks, the reserved
-    /// top tier. Entries are `crew` or `crew:weight` (relative, non-negative
-    /// whole numbers), all bare or all weighted. Overrides the matching
-    /// workflow pool; pass the flag with no names to disable it.
+    /// Crew pool for unassigned xhard-complexity tasks (`crew` or `crew:weight`).
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub xhard_complexity_crews: Option<Vec<String>>,
-    /// Pull from this owner instead of draining a local backlog. Takes the
-    /// owner's host-qualified selector from federated discovery and runs only
-    /// on that owner's replica checkout. Pulled work always stops at a handoff
-    /// the owner lands; `--complete`, `--auto-fix` and the complexity pools do
-    /// not apply, and `--approve-proposed` is refused because only the owner
-    /// approves work. `--allow-crew` limits which tasks are claimed.
+    /// Claim work from this owner's backlog and hand results back as pull requests.
     #[arg(
         long,
         value_name = "SELECTOR",
         conflicts_with_all = ["auto_concurrency", "complete", "approve_proposed", "auto_fix", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
     )]
     pub pull: Option<String>,
-    /// Owner host for `--pull <workspace>`, by registered host name or
-    /// `machine_id` (see `orbit host list`). Orbit reads that host's live
-    /// workspace list and pulls from the selector it lists. Without it,
-    /// `--pull` takes only a full host-qualified selector.
+    /// Owner host for `--pull <workspace>` (name or `machine_id`).
     #[arg(long, value_name = "HOST", requires = "pull")]
     pub host: Option<String>,
-    /// Token for this workspace's exclusive claim, when another operator holds
-    /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
+    /// Workspace claim token (default: `ORBIT_WORKSPACE_CLAIM_TOKEN`).
     #[arg(long)]
     pub claim_token: Option<String>,
-    /// Stop new admissions for this workspace's active auto coordinator.
-    /// Already admitted workers keep running. Conflicts with the flags that
-    /// start a drain.
+    /// Stop admitting new work; running tasks continue.
     #[arg(
         long,
         conflicts_with_all = ["for_duration", "concurrency", "auto_concurrency", "complete", "approve_proposed", "auto_fix", "review", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]

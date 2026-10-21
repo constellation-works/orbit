@@ -7,13 +7,13 @@ Options:
           Show only enabled (or, with `--disabled`, only disabled) definitions
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --disabled
           Show only disabled definitions
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --include-inactive-plugins
           Also list definitions seeded by a plugin that is switched off in this workspace or on the host, marked inactive with the reason

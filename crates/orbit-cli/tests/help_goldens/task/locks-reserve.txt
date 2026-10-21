@@ -4,7 +4,7 @@ Usage: orbit task locks reserve [OPTIONS]
 
 Options:
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --task <TASK_ID>
           Task whose declared context surface to reserve. Repeat or comma-separate to claim a bundle's combined surface
@@ -13,7 +13,7 @@ Options:
           Selector to reserve directly (`file:...`, `dir:...`). Repeat or comma-separate for several
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --ttl <DURATION>
           How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 2h

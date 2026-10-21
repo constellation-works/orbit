@@ -6,7 +6,7 @@ Usage: orbit task eligible [OPTIONS]
 
 Options:
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --status <STATUS>
           Candidate statuses (comma-separated). Default: backlog and proposed
@@ -17,7 +17,7 @@ Options:
           Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --limit <LIMIT>
           Maximum eligible tasks to list (default 50). Must be at least 1

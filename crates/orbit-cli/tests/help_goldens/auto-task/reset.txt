@@ -11,13 +11,13 @@ Options:
           Operator explanation, retained in the audit record. Required to apply; without it the command previews and writes nothing
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --force
           Reset even while an action is executing. The admitted task or run is abandoned, not cancelled
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

@@ -7,13 +7,13 @@ Options:
           Delete what the plan lists; without this flag the command only reports
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --older-than-days <DAYS>
           Retention window in days, overriding `retention.audit_days` (default 60)
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)

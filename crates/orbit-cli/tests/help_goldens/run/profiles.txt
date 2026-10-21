@@ -7,13 +7,13 @@ Options:
           Compare recorded admission forecasts with the host's measured load
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --since <TIMESTAMP>
           Include forecasts at or after this RFC3339 timestamp (accuracy only)
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --drain <RUN>
           Select an exact drain run id (accuracy only)
@@ -43,24 +43,14 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
-Lists one resource profile per workspace, work class and complexity, learned from the CPU and memory each delivery's workers recorded. A delivery is the chain of runs for one task, counted from its admission; resumed or retried deliveries are left out. Each profile covers the key's last `machine.auto_concurrency.profile_window` completed deliveries from the last 30 days. `auto-task:<template>` profiles have no complexity.
-
-HORIZON is the minute at which fewer than one in ten deliveries is still running, capped at `horizon_cap_minutes`. PEAK_CPU is the highest mean cores before it and PEAK_MEM the highest 90th-percentile memory, each with the minute it occurs. CPU_P50, CPU_P90, MEM_P50 and MEM_P90 are the nearest-rank 50th and 90th percentiles of each delivery's own highest minute. They stay high when deliveries peak in different minutes, so they can be several times PEAK_CPU; a sparse profile still shows them from however many deliveries it has. SPREAD says how far deliveries disagree with that average (per-minute standard deviation over mean, for CPU and memory): near 0 is a profile stable enough to forecast with, near or above 1 one that is not. DELIVERIES marks a key with fewer than `min_profile_deliveries` as sparse; a lookup for it falls back to a wider profile.
-
-BUILD_FLAG marks no-diff profiles, and templates whose tasks are `no-diff-expected`, where a delivery used more than 1 core for 2 minutes in a row: work that should make no diff is building. The deliveries behind each flag are named below the table. Templates that build by design, such as qa-sweep, are never flagged.
-
-`--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries, its flagged deliveries, and `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50` and `p90`).
-
-`--accuracy` reports instead how well the host load forecast held up, from what drains in effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR is its mean, MAE its mean absolute value, UNDER how often the forecast was below the measured load, and WORST the largest miss with the minute it forecast. By default each offset shows a summary: PAIRS, the CPU mean error, MAE and under-rate, and the memory mean error and under-rate, with units in the headers. `--wide` prints every column instead, including the worst misses, the unmeasured counts and the attributed (ATTR_) errors. PENDING counts target minutes that have not fully ended at report time, even if partly measured; MISSING counts ended minutes without measurements. MISSING splits into UNSAMPLED, when no delivery run was live in that minute, PARTIAL, when a delivery overlapped the minute but none was running for all of it, and GAP, when a delivery was running for the whole minute but wrote no host row. The sampler records a host minute only when a worker saw it whole, so the minute a delivery starts or finishes in is PARTIAL, not a sampling defect. PENDING plus MISSING is the compatible unmeasured count. Only ended measured minutes form error pairs. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted that it did not. ENFORCE_ADMITTED counts the distinct tasks local enforce passes admitted and GAP_HELD the distinct tasks gap fit held; both stay on enforce passes only. Pull drains record one forecast per request, counting a returned claim. PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit, and PULL_HELD the enforce requests held for the same reason. `--json` adds every forecast point paired with its measured minute, and names the gap-fit-held task ids.
-
-Last, per drain, what limited its admission passes (`limiters` in `--json`), from the cumulative pass counters on its run state, which survive resume: PASSES counts them, and each outcome column is its share of those passes with the count. Every pass has exactly one outcome, the first that applies of ADMITTED (it started work), FAILED, HELD (an operator stop, a host shutdown, or a pull drain's other reason for sending no request), THROTTLE (host pressure), NO_CANDIDATE (an empty or wholly excluded backlog, or an idle owner), CEILING_FULL, GAP_FIT_HELD and DEFERRED (every candidate deferred on a lock or footprint), so the shares sum to 100%. DETAIL splits HELD by reason and THROTTLE by resource, and gives each waiting reason's share of passes, which overlap. The drains are those with a selected forecast and, without `--mode`, this workspace's drains live since `--since`; their counters cover each drain's whole lineage, not the selected time.
-
-Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: 30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective selection. This read-only report does not attest source revision, build budget or thresholds: a drain/time cohort is an operator selection, not proof of homogeneous configuration. Per-task profiles are a separate population; sparse deliveries or wide spread do not become calibrated confidence from selecting an accuracy cohort.
+One resource profile per workspace, work class and complexity, from the CPU and memory
+recent deliveries recorded. `--accuracy` instead compares admission forecasts with the
+host's measured load. Read-only.
+Column reference: docs/runbooks/forecast-accuracy.md.
 
 Examples:
   orbit run profiles
   orbit run profiles --json
   orbit run profiles --accuracy
   orbit run profiles --accuracy --wide
-  orbit run profiles --accuracy --json
   orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json
