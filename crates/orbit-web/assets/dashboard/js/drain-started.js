@@ -132,9 +132,11 @@ function startedGrid(cells) {
   return grid;
 }
 
-// N for the claim budget: the ceiling the run recorded, else the one
-// readiness reports for this workspace.
-function claimCeiling(input, capacity) {
+// N for the claim budget: the live run control, else the immutable ceiling it
+// was submitted with, else the one readiness reports for this workspace.
+function claimCeiling(run, input, capacity) {
+  const live = Number(run?.drain_worker_limit?.max_active_leaf_runs);
+  if (Number.isFinite(live) && live >= 1) return Math.trunc(live);
   const recorded = Number(input.max_active_leaf_runs);
   if (Number.isFinite(recorded) && recorded >= 1) return Math.trunc(recorded);
   const reported = Number(capacity.max_active_leaf_runs);
@@ -238,7 +240,7 @@ export function renderDrainStarted(detail, payload) {
     return;
   }
   const leaves = Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : [];
-  const n = claimCeiling(input, capacity);
+  const n = claimCeiling(detail?.run, input, capacity);
   pullBody.replaceChildren(
     el("p", { class: "drain-pull-owner" }, ["Pulling from ", el("code", { class: "mono", text: settings.selector || "the owner" }), checkout.ownerHost ? ` on ${checkout.ownerHost}` : ""]),
     el("h3", { class: "drain-compose-title", text: "Claim budget" }),
