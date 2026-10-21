@@ -817,11 +817,78 @@ fn plain_status_update_refuses_an_unbound_pull_request() {
     );
 }
 
+/// A blocked-to-backlog update that also selects the task's crew authenticates
+/// the publication against the provenance it writes: the explicit pin is what
+/// the preservation records, so the next run resumes the same candidate.
+fn a_backlog_return_that_selects_the_crew_keeps_the_candidate_resumable() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                crew: Some(Some("fixture".into())),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    assert_eq!(status(&f), TaskStatus::Backlog);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        Some("explicit")
+    );
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// A blocked-to-backlog update that clears the crew redraws it. The redraw's
+/// provenance differs from the explicit pin the task held beforehand, so the
+/// preservation must record the redraw, not the pin it replaced.
+fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                crew: Some(Some("fixture".into())),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        Some("explicit")
+    );
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                crew: Some(None),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_ne!(
+        task.crew_source.as_deref(),
+        Some("explicit"),
+        "the clear redrew the crew"
+    );
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
     plain_status_update_resumes_the_failure_handoff_candidate,
     plain_status_update_refuses_changed_publication_and_discard_closes_it,
     plain_status_update_refuses_an_unbound_pull_request,
+    a_backlog_return_that_selects_the_crew_keeps_the_candidate_resumable,
+    a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
     requeue_keeps_the_published_owner_refusals,
     changed_or_discarded_candidates_are_refused_with_a_discard_exit,
