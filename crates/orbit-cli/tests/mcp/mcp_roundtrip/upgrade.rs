@@ -307,10 +307,16 @@ fn candidate_ok(workspace: &McpWorkspace, program: &Path, args: &[&str]) -> std:
     output
 }
 
+/// Two mutations in flight while the audit writer is held each apply exactly
+/// once, and a live stdio server refuses a plain preflight both before and
+/// after their replies are discarded. No candidate handover happens here, so
+/// this shows no replay. Replay across a real handover is covered by
+/// `a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes`,
+/// whose partial request must not be resubmitted after the handover.
 #[test]
-fn refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_replays() {
+fn concurrent_mutations_apply_once_while_a_live_server_refuses_preflight() {
     if crate::isolated_test::run_in_child(
-        "mcp_roundtrip::upgrade::refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_replays",
+        "mcp_roundtrip::upgrade::concurrent_mutations_apply_once_while_a_live_server_refuses_preflight",
     ) {
         return;
     }
@@ -325,12 +331,15 @@ fn refusal_during_concurrent_calls_and_after_discarded_mutation_reply_never_repl
     for id in [1001, 1002] {
         client.send(&json!({"jsonrpc":"2.0", "id":id, "method":"tools/call", "params":{"name":"orbit_task_add", "arguments":{"title":format!("Outstanding {id}"), "description":"No replay", "complexity":"low", "model":"codex"}}}));
     }
+    // This refusal comes from the live server, not from the outstanding
+    // requests: an idle server is refused the same way, as
+    // `persistent_client_hands_over_to_a_local_candidate_update` asserts.
     assert_refused(&preflight(&workspace));
     connection
         .execute_batch("COMMIT")
         .expect("release audit writes");
     // Consume and deliberately discard both replies, modelling a caller that
-    // has no result to retry safely. Upgrade must never resubmit either call.
+    // has no result to retry safely. Each call must still have applied once.
     let mut received = BTreeSet::new();
     while received.len() < 2 {
         let reply: Value = serde_json::from_str(
