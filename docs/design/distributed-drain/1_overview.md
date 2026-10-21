@@ -119,6 +119,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | Requests identify admissions and claims identify attempts | [4_decisions.md](./4_decisions.md#requests-identify-admissions-and-claims-identify-attempts) | [ORB-12488] | recorded |
 | Owner ordering does not require a materialized queue | [4_decisions.md](./4_decisions.md#owner-ordering-does-not-require-a-materialized-queue) | [ORB-12488] | recorded |
+| Scarcity-aware admission order: work only the requester can run leads its band | [specs/task-pull.md](./specs/task-pull.md#scarcity-aware-order-planned); [4_decisions.md](./4_decisions.md#admission-prefers-work-only-the-requesting-executor-can-run) | [ORB-17304] | planned |
 | Landing consumes durable evidence and explicit completion authority | [4_decisions.md](./4_decisions.md#landing-consumes-durable-evidence-and-explicit-completion-authority) | [ORB-12488] | recorded |
 | Owner is the always-on host | [4_decisions.md](./4_decisions.md#the-owner-is-the-always-on-host-that-followers-can-reach) | [ORB-12488] | recorded |
 | Epic is a tag, not a pipeline | [4_decisions.md](./4_decisions.md#epic-is-a-tag-not-a-pipeline) | [ORB-12488] | recorded |
@@ -143,5 +144,6 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 - [ORB-13663] — moved settlement from the admitting drain to the admission record, so cancelling a drain no longer strands its live leaves.
 - [ORB-13664] — the claude provider disables background tasks on every child it spawns, so an agent's validation gates run in the foreground and finish before the leaf reports.
 - [ORB-13992] — admission keys only on before-PR review; the probe reports both review switches.
+- [ORB-17304] — plans the scarcity-aware admission order.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
