@@ -434,7 +434,7 @@ if errors:
         print(f"check-ci-macos: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("check-ci-macos: workflow PR coverage and filtered tests passed")
+print("check-ci-macos: workflow push coverage and filtered tests passed")
 
 if evidence_output is not None:
     required_environment = {

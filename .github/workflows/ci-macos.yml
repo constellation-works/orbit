@@ -5,22 +5,20 @@ name: macOS Platform
 # `/usr/bin/sandbox-exec`. The primary CI workflow runs on Linux, where those
 # tests are compiled out entirely — which is how ORB-00366's `(?i)` SBPL
 # breakage (ORB-00372) reached agent-main undetected. This leg runs them on a
-# real macOS runner on every open PR so required platform checks always report.
+# real macOS runner on pushes to main and agent-main so those checks report.
 
 on:
   push:
     branches: [main, agent-main]
 
-# Superseded PR heads must not compete with their replacement, so each PR has
-# one cancelling group. Push runs share one group per branch and are never
-# cancelled: GitHub keeps at most one running and one pending run there, and a
-# newer push replaces the pending one. An intermediate agent-main commit can
-# therefore get no macOS run, while the newest commit always does. This bounds
-# the queue on the two macOS runners. Scheduled and dispatch runs keep their own
-# group per run.
+# Push runs share one group per branch and are never cancelled: GitHub keeps at
+# most one running and one pending run there, and a newer push replaces the
+# pending one. An intermediate agent-main commit can therefore get no macOS
+# run, while the newest commit always does. This bounds the queue on the two
+# macOS runners.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && format('push-{0}', github.ref)) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -32,40 +30,14 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
-  # Read live state before allocating build runners; the PR event can be stale.
-  pr-state:
-    name: Live PR state
-    if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      pull-requests: read
-    outputs:
-      state: ${{ steps.state.outputs.state }}
-    steps:
-      - name: Read live PR state
-        id: state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
-            if .merged == true then "state=merged"
-            elif .state == "open" or .state == "closed" then "state=" + .state
-            else error("Unexpected pull request state") end
-          ' >> "$GITHUB_OUTPUT"
-
   macos-clippy:
-    needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: macOS Clippy (informational)
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
@@ -92,20 +64,16 @@ jobs:
         run: make ci-lint
 
   macos-sandbox:
-    needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: macOS Sandbox
     runs-on: macos-latest
     timeout-minutes: 30 # Observed ~6 minutes; allows cold builds on shared runners.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On pull_request, use the PR head SHA: not the branch name
-          # GitHub deletes on merge, and not github.sha (the ephemeral
-          # merge commit). On push, use github.sha directly so a run that
-          # sat queued still builds and reports on the commit that
-          # triggered it, not whatever the branch points to once it starts.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Use github.sha so a run that sat queued still builds and reports
+          # on the commit that triggered it, not whatever the branch points
+          # to once it starts.
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
@@ -233,8 +201,8 @@ jobs:
         run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
 
       # This runs only after every required macOS command above succeeds. The
-      # report records the physical checkout HEAD rather than github.sha, which
-      # is an ephemeral merge commit for pull_request events.
+      # report records the physical checkout HEAD for the push that triggered
+      # this run.
       - name: Emit exact-checkout macOS QA evidence
         run: ./scripts/check-ci-macos.sh --evidence-output macos-platform-evidence.json
 

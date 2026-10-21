@@ -64,7 +64,7 @@ When one applies, follow the [local CodeQL runbook](docs/runbooks/codeql-local.m
 - Run it once per delivery, against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`. An interrupted run starts over.
 - Only a Linux host can extract every module. Elsewhere the script exits 3 without running, and the check is owed by a Linux run recorded as `codeql` external evidence (runbook, Non-Linux hosts).
 
-For any other change, hosted CodeQL on the pull request is the check, and an alert it raises after merge becomes a repair task.
+For any other change, hosted CodeQL runs on the post-merge `agent-main` push, and its alerts become repair tasks.
 
 ## Orbit Workflow
 
