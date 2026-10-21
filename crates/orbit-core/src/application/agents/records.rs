@@ -190,6 +190,9 @@ pub(in crate::application) fn block_cause(
     }
     match classify_block(entry, settlements) {
         BlockCause::Infra(_) => Cause::Infrastructure,
+        // Review verdicts have their own charges. An escalation (including
+        // an abandoned review) must not also charge crew rework.
+        BlockCause::Run if entry.event == "review_gate_escalation" => Cause::Other,
         // An agent blocker that does not name the criteria is an external
         // dependency or decision, not the crew's work.
         BlockCause::Run if entry.event == TASK_BLOCKED_BY_AGENT_EVENT => Cause::Other,

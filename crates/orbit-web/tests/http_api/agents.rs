@@ -13,8 +13,9 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRun, JobRunState, TaskStatus};
 use orbit_types::task::{
     DESCRIPTION_DOCUMENT, RegressionClassification, RegressionEscape, RegressionNature,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskEventRowV2,
-    TaskOrigin, TaskRelation, TaskRelationType, task_fields_updated_note,
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
+    TaskComplexity, TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
+    task_fields_updated_note,
 };
 use serde_json::{Value, json};
 
@@ -187,6 +188,125 @@ fn operations(trace: &[Value], name: &str) -> usize {
         .iter()
         .filter(|event| event["span"]["name"] == name)
         .count()
+}
+
+/// Review escalations and their restarts must not duplicate verdict charges
+/// or attribute an abandoned review to the implementer.
+#[test]
+fn review_gate_requeues_and_restarts_are_not_crew_rework() {
+    isolated(
+        "agents::review_gate_requeues_and_restarts_are_not_crew_rework",
+        || {
+            let fixture = Fixture::new();
+            let start = Utc::now() - Duration::hours(4);
+            for (crew, event, note) in [
+                ("rejected", "review_gate_escalation", "review rejected"),
+                (
+                    "abandoned",
+                    "review_gate_escalation",
+                    "reviewer produced no verdict",
+                ),
+                ("failed", "workflow_run_failed", "validation failed"),
+            ] {
+                let id = add(
+                    &fixture,
+                    Owned {
+                        title: crew,
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Low,
+                        status: TaskStatus::InProgress,
+                        relations: vec![],
+                    },
+                );
+                for attempt in 0..2 {
+                    let at = start + Duration::hours(attempt * 2);
+                    implementation_run(
+                        &fixture,
+                        &format!("jrun-{crew}-{attempt}"),
+                        &id,
+                        crew,
+                        Some("fixture-model"),
+                        at - Duration::seconds(1),
+                        at + Duration::hours(1),
+                    );
+                    append(
+                        &fixture,
+                        &id,
+                        at,
+                        "started",
+                        None,
+                        Some(TaskStatus::InProgress),
+                    );
+                    if attempt == 0 {
+                        append(
+                            &fixture,
+                            &id,
+                            at + Duration::hours(1),
+                            event,
+                            Some(note),
+                            Some(TaskStatus::Blocked),
+                        );
+                        append(
+                            &fixture,
+                            &id,
+                            at + Duration::minutes(90),
+                            "operator_requeued",
+                            None,
+                            Some(TaskStatus::Backlog),
+                        );
+                    }
+                }
+                if crew == "rejected" {
+                    // Stamp the settlement inside the first implementation
+                    // attempt, immediately before its review gate block.
+                    let row = TaskCommentRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        comment_id: "CM-0001".into(),
+                        at: start + Duration::minutes(59),
+                        by: "system".into(),
+                        body: "before-PR review settled attempt `rv-reject`: verdict **reject**\n\
+                               - Reviewer: crew `reviewer` (codex / fixture-reviewer)\n\
+                               - `F1` [high, open] the handler drops errors"
+                            .into(),
+                        operation_id: None,
+                    };
+                    let dir = bundle_dir(&fixture.path(""), &id).unwrap();
+                    let mut file = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(dir.join(TASK_COMMENTS_FILE_NAME))
+                        .unwrap();
+                    writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
+                }
+            }
+
+            let server = fixture.counted_task_server();
+            let counts: Vec<_> = ["rejected", "abandoned", "failed"]
+                .into_iter()
+                .map(|crew| {
+                    let detail = json_ok(server.get(&format!(
+                        "/api/agents/implementers/detail?{WS}&window=30d&min_support=1&crew={crew}"
+                    )));
+                    (
+                        crew,
+                        detail["row"]["counts"]["crew_rework"].clone(),
+                        detail["row"]["counts"]["review_rejects"].clone(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                counts,
+                vec![
+                    ("rejected", json!(0), json!(1)),
+                    ("abandoned", json!(0), json!(0)),
+                    ("failed", json!(2), json!(0)),
+                ],
+                "only an implementation failure charges its requeue and repeat run as crew rework; \
+                 a review reject remains charged once and an abandoned review has no verdict"
+            );
+        },
+    );
 }
 
 pub(super) fn as_f64(value: &Value) -> f64 {
