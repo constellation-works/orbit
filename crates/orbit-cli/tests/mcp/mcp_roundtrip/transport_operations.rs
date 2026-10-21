@@ -284,19 +284,48 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         )["code"],
         "invalid_input"
     );
-    for (action, mode) in [
-        ("start", json!(false)),
-        ("start", json!(null)),
-        ("start", json!("invalid")),
-        ("stop", json!("off")),
-        ("resize", json!("enforce")),
-        ("status", json!("shadow")),
+    for (action, mode, expected_message) in [
+        (
+            "start",
+            json!(false),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "start",
+            json!(null),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "start",
+            json!("invalid"),
+            "invalid input: auto_concurrency must be off, shadow or enforce",
+        ),
+        (
+            "stop",
+            json!("off"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
+        (
+            "resize",
+            json!("enforce"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
+        (
+            "status",
+            json!("shadow"),
+            "invalid input: auto_concurrency is a start setting",
+        ),
     ] {
         let mut input = json!({"workspace":selector,"action":action,"auto_concurrency":mode});
         if action == "start" {
             input["for_seconds"] = json!(60);
         }
-        client.call_tool_err("orbit_workflow_auto", input);
+        if action == "resize" {
+            input["concurrency"] = json!(24);
+        }
+        let refused = client.call_tool_err("orbit_workflow_auto", input);
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(refused["message"], expected_message, "{refused}");
     }
     let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
     assert_eq!(
