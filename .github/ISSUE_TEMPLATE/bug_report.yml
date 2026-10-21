@@ -67,18 +67,21 @@ body:
       multiple: true
       options:
         - orbit-agent
+        - orbit-automation
         - orbit-cli
+        - orbit-cmd
         - orbit-common
+        - orbit-config
         - orbit-core
-        - orbit-search
         - orbit-engine
         - orbit-exec
-        - orbit-knowledge
         - orbit-mcp
         - orbit-policy
         - orbit-registry
+        - orbit-search
         - orbit-store
         - orbit-tools
+        - orbit-types
         - orbit-web
         - Other / not sure
     validations:
