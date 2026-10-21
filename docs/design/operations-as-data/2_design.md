@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-20
+last_updated: 2026-10-21
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
@@ -340,9 +340,14 @@ whitespace-only required value or validating a status name, stay in the handler
 where the domain rules live; that preserves the trimming behaviour the friction
 migration was careful to keep.
 
-The generic operation tool (§6) calls `parse_input` before dispatch. Every
-surface reaches a tool through `Tool::execute`: MCP, `orbit tool run`, the CLI's
-`run_tool`, the dashboard, and the deterministic dispatcher. So one call site
+The generic operation tool (§6) calls `parse_input` before dispatch. After
+host preparation and any guarded-mode preemption, the noun's `normalize_input`
+hook preserves accepted legacy shapes before strict spec parsing: task writes
+normalize selected boolean spellings and a single relation object, and search
+normalizes string booleans for `all` and its workspace aliases. The default hook
+changes nothing. Every surface reaches a tool through `Tool::execute`: MCP,
+`orbit tool run`, the CLI's `run_tool`, the dashboard, and the deterministic
+dispatcher. So one call site
 gives every surface the same validation. Handlers read canonical names from
 `OperationInput` and never see an alias; the friction handlers re-parse at
 their own entry, which is idempotent, so a direct core call gets the same

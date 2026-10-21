@@ -3,8 +3,8 @@ summary: "MCP Session Context — Vision"
 type: design
 title: "MCP Session Context — Vision"
 owner: codex
-last_updated: 2026-09-09
-last_validated: 2026-10-18
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 status: Accepted
 feature: mcp-session-context
 doc_role: vision
@@ -46,7 +46,9 @@ Add a field only when all three are true:
 - The accepting machine describes itself.
 - Caller machine and network labels are useful for audit correlation but remain fallible.
 - The MCP adapter owns call correlation.
-- Every tools/call, including an unknown raw name, crosses one Core audit boundary.
+- Tool calls dispatched to the host, including an unknown raw name, cross one Core audit boundary.
+  Adapter-only presentation responses without a data read and adapter-level refusals can return
+  before host dispatch; presentation data reads use the underlying tool's audit boundary.
 - Core remains the execution, audit, and authorization authority.
 
 ## Task References
