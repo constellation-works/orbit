@@ -41,7 +41,7 @@ Run history:
   orbit run settlements [--since 7d] [--json]
 
 Maintenance:
-  orbit run cancel <run_id>
+  orbit run cancel <run_id> --confirm
   orbit run concurrency <run_id> --set 7
   orbit run extend <run_id> --for 2h [--concurrency <N>]
   orbit run profiles [--accuracy] [--json]

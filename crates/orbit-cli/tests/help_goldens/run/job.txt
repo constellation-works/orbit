@@ -44,7 +44,7 @@ Options:
 Examples:
   orbit run job task_auto_pipeline
   orbit run job task_auto_pipeline --input mode=local
-  orbit run job crates/orbit-core/assets/jobs/task_pipeline.yaml --input task_id=T123
+  orbit run job crates/orbit-core/assets/jobs/task_auto_pipeline.yaml --input mode=local
   orbit run job task_pilot_pipeline --wait
   orbit run job task_pilot_pipeline --input crew=luna --json
 

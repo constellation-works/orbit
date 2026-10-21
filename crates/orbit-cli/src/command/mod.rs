@@ -95,8 +95,8 @@ Knowledge:
 
 Operate:
   run         Run workflows, drain the backlog, and inspect runs
-  job         View job definitions
-  tool        View tool registry
+  job         Define, list, and manage job workflows
+  tool        Manage and run Orbit tools, including external MCP plugins
   gc          Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
