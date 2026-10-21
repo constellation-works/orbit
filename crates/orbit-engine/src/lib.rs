@@ -76,6 +76,7 @@ pub use context::{
 pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;
 pub use executor::automation::execute_action as execute_deterministic_action;
+pub use executor::automation::review::normalize_review_decision;
 pub use executor::automation::vcs::claim::{
     observe_accepted_published_handoff, observe_candidate, observe_no_diff_candidate,
     observe_published_candidate,

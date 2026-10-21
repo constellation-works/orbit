@@ -267,7 +267,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
             .update_task_as_human(
                 &task.id.to_string(),
                 TaskUpdateParams {
-                    pr_status: Some(Some("open".into())),
+                    pr_status: Some(Some("approve".into())),
                     ..Default::default()
                 },
                 "task-show-fixture".into(),
@@ -306,7 +306,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
 
     let json_before = fixture.json(&["task", "show", &id, "--json"]);
     assert_eq!(json_before["job_run_id"], run_id);
-    assert_eq!(json_before["pr_status"], "open");
+    assert_eq!(json_before["pr_status"], "approve");
     assert_eq!(json_before["artifacts"].as_array().unwrap().len(), 7);
     assert_eq!(
         json_before["artifacts"][6]["path"],
@@ -326,7 +326,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
         plain.contains("Run: jrun-show-summary on show-fixture-host (running)"),
         "{plain}"
     );
-    assert!(plain.contains("PR: #42 (open)"));
+    assert!(plain.contains("PR: #42 (approve)"));
     assert!(!plain.contains("PR Status:"));
     assert!(!plain.contains("github-pr: 42"));
     assert!(plain.contains("Artifacts: 7 total (showing first 5)"));
@@ -357,7 +357,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
         .clone();
     let fields = String::from_utf8(fields).unwrap();
     assert!(fields.contains("Field: job_run_id\njrun-show-summary"));
-    assert!(fields.contains("Field: pr_status\nopen"));
+    assert!(fields.contains("Field: pr_status\napprove"));
     assert!(!fields.contains("Run:"));
     assert!(!fields.contains("PR: #42"));
     assert_eq!(

@@ -100,9 +100,6 @@ fn prepare(
         TaskVerb::Update => {
             // `--host` was resolved by the host preflight before dispatch.
             input.shift_remove("host");
-            if let Some(pr_status) = input.get("pr_status").and_then(Value::as_str) {
-                validate_pr_status(pr_status)?;
-            }
             let mut options = Map::new();
             for switch in UPDATE_CLI_SWITCHES {
                 if take_switch(input, switch) {
@@ -210,19 +207,6 @@ fn insert_env_model(input: &mut Map<String, Value>) {
     }
 }
 
-/// Validate `--pr-status`: the value is stored verbatim and read back as a
-/// merge gate, so a typo must be refused here rather than persisted as a
-/// status no reader recognizes. An empty value is kept: it clears the field.
-pub(crate) fn validate_pr_status(value: &str) -> Result<(), OrbitError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" | "approve" | "approved" | "request-changes" | "request_changes"
-        | "changes-requested" | "changes_requested" => Ok(()),
-        _ => Err(OrbitError::InvalidInput(format!(
-            "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
-        ))),
-    }
-}
-
 /// `--artifact path=content` values as the handler's artifact entries.
 fn artifact_entries(raw_values: &Value) -> Result<Value, OrbitError> {
     raw_values
@@ -268,9 +252,6 @@ pub(crate) fn remote_update_input(
         return Err(OrbitError::InvalidInput(
             "`note` is recorded on an approval; pass it with `approve`".to_string(),
         ));
-    }
-    if let Some(pr_status) = input.get("pr_status").and_then(Value::as_str) {
-        validate_pr_status(pr_status)?;
     }
     let mut remote = input
         .iter()
