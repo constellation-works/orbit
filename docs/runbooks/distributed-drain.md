@@ -245,12 +245,19 @@ owner accepts its handoff without validation logs. Every other handoff check
 (footprint, protected paths, candidate and base integrity) still applies.
 `orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
-Within the same dispatch band and priority, after the frozen-batch expiry
-boost, pull admission prefers tasks the follower's OS satisfies but the
-owner's OS does not, before age and task ID. A macOS follower of a Linux
-owner therefore takes macOS-only work before ordinary work the owner can
-run. Critical work still leads. Tasks tagged for both hosts have no affinity
-boost, and owner-local admission keeps its existing order.
+Within a dispatch band, the owner orders each admission against its live
+executor census: every follower that pulled in the last ten minutes or still
+holds a claim, plus the owner while its local drain runs. Work only the
+requesting executor can run leads, ahead of priority: its `os:` tags or its
+crew's executor `host_os`, its crew, or a `ui` tag only that host's browser
+kit serves. Among the rest, work fewer live executors can run comes first
+within a priority. A Mac that alone runs the `opus` crew therefore takes an
+opus task before a higher-priority task the Linux hosts can take. Critical and
+corrective work still leads, and the owner's local drain orders the same way.
+Set `workflow.admission_affinity = "priority"` when an exclusive task should
+not pass higher-priority work, for example while the other hosts are
+saturated, or `"off"` for the plain order. A pull receipt's `affinity` names
+the admitted task's class and the census it was ordered against.
 
 The latest applied task-pilot disposition `host_operational` identifies work
 that requires an operator-side action no managed lane can perform. Human

@@ -1013,6 +1013,7 @@ impl TaskCommitBoundary {
                 .clone()
                 .filter(|_| !auth.operator)
                 .map(|run| (claim.claim_id.clone(), run)),
+            census: None,
         };
         effects
             .replacements

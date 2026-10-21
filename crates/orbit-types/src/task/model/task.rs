@@ -677,22 +677,70 @@ pub fn automatic_dispatch_cmp_with_expiry(
     right: &Task,
     right_expiring: bool,
 ) -> std::cmp::Ordering {
-    automatic_dispatch_cmp_for_host(left, left_expiring, right, right_expiring, None, None)
+    automatic_dispatch_cmp_with_affinity(
+        (left, left_expiring, DispatchAffinity::default()),
+        (right, right_expiring, DispatchAffinity::default()),
+        AdmissionAffinityReach::Off,
+    )
 }
 
-/// Automatic dispatch order for an executor pulling from an owner.
+/// How far work only the requesting executor can run reaches in automatic
+/// dispatch order [ORB-17304]: the `workflow.admission_affinity` setting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionAffinityReach {
+    /// Exclusive work leads its band, ahead of higher-priority work other
+    /// executors can run. Critical and corrective work still leads.
+    #[default]
+    Band,
+    /// Exclusive work leads only among tasks of its own priority.
+    Priority,
+    /// No affinity: the canonical band, priority, expiry, age and ID order.
+    Off,
+}
+
+impl AdmissionAffinityReach {
+    /// Every accepted spelling, in declaration order.
+    pub const CHOICES: [&'static str; 3] = ["band", "priority", "off"];
+
+    /// The reach a setting spells, or `None` for any other value.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "band" => Some(Self::Band),
+            "priority" => Some(Self::Priority),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// One candidate's standing against the live executor census, as the
+/// requesting executor sees it [ORB-17304]. The default is the standing every
+/// candidate shares when no census applies, so it never reorders.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DispatchAffinity {
+    /// The requester is the only live executor that can run the task.
+    pub exclusive: bool,
+    /// How many live executors can run the task; fewer sorts first. A task
+    /// the requester itself cannot run carries `usize::MAX`, so it sorts
+    /// after every task the requester can.
+    pub eligible: usize,
+}
+
+/// Automatic dispatch order for one requesting executor against the live
+/// executor census [ORB-17304].
 ///
-/// After band, priority and frozen-batch expiry, prefer tasks whose OS
-/// requirement the executor satisfies but the owner does not. Age and task
-/// ID settle the remaining ties. Equal host OSes preserve local dispatch
-/// order; an owner outside the OS namespace can run only unrestricted tasks.
-pub fn automatic_dispatch_cmp_for_host(
-    left: &Task,
-    left_expiring: bool,
-    right: &Task,
-    right_expiring: bool,
-    owner_os: Option<crate::task::HostOs>,
-    executor_os: Option<crate::task::HostOs>,
+/// `band → exclusive → priority → expiry → fewer eligible executors → age →
+/// ID` under [`AdmissionAffinityReach::Band`]; exclusivity moves after
+/// priority under [`AdmissionAffinityReach::Priority`], and
+/// [`AdmissionAffinityReach::Off`] ignores both affinity keys. Each side is a
+/// task, whether its frozen batch is expiring, and its affinity. Exclusivity
+/// never crosses a band, so critical and corrective work still leads.
+pub fn automatic_dispatch_cmp_with_affinity(
+    left: (&Task, bool, DispatchAffinity),
+    right: (&Task, bool, DispatchAffinity),
+    reach: AdmissionAffinityReach,
 ) -> std::cmp::Ordering {
     let band = |task: &Task, expiring: bool| {
         if task.priority == TaskPriority::Critical {
@@ -715,15 +763,26 @@ pub fn automatic_dispatch_cmp_for_host(
         TaskPriority::Medium => 2,
         TaskPriority::Low => 3,
     };
-    let affinity = |task: &Task| {
-        let requirement = crate::task::TaskOsRequirement::from_tags(&task.tags);
-        requirement.satisfied_by(executor_os) && !requirement.satisfied_by(owner_os)
+    let (left, left_expiring, left_affinity) = left;
+    let (right, right_expiring, right_affinity) = right;
+    let (left_affinity, right_affinity) = match reach {
+        AdmissionAffinityReach::Off => (DispatchAffinity::default(), DispatchAffinity::default()),
+        _ => (left_affinity, right_affinity),
+    };
+    let exclusive_at = |at: AdmissionAffinityReach| {
+        if reach == at {
+            right_affinity.exclusive.cmp(&left_affinity.exclusive)
+        } else {
+            std::cmp::Ordering::Equal
+        }
     };
     band(left, left_expiring)
         .cmp(&band(right, right_expiring))
+        .then(exclusive_at(AdmissionAffinityReach::Band))
         .then(priority(left.priority).cmp(&priority(right.priority)))
+        .then(exclusive_at(AdmissionAffinityReach::Priority))
         .then(right_expiring.cmp(&left_expiring))
-        .then_with(|| affinity(right).cmp(&affinity(left)))
+        .then(left_affinity.eligible.cmp(&right_affinity.eligible))
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

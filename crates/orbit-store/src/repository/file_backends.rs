@@ -107,6 +107,24 @@ impl TaskStoreBackend for TaskV2Store {
             None => Ok(None),
         }
     }
+    fn record_executor_census(
+        &self,
+        entry: &crate::contracts::ExecutorCensusEntry,
+    ) -> Result<(), OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.record_executor_census(entry),
+            None => Ok(()),
+        }
+    }
+    fn live_executor_census(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.live_executor_census(now),
+            None => Ok(Vec::new()),
+        }
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {

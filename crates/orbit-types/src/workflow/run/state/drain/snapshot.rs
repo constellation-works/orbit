@@ -43,7 +43,8 @@ pub struct PullDrainState {
     pub drain_cancel: Option<DrainCancelRequest>,
     /// The provider preflight a pull drain took when its window opened.
     /// Survives terminalization: it is how `run show` reports which crews
-    /// the drain could not run.
+    /// the drain could not run. The owner's local drain takes one too, for
+    /// the crews its executor census row declares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_crew_preflight: Option<PullCrewPreflight>,
     /// Recovery per released auth incident; old incidents stay acknowledged on resume.

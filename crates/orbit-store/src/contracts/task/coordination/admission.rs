@@ -12,8 +12,13 @@ pub use orbit_types::task::ExecutionLocation;
 /// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
-    /// The owner's OS. Outside the namespace, it runs only unrestricted tasks.
-    pub owner_os: Option<orbit_types::task::HostOs>,
+    /// How far work only the requester can run reaches in the order
+    /// (`workflow.admission_affinity`) [ORB-17304].
+    pub affinity: orbit_types::task::AdmissionAffinityReach,
+    /// The live executors the requester's candidates are ordered against,
+    /// the requester among them. `None`, when the census could not be read
+    /// or `affinity` is off, orders canonically.
+    pub census: Option<super::ExecutorCensus>,
     /// Tasks whose admitted frozen delivery batch nears its deadline.
     pub expiring_tasks: std::collections::BTreeSet<String>,
     /// The owner's validation gates, captured in the receipt
@@ -556,6 +561,13 @@ pub struct AdmissionReceipt {
     /// falls back to resolving on the replica with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
+    /// [ORB-17304] How the executor census the owner ordered against classes
+    /// the admitted task, and the census's machine ids. Absent from an idle
+    /// or repair receipt, from an order taken without a census, and from a
+    /// receipt of an older owner. A response field outside the request's
+    /// fingerprint, like `gates`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<super::AdmissionAffinity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

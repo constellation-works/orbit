@@ -732,8 +732,8 @@ An unexpected diff is committed. `git_commit` treats a non-empty stage as a norm
 
 ## Admission prefers work only the requesting executor can run
 
-**Recorded:** 2026-10-20 · [ORB-17304] (planned; refines [ORB-14938])
-**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_for_host`, `crates/orbit-store/src/repository/task/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`
+**Recorded:** 2026-10-20 · [ORB-17304] (refines [ORB-14938])
+**Code anchors:** `crates/orbit-types/src/task/model/task.rs::automatic_dispatch_cmp_with_affinity`, `crates/orbit-store/src/contracts/task/coordination/census.rs::census_dispatch_order`, `crates/orbit-store/src/repository/task/coordination/selection.rs::TaskCommitBoundary::admission_snapshot`, `crates/orbit-core/src/application/admission/census.rs`
 
 ### Context
 
@@ -748,13 +748,18 @@ Throughput was lost on the scarce host, not the plentiful ones.
 
 ### Decision
 
-The owner orders each admission against the workspace's *live executor census*: the recent
-admission requests of followers whose drains are still open, plus the owner while a local drain
-runs. A candidate that only the requester can run sorts first within its band, ahead of higher
+The owner orders each admission against the workspace's *live executor census*. That is a
+persisted row per executor machine, holding its declared capability, drain run and `seen_at`.
+Each follower's row is upserted in the same commit as each of its admission receipts. The owner
+writes its own row on each pass of its local drain, with the crews of that drain's window. A
+row is live within ten minutes of `seen_at`, or while its machine holds a claimed or running
+claim. Reading the census never scans receipts.
+
+A candidate that only the requester can run sorts first within its band, ahead of higher
 priorities. Among the rest, fewer eligible executors sorts first within a priority. Band stays
-the outer key. Owner-local admission uses the same comparator. A workspace setting
-(`band` | `priority` | `off`) bounds how far exclusivity reaches. The contract is the
-[scarcity-aware order](./specs/task-pull.md#scarcity-aware-order-planned).
+the outer key. Owner-local admission uses the same comparator, with the owner as the requester.
+`workflow.admission_affinity` (`band` | `priority` | `off`) bounds how far exclusivity reaches.
+The contract is the [executor census](./specs/task-pull.md#executor-census-and-affinity).
 
 The owner still holds ordering authority. Followers declare capability, as before, and the owner
 derives the order from those declarations. Placement stays pull-based: the owner never pushes
@@ -766,10 +771,15 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
   the hosts that can run it.
 - A census of one executor reproduces the canonical order, so single-host workspaces see no change.
 - Order now depends on which executors are live. The same backlog can admit in a different order
-  as drains start and stop. Receipts record the census they were ordered against.
+  as drains start and stop. Receipts record the affinity class and the census they were ordered
+  against, and a same-request replay still returns its stored receipt.
+- An unreadable census, or a missing table, reads as empty: the canonical order, never a failed
+  admission.
 - Cost: priority inversion inside a band. A medium task exclusive to the requester beats a high
   fungible task, even when every other executor that could run the high task is saturated. The
   census tracks liveness, not free capacity. `priority` mode is the escape hatch.
+- Cost: an executor stays counted for up to ten minutes after its drain stops, or longer while a
+  claim it holds is live. During that time, work it shares is not exclusive to anyone else.
 - Cost: every admission reads the census and evaluates each candidate's capability predicates
   against every live executor. That cost grows with backlog size × live executors, which is small
   today.
@@ -785,7 +795,7 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
 - [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
 - [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
 - [ORB-14938] — added owner-relative OS affinity to pull admission, refined by [Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run).
-- [ORB-17304] — planned scarcity-aware admission order ([Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run)).
+- [ORB-17304] — ordered admission against the live executor census ([Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run)).
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

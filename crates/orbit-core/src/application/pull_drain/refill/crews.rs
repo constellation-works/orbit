@@ -9,8 +9,9 @@ use crate::application::distributed::PullCrewWindow;
 
 /// The drain's crew window, taking and persisting its preflight on the first
 /// pass of the window. A preflight that cannot be persisted is still used for
-/// this pass, and taken again on the next.
-pub(super) fn crew_window(
+/// this pass, and taken again on the next. The owner's local drain takes its
+/// window the same way, for the census row it declares [ORB-17304].
+pub(crate) fn crew_window(
     runtime: &OrbitRuntime,
     run_id: &str,
 ) -> Result<PullCrewWindow, OrbitError> {

@@ -194,7 +194,7 @@ impl TaskCommitBoundary {
         else {
             return self
                 .store
-                .insert_task_coordination_row(&self.workspace_id, incoming);
+                .insert_task_coordination_row(&self.workspace_id, incoming, None);
         };
         let observation: DeferredBranchObservation =
             serde_json::from_str(&existing.payload_json)

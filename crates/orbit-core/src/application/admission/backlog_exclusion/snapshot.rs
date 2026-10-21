@@ -115,11 +115,15 @@ pub(super) fn backlog_snapshot_in_mode(
     // retry budget waiting in the queue. Ordering only: a store that cannot
     // be read leaves the ordinary order, never a failed pass.
     let expiring_batches = expiring_backlog_batches(runtime, &backlog);
-    sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches);
-    let mut excluded = Vec::new();
     let executor_host_os = runtime
         .executor_host_os_limits()
         .map_err(|error| PassError::store(action, "read executor host operating systems", error))?;
+    // [ORB-17304] Within a band, work only the owner can run among the live
+    // executors leads; without a census row of its own the order is
+    // canonical.
+    let dispatch_order = runtime.owner_dispatch_order(&executor_host_os);
+    sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches, &dispatch_order);
+    let mut excluded = Vec::new();
     let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
         if !pilot_preparations.contains_key(&task.id) {
@@ -476,6 +480,7 @@ pub(super) fn backlog_snapshot_in_mode(
         excluded,
         lock_holders,
         expiring_batches,
+        dispatch_order,
         footprint_waits,
         published_resumes,
     })

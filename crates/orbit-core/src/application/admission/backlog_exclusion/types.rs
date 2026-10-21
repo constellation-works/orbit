@@ -183,6 +183,9 @@ pub(crate) struct BacklogSnapshot {
     /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
     /// same-priority backlog in `admissible_leaves`.
     pub(crate) expiring_batches: BTreeMap<String, DateTime<Utc>>,
+    /// The owner-local dispatch order `admissible_leaves` follows, so
+    /// readiness sorts its preview the same way [ORB-17304].
+    pub(crate) dispatch_order: crate::application::admission::census::DispatchOrder,
     /// The admissible leaves that declare no footprint, and what each waits
     /// for in a multi-slot run [ORB-15191]. The snapshot does not know the
     /// run's slots, so the wave applies them, not this filter.

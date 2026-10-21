@@ -343,6 +343,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.admission_affinity": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.auto_ship": {
       "scope": "built-in",
       "state": "default",

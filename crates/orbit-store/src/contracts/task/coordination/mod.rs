@@ -8,6 +8,7 @@
 
 mod admission;
 mod branch_observation;
+mod census;
 mod claim;
 mod handoff;
 mod journal;
@@ -15,6 +16,7 @@ mod settlement;
 
 pub use admission::*;
 pub use branch_observation::*;
+pub use census::*;
 pub use claim::*;
 pub use handoff::*;
 pub use journal::*;

@@ -27,10 +27,7 @@ use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 
 use super::TaskCommitBoundary;
-use super::admission::{
-    ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, browser_kit_unavailable,
-    digest, os_unavailable,
-};
+use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use super::selection::Screen;
 use crate::contracts::*;
@@ -79,14 +76,7 @@ impl TaskCommitBoundary {
         )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
-            if self.commit_repair_claim(
-                screen.identity,
-                screen.request,
-                receipt_key,
-                orbit_dir,
-                receipt,
-                &candidate,
-            )? {
+            if self.commit_repair_claim(screen, receipt_key, orbit_dir, receipt, &candidate)? {
                 return Ok(true);
             }
         }
@@ -159,11 +149,11 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = os_unavailable(task, request, executor_host_os) {
+            if let Some(reason) = os_unavailable(request.os, task, executor_host_os) {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = browser_kit_unavailable(task, request) {
+            if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
                 receipt.browser_kit_unavailable.push(diagnose(reason));
                 continue;
             }
@@ -208,13 +198,13 @@ impl TaskCommitBoundary {
     /// the pull.
     fn commit_repair_claim(
         &self,
-        identity: &AdmissionIdentity,
-        request: &AdmissionRequest,
+        screen: &Screen<'_>,
         receipt_key: &str,
         orbit_dir: &Path,
         receipt: &mut AdmissionReceipt,
         candidate: &RepairCandidate<'_>,
     ) -> Result<bool, OrbitError> {
+        let (identity, request) = (screen.identity, screen.request);
         let RepairCandidate {
             state,
             task,
@@ -233,6 +223,7 @@ impl TaskCommitBoundary {
         // claim's reservation is released, in one transaction.
         let mut effects = ClaimCommitEffects {
             release_reservation: Some(superseded.reservation_id.clone()),
+            census: screen.census.cloned(),
             ..Default::default()
         };
         effects

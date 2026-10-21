@@ -9,6 +9,7 @@ use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_sta
 mod admission_reservations;
 mod audit_events;
 mod baseline;
+mod executor_census;
 mod feature;
 mod feature_ledgers;
 mod friction;
@@ -35,6 +36,7 @@ use audit_events::{
     apply_v2_audit_event_type_ts_index,
 };
 use baseline::apply_baseline_schema;
+use executor_census::apply_executor_census;
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};

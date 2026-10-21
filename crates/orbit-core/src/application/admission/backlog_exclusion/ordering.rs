@@ -4,25 +4,21 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_types::task::Task;
 
+use crate::application::admission::census::DispatchOrder;
+
 pub(super) const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical
 /// first, then corrective or expiring work, then priority, expiry, age, and
-/// the task ID as the total tie-breaker. Uses the same expiry-aware comparison
-/// as surface reservations (`automatic_dispatch_cmp_with_expiry`).
+/// the task ID as the total tie-breaker, with `order`'s census affinity
+/// between them [ORB-17304]. Pull admission sorts with the same comparator,
+/// the owner as its requester here.
 pub(crate) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(
     tasks: &mut [T],
     expiring: &BTreeMap<String, DateTime<Utc>>,
+    order: &DispatchOrder,
 ) {
-    tasks.sort_by(|left, right| {
-        let (left, right) = (left.borrow(), right.borrow());
-        orbit_types::task::automatic_dispatch_cmp_with_expiry(
-            left,
-            expiring.contains_key(&left.id),
-            right,
-            expiring.contains_key(&right.id),
-        )
-    });
+    order.sort(tasks, expiring);
 }
 
 pub(super) fn task_root_id(task: &Task, task_lookup: &BTreeMap<String, Task>) -> String {

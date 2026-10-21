@@ -8,7 +8,7 @@ pub(crate) mod drain;
 mod refill;
 mod settle;
 
-pub(crate) use refill::pull_refill;
+pub(crate) use refill::{crew_window, pull_refill};
 
 #[cfg(test)]
 mod tests;

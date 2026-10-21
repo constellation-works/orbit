@@ -531,6 +531,13 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 60,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw),
     },
+    workflow_admission_affinity: String => String {
+        key: "workflow.admission_affinity", value_type: "string",
+        description: "How far work only the requesting executor can run moves ahead in admission order: band, priority or off.",
+        section: ConfigSection::Delivery, order: 66,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "band", "workflow.admission_affinity", &orbit_types::task::AdmissionAffinityReach::CHOICES),
+    },
     workflow_auto_ship: bool => bool {
         key: "workflow.auto_ship", value_type: "bool",
         description: "Opt this workspace in to unattended ship-sweep dispatch.",

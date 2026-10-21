@@ -6,20 +6,26 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::TaskCoordinationRow;
+use crate::contracts::{ExecutorCensusEntry, TaskCoordinationRow};
 
 impl Store {
     /// Pure-SQL coordination facts (idle receipts) need no bundle replay.
+    /// An idle admission receipt carries its requester's census row, which
+    /// lands in the same transaction.
     pub(crate) fn insert_task_coordination_row(
         &self,
         workspace: &str,
         row: &TaskCoordinationRow,
+        census: Option<&ExecutorCensusEntry>,
     ) -> Result<(), OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.tx.execute(
                 "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)",
                 params![workspace, row.kind, row.row_id, row.payload_json, crate::now_string()],
             ).map_err(sqlite_store_error)?;
+            if let Some(entry) = census {
+                super::upsert_executor_census_in(tx.connection(), workspace, entry)?;
+            }
             Ok(())
         })
     }

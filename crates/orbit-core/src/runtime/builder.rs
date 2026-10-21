@@ -274,6 +274,7 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
+    let admission_affinity = runtime_config.snapshot.admission_affinity();
     // Config admitted the mode's spelling; Core translates it into the exec
     // layer's policy, as it does for PR settings above.
     let shell_probe = runtime_config.snapshot.shell_probe();
@@ -336,6 +337,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
+            admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
             default_crew,
