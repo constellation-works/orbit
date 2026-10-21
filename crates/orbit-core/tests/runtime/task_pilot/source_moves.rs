@@ -642,6 +642,106 @@ fn an_instruction_edit_off_every_selector_path_is_ignored_by_default() {
     assert_eq!(output["task_outcomes"][0]["reason"], "superseded_by_source");
 }
 
+/// Deletion during debounce must retire the oldest member without blocking
+/// either a status preview or admission of the next eligible task.
+fn deleting_a_pending_pilot_task_does_not_block_its_successor() {
+    // Exercise real submission without running a pilot; wait for the
+    // substitute worker to be reaped before dropping the workspace.
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".into(),
+    ]);
+    let (exited, exit) = std::sync::mpsc::sync_channel(1);
+    orbit_core::test_support::install_worker_reap_hook(
+        orbit_core::test_support::WorkerReapPhase::AfterExitRecorded,
+        move |run| exited.send(run.to_owned()).unwrap(),
+    );
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let deleted = workspace.task("deleted during debounce");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    let observed = evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    assert!(
+        observed
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id)
+    );
+
+    let successor = workspace.task("next eligible task");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(1),
+    )
+    .unwrap();
+    workspace
+        .runtime
+        .delete_task_guarded(&deleted.id, false)
+        .unwrap();
+
+    let due = now + Duration::minutes(3);
+    let preview = evaluate_routine(&workspace.runtime, &routine, true, due).unwrap();
+    assert_eq!(preview.reason, "would_fire", "{preview:?}");
+    assert_eq!(preview.batch.len(), 1);
+    assert_eq!(
+        preview.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    assert!(
+        !preview
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id)
+    );
+    assert!(
+        workspace
+            .routine_state()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id),
+        "a dry run must leave retirement for the real evaluation"
+    );
+
+    let admitted = evaluate_routine(&workspace.runtime, &routine, false, due).unwrap();
+    assert_eq!(admitted.reason, "fired", "{admitted:?}");
+    assert_eq!(admitted.batch.len(), 1);
+    assert_eq!(
+        admitted.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    let members = workspace.routine_state().members.unwrap();
+    assert!(!members.pending.contains_key(&deleted.id));
+    let active = members.active.unwrap();
+    assert_eq!(active.task_ids(), vec![successor.id]);
+    assert!(
+        active.action_id.is_some(),
+        "the successor has a submitted run"
+    );
+    assert_eq!(
+        exit.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap(),
+        active.action_id.unwrap()
+    );
+}
+
+crate::scenario_table!(
+    deleted_pending_member_scenarios,
+    deleting_a_pending_pilot_task_does_not_block_its_successor
+);
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags_scenarios,

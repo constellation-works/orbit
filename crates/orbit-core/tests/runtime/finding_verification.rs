@@ -983,6 +983,126 @@ fn the_state_trigger_picks_up_only_unverified_review_findings() {
     assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&owed.id));
 }
 
+/// Force-deleting an unverified backlog finding during debounce must not
+/// prevent the next finding from receiving a verification run.
+fn deleting_a_pending_finding_does_not_block_its_successor() {
+    // Admission submits a real run, with a short-lived substitute worker.
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".into(),
+    ]);
+    let (exited, exit) = std::sync::mpsc::sync_channel(1);
+    orbit_core::test_support::install_worker_reap_hook(
+        orbit_core::test_support::WorkerReapPhase::AfterExitRecorded,
+        move |run| exited.send(run.to_owned()).unwrap(),
+    );
+    let fixture = Fixture::new();
+    let jobs = fixture.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/jobs/finding_verification_pipeline.yaml"),
+        jobs.join("finding_verification_pipeline.yaml"),
+    )
+    .unwrap();
+    let deleted = fixture.task(
+        "Deleted unverified backlog finding",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &["code-review"],
+        Some(TaskStatus::Backlog),
+    );
+    let routine = verification_routine();
+    let now = Utc::now();
+    let observed = evaluate_routine(&fixture.runtime, &routine, false, now).unwrap();
+    let state = observed.state.unwrap();
+    assert!(state.members.unwrap().pending.contains_key(&deleted.id));
+    let store = fixture.runtime.automation_store().unwrap();
+
+    let successor = fixture.finding("Next unverified finding", TaskComplexity::Medium);
+    evaluate_routine(
+        &fixture.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(1),
+    )
+    .unwrap();
+    assert!(
+        fixture
+            .runtime
+            .delete_task_guarded(&deleted.id, false)
+            .is_err(),
+        "a backlog finding requires force to delete"
+    );
+    fixture
+        .runtime
+        .delete_task_guarded(&deleted.id, true)
+        .unwrap();
+
+    let due = now + Duration::minutes(3);
+    let preview = evaluate_routine(&fixture.runtime, &routine, true, due).unwrap();
+    assert_eq!(preview.reason, "would_fire", "{preview:?}");
+    assert_eq!(preview.batch.len(), 1);
+    assert_eq!(
+        preview.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    assert!(
+        !preview
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id)
+    );
+    assert!(
+        store
+            .automation_state(&state.consumer)
+            .unwrap()
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+            .contains_key(&deleted.id),
+        "a dry run must leave retirement for the real evaluation"
+    );
+
+    let admitted = evaluate_routine(&fixture.runtime, &routine, false, due).unwrap();
+    assert_eq!(admitted.reason, "fired", "{admitted:?}");
+    assert_eq!(admitted.batch.len(), 1);
+    assert_eq!(
+        admitted.batch[0].task_ids,
+        std::slice::from_ref(&successor.id)
+    );
+    let members = store
+        .automation_state(&state.consumer)
+        .unwrap()
+        .unwrap()
+        .members
+        .unwrap();
+    assert!(!members.pending.contains_key(&deleted.id));
+    let active = members.active.unwrap();
+    assert_eq!(active.task_ids(), vec![successor.id]);
+    assert!(
+        active.action_id.is_some(),
+        "the successor has a submitted run"
+    );
+    assert_eq!(
+        exit.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap(),
+        active.action_id.unwrap()
+    );
+}
+
+crate::scenario_table!(
+    deleted_pending_member_scenarios,
+    deleting_a_pending_finding_does_not_block_its_successor
+);
+
 fn material_edits_supersede_prepared_verdicts() {
     let fixture = Fixture::new();
     let edits = [
