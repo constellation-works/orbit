@@ -79,7 +79,7 @@ pub(in crate::executor::automation::vcs) fn carry_class(
 /// The class of one failed private automation VCS process, read from the
 /// diagnostic `succeeded` renders for it.
 ///
-/// Transient: any three-digit HTTP 5xx, a TLS handshake timeout
+/// Transient: HTTP 499, any three-digit HTTP 5xx, a TLS handshake timeout
 /// (`net/http: TLS handshake timeout` or `tls: handshake timeout`) or a
 /// connection the peer reset, even when the URL is not GraphQL, a request
 /// timeout, or GitHub's generic "Something
@@ -91,7 +91,8 @@ pub(in crate::executor::automation::vcs) fn carry_class(
 /// [`OrbitError::Execution`], which is never transient.
 fn classify(message: &str) -> PrivateVcsFailureClass {
     let text = message.to_ascii_lowercase();
-    let transient = transient_http_5xx(&text)
+    let transient = transient_http_499(&text)
+        || transient_http_5xx(&text)
         || text.contains("we couldn't respond to your request in time")
         || (text.contains("graphql")
             && text.contains("something went wrong while executing your query"))
@@ -137,6 +138,15 @@ fn transient_http_5xx(text: &str) -> bool {
             && bytes[1].is_ascii_digit()
             && bytes[2].is_ascii_digit()
             && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
+    })
+}
+
+/// `HTTP 499`. A longer token (`http 4990`) and a URL fragment do not match.
+fn transient_http_499(text: &str) -> bool {
+    text.match_indices("http ").any(|(index, prefix)| {
+        let status = &text[index + prefix.len()..];
+        let bytes = status.as_bytes();
+        bytes.starts_with(b"499") && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
     })
 }
 

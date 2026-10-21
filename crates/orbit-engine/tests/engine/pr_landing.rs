@@ -36,7 +36,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::{
-    NotFoundKind, OrbitError, RecoverableVcsConflict, process::run_bounded_capped, test_env,
+    NotFoundKind, OrbitError, PrivateVcsFailureClass, RecoverableVcsConflict,
+    process::run_bounded_capped, test_env,
 };
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
@@ -44,7 +45,7 @@ use orbit_engine::{
     RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
     TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
-    verify_claimed_known_red,
+    run_private_vcs_operation, verify_claimed_known_red,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
@@ -543,6 +544,154 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr() {
                 assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE));
                 assert!(host.comments(TASK_ID).is_empty());
             }
+        },
+    );
+}
+
+fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling() {
+    isolated(
+        "pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)", "success"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let opened = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect("a read-only PR view retries one HTTP 499 and completes");
+
+            assert_eq!(opened["pr_created"], true);
+            assert_eq!(
+                fx.forge_calls(),
+                ["pr list", "pr create", "pr view", "pr view"]
+            );
+            assert_eq!(fx.pr_view_reads(), 2);
+
+            let fx = Fixture::new(sandbox);
+            fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let error = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect_err("a persistent HTTP 499 still fails the PR open step");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("HTTP 499: 499 (https://api.github.com/graphql)"),
+                "the provider diagnostic is preserved: {error}"
+            );
+            assert_eq!(
+                error.private_vcs_failure().map(|failure| failure.class),
+                Some(PrivateVcsFailureClass::TransientObservation)
+            );
+            assert_eq!(
+                fx.forge_calls(),
+                ["pr list", "pr create"]
+                    .into_iter()
+                    .chain(["pr view"].repeat(3))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(fx.pr_view_reads(), 3, "the existing three-attempt bound");
+        },
+    );
+}
+
+fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens() {
+    isolated(
+        "pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let input = json!({"pr": "42", "workspace_path": path_str(&fx.repo)});
+            for message in [
+                "HTTP 400: Bad Request",
+                "HTTP 401: Unauthorized",
+                "HTTP 403: Forbidden",
+                "HTTP 404: Not Found",
+                "HTTP 409: Conflict",
+                "HTTP 410: Gone",
+                "HTTP 422: Unprocessable Entity",
+                "HTTP 429: Too Many Requests",
+                "bad credentials",
+                "permission denied",
+                "not accessible by integration",
+                "authentication required",
+                "SAML authorization required",
+                "rate limit exceeded",
+                "HTTP 418: I'm a teapot",
+                "HTTP 4990: Not a 499 status token",
+                "https://api.github.com/graphql?status=499",
+            ] {
+                fx.script_pr_views(&[message]);
+                let error = run_private_vcs_operation("pr.status", &input)
+                    .expect_err("permanent and nonmatching diagnostics fail immediately");
+                let failure = error
+                    .private_vcs_failure()
+                    .expect("provider failures retain their classification");
+                assert_eq!(
+                    failure.class,
+                    PrivateVcsFailureClass::Other,
+                    "{message}: permanent failures are not observation retries"
+                );
+                assert_eq!(fx.pr_view_reads(), 1, "{message}: no retry");
+            }
+
+            fx.script_pr_views(&["HTTP 499: Bad credentials"]);
+            let error = run_private_vcs_operation("pr.status", &input)
+                .expect_err("a 499 carrying an auth refusal remains transient");
+            let failure = error
+                .private_vcs_failure()
+                .expect("the provider failure keeps its classification");
+            assert_eq!(failure.class, PrivateVcsFailureClass::Transient);
+            assert_eq!(
+                fx.pr_view_reads(),
+                3,
+                "a transient refusal uses the existing bound"
+            );
+
+            fx.script_pr_views(&["invalid_json"]);
+            let error = run_private_vcs_operation("pr.status", &input)
+                .expect_err("Orbit rejects malformed successful provider output");
+            assert!(matches!(&error, OrbitError::Execution(_)));
+            assert!(error.private_vcs_failure().is_none());
+            assert_eq!(fx.pr_view_reads(), 1, "an Orbit refusal is never retried");
+
+            fx.script_merges(&["http_499"]);
+            let error = run_private_vcs_operation(
+                "pr.merge",
+                &json!({
+                    "pr": "42",
+                    "workspace_path": path_str(&fx.repo),
+                    "reviewed_head_sha": fx.candidate,
+                }),
+            )
+            .expect_err("merge remains a single-shot mutation");
+            assert!(error.to_string().contains("HTTP 499"));
+            assert_eq!(fx.merge_requests().len(), 1, "merge is not retried");
+
+            fx.script_pr_close_failure("HTTP 499: 499 (https://api.github.com/graphql)");
+            let error = run_private_vcs_operation(
+                "pr.close",
+                &json!({
+                    "pr": "42",
+                    "comment": "superseded",
+                    "workspace_path": path_str(&fx.repo),
+                }),
+            )
+            .expect_err("close remains a single-shot mutation");
+            assert!(error.to_string().contains("HTTP 499"));
+            assert_eq!(
+                fx.forge_calls()
+                    .into_iter()
+                    .filter(|call| call == "pr close")
+                    .count(),
+                1,
+                "close is not retried"
+            );
         },
     );
 }
@@ -7133,6 +7282,29 @@ impl Fixture {
         .unwrap();
     }
 
+    /// Answers to successive PR views; the final outcome repeats. `success`
+    /// lets the normal fixture response continue, while other lines fail as
+    /// the provider's stderr diagnostic. `invalid_json` succeeds at the
+    /// process boundary with malformed output to model an Orbit refusal.
+    fn script_pr_views(&self, outcomes: &[&str]) {
+        fs::write(
+            self.forge.join("pr-view-outcomes"),
+            format!("{}\n", outcomes.join("\n")),
+        )
+        .unwrap();
+        fs::write(self.forge.join("pr-view-reads"), "0\n").unwrap();
+    }
+
+    fn script_pr_close_failure(&self, diagnostic: &str) {
+        fs::write(self.forge.join("pr-close-failure"), diagnostic).unwrap();
+    }
+
+    fn pr_view_reads(&self) -> usize {
+        self.forge_state("pr-view-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
+    }
+
     /// Script PR metadata independently of the real remote PR head ref.
     fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
         fs::write(self.forge.join("heads"), format!("{}\n", heads.join("\n"))).unwrap();
@@ -8478,6 +8650,7 @@ merge() {
     case "$outcome" in
         ""|merge) ;;
         base_modified_422) refuse 422 "$base_modified" ;;
+        http_499) refuse 499 "499 (https://api.github.com/graphql)" ;;
         base_modified*)
             # Another PR landed on the base between the provider's
             # mergeability check and this mutation.
@@ -8626,7 +8799,24 @@ case "$1 ${2:-}" in
             echo '[]'
         fi ;;
     "pr create") create "$@" ;;
+    "pr close")
+        if [ -f "$forge/pr-close-failure" ]; then
+            cat "$forge/pr-close-failure" >&2
+            exit 1
+        fi
+        printf 'Closed\n' ;;
     "pr view")
+        if [ -f "$forge/pr-view-outcomes" ]; then
+            view_attempt=$(( $(cat "$forge/pr-view-reads") + 1 ))
+            printf '%s\n' "$view_attempt" > "$forge/pr-view-reads"
+            view_outcome=$(sed -n "${view_attempt}p" "$forge/pr-view-outcomes")
+            [ -n "$view_outcome" ] || view_outcome=$(tail -n 1 "$forge/pr-view-outcomes")
+            if [ "$view_outcome" = invalid_json ]; then printf '{'; exit 0; fi
+            if [ "$view_outcome" != success ]; then
+                printf '%s\n' "$view_outcome" >&2
+                exit 1
+            fi
+        fi
         case "$*" in
             *mergeStateStatus*)
                 draft_field=0
@@ -9002,6 +9192,14 @@ fn pr_create_retry_contracts() {
         pr_open_permanent_create_failures_never_retry_or_look_up_again();
         pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr();
         pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase();
+    });
+}
+
+#[test]
+fn pr_lookup_retry_contracts() {
+    isolated("pr_lookup_retry_contracts", |_| {
+        pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling();
+        pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens();
     });
 }
 
