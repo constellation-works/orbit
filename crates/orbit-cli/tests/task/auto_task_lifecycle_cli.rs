@@ -850,7 +850,7 @@ fn auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage() {
 /// An enabled delivery auto-task over a disposable `fixture-delivery` branch,
 /// baselined by one public evaluation. No landing, obligation, provider
 /// process, or action is introduced.
-fn baselined_delivery_consumer(
+pub(crate) fn baselined_delivery_consumer(
     fixture: &Fixture,
     trigger: &serde_json::Value,
 ) -> (

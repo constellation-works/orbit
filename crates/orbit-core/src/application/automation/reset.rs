@@ -42,7 +42,11 @@ pub fn reset_auto_task(
     // The baseline is read from the configured branch, not the executor's
     // HEAD. Preserve remote-first resolution, but let operator reset and
     // teardown proceed from the local ref when origin no longer serves it.
+    // Capture the fallback first: fetch can spend the source's whole deadline.
+    // Keep its error until needed so a missing local branch cannot prevent a
+    // successful remote-first reset.
     let source = Source::new(&runtime.paths().repo_root);
+    let local = source.local_head(&trigger.branch);
     let baseline = match source.head(&trigger.branch) {
         Ok((_, baseline)) => baseline,
         Err(error) => {
@@ -51,8 +55,7 @@ pub fn reset_auto_task(
                 %error,
                 "reset source fetch unavailable; using local branch head"
             );
-            source
-                .local_head(&trigger.branch)
+            local
                 .map(|(_, baseline)| baseline)
                 .map_err(automation_error_to_orbit)?
         }
@@ -93,7 +96,9 @@ pub fn reset_auto_task(
 
     // The pins are read before the write so the audit record names them, and
     // released after it: a refused reset must leave the frozen inputs of the
-    // debt it did not forget reachable.
+    // debt it did not forget reachable. This local pass gets its own budget:
+    // even a successful fetch may have spent the baseline source's deadline.
+    let source = Source::new(&runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
@@ -201,6 +206,8 @@ pub(crate) fn tear_down_auto_task_consumer(
 
     // Reset releases the pins it knows about; this catches the ones a consumer
     // without state, or a reset that could not delete them, left behind.
+    // Reset may have exhausted a fetch deadline since the initial pin read.
+    let source = Source::new(&runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;

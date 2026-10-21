@@ -27,6 +27,8 @@ mod agents_cli;
 mod audit_cli;
 mod auto_task_lifecycle_cli;
 mod auto_task_listing_cli;
+#[cfg(unix)]
+mod auto_task_reset_deadline;
 mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
 mod claimed_operator_comment;
