@@ -556,7 +556,8 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
     if catalog.kind == ArtifactKind::AutoTask {
         // The auto-task loader owns rules beyond parsing (the file stem must
         // equal the definition name), so reuse it wholesale.
-        let collection = collect_auto_tasks(&runtime.paths().local_dir);
+        let root = catalog.dir.parent().unwrap_or(&runtime.paths().local_dir);
+        let collection = collect_auto_tasks(root);
         let scanned = collection.definitions.len() + collection.errors.len();
         for error in collection.errors {
             let path = error.path.unwrap_or_else(|| catalog.dir.clone());

@@ -231,7 +231,10 @@ impl OrbitRuntime {
     /// body, its settings entry, and for a fork the fields that differ from
     /// the bundled default.
     pub fn auto_task_layering(&self, name: &str) -> Result<AutoTaskLayering, OrbitError> {
-        let dir = self.auto_task_settings_dir();
+        let root = self
+            .auto_task_read_root(name)?
+            .ok_or_else(|| self.auto_task_missing(name, true))?;
+        let dir = auto_tasks_dir(&root);
         let table = load_settings_table(&dir).map_err(settings_error)?;
         let settings = table.get(name).cloned();
         let Some(rendered) = rendered_bundled_body(name, self.workspace_base_branch()) else {

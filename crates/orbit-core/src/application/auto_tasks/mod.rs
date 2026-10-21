@@ -32,6 +32,7 @@ mod change_probe;
 pub mod crud;
 pub mod delete;
 pub mod listing;
+mod read;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;

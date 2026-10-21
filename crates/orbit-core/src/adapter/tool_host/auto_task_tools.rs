@@ -134,7 +134,9 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         runtime.auto_task_enabled(&listed.definition),
         listed.skipped_reason.as_deref(),
     )?;
-    let definition_root = runtime.local_root();
+    let definition_root = runtime
+        .auto_task_read_root(&name)?
+        .ok_or_else(|| runtime.auto_task_missing(&name, true))?;
     value["definition_source"] = json!({
         "root": definition_root,
         "path": definition_path(&definition_root, &name),
@@ -289,7 +291,7 @@ fn mint(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
 /// Recover a delivery consumer stalled by settings or rebased history.
 /// Without an applying request this is a read-only preview.
 fn recover(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    let definition = existing_definition(runtime, &input.required_string("name")?)?;
+    let name = input.required_string("name")?;
     let request = RecoveryRequest {
         adopt_settings: input.optional_bool("adopt_settings")?.unwrap_or(false),
         reissue_action: input.optional_bool("reissue_action")?.unwrap_or(false),
@@ -302,6 +304,11 @@ fn recover(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbi
                 .to_string(),
         ));
     }
+    let definition = if request.mutates() {
+        runtime.require_local_auto_task(&name)?
+    } else {
+        existing_definition(runtime, &name)?
+    };
     let preview = crate::application::automation::recover_auto_task(
         runtime,
         &definition,
@@ -314,10 +321,15 @@ fn recover(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbi
 /// Forget one delivery consumer's coverage debt and re-baseline it. Without a
 /// `reason` this only previews what would be forgotten.
 fn reset(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
-    let definition = existing_definition(runtime, &input.required_string("name")?)?;
+    let name = input.required_string("name")?;
     let request = ResetRequest {
         reason: input.optional_string("reason")?.unwrap_or_default(),
         force: input.optional_bool("force")?.unwrap_or(false),
+    };
+    let definition = if request.mutates() {
+        runtime.require_local_auto_task(&name)?
+    } else {
+        existing_definition(runtime, &name)?
     };
     let preview = crate::application::automation::reset_auto_task(
         runtime,
@@ -334,7 +346,7 @@ fn existing_definition(
 ) -> Result<AutoTaskDefinition, OrbitError> {
     runtime
         .auto_task_show(name)?
-        .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
+        .ok_or_else(|| runtime.auto_task_missing(name, true))
 }
 
 fn with_warnings(mut response: Value, warnings: Vec<String>) -> Result<Value, OrbitError> {

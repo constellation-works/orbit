@@ -554,7 +554,162 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     let main_orbit = main_repo.join(".orbit");
     let linked_orbit = linked_worktree.join(".orbit");
     write_auto_task_fixture(&main_orbit, "Primary checkout definition");
+
+    // An empty run-worktree catalog must not hide workspace definitions.
+    fs::create_dir_all(linked_orbit.join("auto_tasks")).expect("empty candidate catalog");
+    let primary_bytes = fs::read(main_orbit.join("auto_tasks/candidate-probe.yaml"))
+        .expect("primary definition before inspection");
+    fs::write(
+        main_orbit.join("auto_tasks/.orbit-auto-task-settings.json"),
+        r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"high"}}}"#,
+    )
+    .expect("workspace settings");
+    {
+        let args = ["auto-task", "show", "candidate-probe", "--json"];
+        let shown = run_orbit_json(&linked_worktree, &home, &args, None);
+        assert_eq!(shown["description"], "Primary checkout definition");
+        assert_eq!(shown["template"]["priority"], "high");
+        assert_eq!(shown["layering"]["settings"]["priority"], "high");
+        assert_eq!(
+            shown["enabled"], false,
+            "disabled definitions remain inspectable"
+        );
+        assert_eq!(
+            shown["definition_source"]["root"],
+            main_orbit.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            shown["definition_source"]["path"],
+            main_orbit
+                .join("auto_tasks/candidate-probe.yaml")
+                .to_string_lossy()
+                .as_ref()
+        );
+    }
+    for args in [
+        vec!["auto-task", "list", "--format", "json"],
+        vec!["tool", "run", "orbit.auto_task.list", "--input", "{}"],
+    ] {
+        let listed = run_orbit_json(&linked_worktree, &home, &args, None);
+        assert!(
+            listed
+                .as_array()
+                .expect("definition rows")
+                .iter()
+                .any(|row| {
+                    row["name"] == "candidate-probe"
+                        && row["description"] == "Primary checkout definition"
+                }),
+            "workspace definition missing from {listed}"
+        );
+    }
+    let missing = run_orbit_output(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "absent-probe", "--json"],
+        None,
+    );
+    assert!(!missing.status.success());
+    let refusal: Value = serde_json::from_slice(&missing.stderr).expect("typed JSON refusal");
+    assert_eq!(refusal["code"], "invalid_input");
+    let error = refusal["error"].as_str().expect("refusal message");
+    assert!(
+        error.contains(main_orbit.to_str().expect("root")),
+        "searched workspace root: {error}"
+    );
+    assert!(
+        error.contains(linked_orbit.to_str().expect("root")),
+        "searched candidate root: {error}"
+    );
+    assert!(
+        error.contains("orbit auto-task list"),
+        "scope discovery command: {error}"
+    );
+    for args in [
+        vec!["auto-task", "mint", "candidate-probe"],
+        vec![
+            "auto-task",
+            "update",
+            "candidate-probe",
+            "--description",
+            "must stay local",
+        ],
+        vec!["auto-task", "toggle", "candidate-probe", "on"],
+        vec![
+            "auto-task",
+            "recover",
+            "candidate-probe",
+            "--adopt-settings",
+            "--reason",
+            "lookup probe",
+        ],
+        vec![
+            "auto-task",
+            "reset",
+            "candidate-probe",
+            "--reason",
+            "lookup probe",
+        ],
+    ] {
+        let mut command = orbit_command(&linked_worktree, &home, &args, None);
+        // Exercise the operator-only reset on the disposable fixture, as the
+        // lifecycle CLI fixtures do; no ambient authority reaches this child.
+        if args[1] == "reset" {
+            command.env("ORBIT_OPERATOR", "1");
+        }
+        let refused = command.output().expect("local write lookup");
+        assert!(
+            !refused.status.success(),
+            "shared inspection must not widen write scope: {args:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("no such auto-task"),
+            "local-only definition lookup must refuse before mutation: {refused:?}"
+        );
+    }
+    assert_eq!(
+        fs::read(main_orbit.join("auto_tasks/candidate-probe.yaml")).expect("primary after reads"),
+        primary_bytes
+    );
+    assert!(
+        fs::read_dir(linked_orbit.join("auto_tasks"))
+            .expect("candidate catalog")
+            .next()
+            .is_none(),
+        "reads and a refused mint must not create local definitions"
+    );
+
     write_auto_task_fixture(&linked_orbit, "Linked candidate definition");
+    fs::write(
+        linked_orbit.join("auto_tasks/.orbit-auto-task-settings.json"),
+        r#"{"schemaVersion":1,"definitions":{"candidate-probe":{"priority":"low"}}}"#,
+    )
+    .expect("candidate settings");
+    fs::write(
+        main_orbit.join("auto_tasks/workspace-only.yaml"),
+        String::from_utf8(primary_bytes.clone())
+            .expect("definition text")
+            .replace("candidate-probe", "workspace-only"),
+    )
+    .expect("shared-only definition for union listing");
+    let union = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    let rows = union.as_array().expect("union rows");
+    let candidates: Vec<_> = rows
+        .iter()
+        .filter(|row| row["name"] == "candidate-probe")
+        .collect();
+    assert_eq!(candidates.len(), 1, "candidate overrides shared body once");
+    assert_eq!(candidates[0]["description"], "Linked candidate definition");
+    assert_eq!(candidates[0]["template"]["priority"], "low");
+    assert!(
+        rows.iter().any(|row| row["name"] == "workspace-only"),
+        "a local candidate must not hide other shared names"
+    );
 
     let workspaces = run_orbit_json(
         &main_repo,
@@ -584,6 +739,10 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert_eq!(
         from_worktree_logical["description"],
         "Linked candidate definition"
+    );
+    assert_eq!(
+        from_worktree_logical["layering"]["settings"]["priority"],
+        "low"
     );
     assert_eq!(
         from_worktree_logical["definition_source"]["root"],
@@ -722,6 +881,143 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert!(
         !linked_orbit.join("tasks").exists(),
         "writable routing must not create a worktree-local shadow store"
+    );
+
+    fs::write(
+        linked_orbit.join("auto_tasks/candidate-probe.yaml"),
+        "invalid: [",
+    )
+    .expect("broken candidate");
+    let broken = run_orbit_output(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "candidate-probe", "--json"],
+        None,
+    );
+    assert!(
+        !broken.status.success(),
+        "an invalid candidate must not fall back to the shared body"
+    );
+    let listed = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    assert!(
+        !listed
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "candidate-probe"),
+        "a broken local entry must shadow the shared definition"
+    );
+    // A shared plugin definition must carry its original inactive provenance.
+    let plugin_body = String::from_utf8(primary_bytes)
+        .expect("definition text")
+        .replace("candidate-probe", "plugin-probe");
+    fs::write(
+        main_orbit.join("auto_tasks/plugin-probe.yaml"),
+        format!("# provenance: plugin:absent-probe@1.0.0\n{plugin_body}"),
+    )
+    .expect("shared plugin definition");
+    let plugin = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "show", "plugin-probe", "--json"],
+        None,
+    );
+    assert_eq!(plugin["inactive_plugin"]["namespace"], "absent-probe");
+    assert!(
+        plugin["skipped_reason"]
+            .as_str()
+            .expect("inactive reason")
+            .contains(main_orbit.to_str().expect("root")),
+        "inactive reason must name the supplying catalog"
+    );
+    let visible = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+        None,
+    );
+    assert!(
+        !visible
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "plugin-probe"),
+        "inactive plugin definitions stay hidden"
+    );
+    let all = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &["auto-task", "list", "--all", "--format", "json"],
+        None,
+    );
+    assert!(
+        all.as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["name"] == "plugin-probe"
+                && row["inactive_plugin"]["namespace"] == "absent-probe")
+    );
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            main_orbit.join("auto_tasks/workspace-only.yaml"),
+            linked_orbit.join("auto_tasks/workspace-only.yaml"),
+        )
+        .expect("symlink candidate");
+        let confined = run_orbit_output(
+            &linked_worktree,
+            &home,
+            &["auto-task", "show", "workspace-only", "--json"],
+            None,
+        );
+        assert!(
+            !confined.status.success(),
+            "a symlinked candidate cannot redirect or fall back"
+        );
+        let listed = run_orbit_json(
+            &linked_worktree,
+            &home,
+            &["auto-task", "list", "--format", "json"],
+            None,
+        );
+        assert!(
+            !listed
+                .as_array()
+                .expect("rows")
+                .iter()
+                .any(|row| row["name"] == "workspace-only"),
+            "a symlinked local entry must not expose the shared definition"
+        );
+    }
+
+    fs::write(
+        main_orbit.join("auto_tasks/shared-fault.yaml"),
+        "invalid: [",
+    )
+    .expect("shared catalog fault");
+    let doctor = run_orbit_output(&linked_worktree, &home, &["doctor", "--json"], None);
+    let checks: Vec<Value> = serde_json::from_slice(&doctor.stdout).expect("doctor rows");
+    let auto_tasks = checks
+        .iter()
+        .find(|row| row["check"] == "artifacts-auto-tasks")
+        .expect("auto-task health");
+    assert!(
+        auto_tasks["remediation"]
+            .as_str()
+            .expect("health remediation")
+            .contains(
+                main_orbit
+                    .join("auto_tasks/shared-fault.yaml")
+                    .to_str()
+                    .expect("fault path")
+            ),
+        "worktree diagnostics must inspect the shared catalog: {auto_tasks}"
     );
 
     let outside_checkout = temp.path().to_string_lossy().into_owned();

@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::AutoTaskSchedule;
 
 use super::crud::require_loaded;
-use super::loader::{AutoTaskCollection, AutoTaskLoadError, collect_auto_tasks};
+use super::loader::{AutoTaskCollection, AutoTaskLoadError};
 use super::schedule::next_scheduled_slot;
 use super::scheduler::ListedAutoTask;
 use super::state::{AutoTaskCursor, cursor_state_path, load_cursor_state};
@@ -89,7 +89,7 @@ impl OrbitRuntime {
         include_inactive_plugins: bool,
         now: DateTime<Utc>,
     ) -> Result<AutoTaskListing, OrbitError> {
-        let collection = collect_auto_tasks(&self.paths().local_dir);
+        let collection = self.collect_readable_auto_tasks();
         require_loaded(&collection)?;
         Ok(self.listing_from(collection, include_inactive_plugins, now))
     }
@@ -101,7 +101,7 @@ impl OrbitRuntime {
         include_inactive_plugins: bool,
         now: DateTime<Utc>,
     ) -> AutoTaskListing {
-        let collection = collect_auto_tasks(&self.paths().local_dir);
+        let collection = self.collect_readable_auto_tasks();
         self.listing_from(collection, include_inactive_plugins, now)
     }
 
