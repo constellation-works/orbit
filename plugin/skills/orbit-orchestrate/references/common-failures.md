@@ -38,7 +38,7 @@ Solution:
 2. Release through the CLI-only lock admin surface, not by editing SQLite:
 
    ```bash
-   orbit task locks release <reservation_id>
+   orbit task locks release <reservation_id> --confirm
    ```
 
 3. Re-run or re-check the blocked run. The next reserve attempt should either acquire a fresh reservation with `owner_run_id` set or reveal a different conflict.

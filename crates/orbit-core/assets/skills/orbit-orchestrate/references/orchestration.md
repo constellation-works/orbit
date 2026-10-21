@@ -413,8 +413,8 @@ state if it still lacks selectors. Do not re-pilot the whole backlog for it.
 - **A selector added mid-run binds only reservations requested after it.** It
   cannot retroactively revoke a reservation a concurrent run already holds.
 - **Inspect and repair stale reservations** with `orbit task locks list` and
-  `orbit task locks release <reservation_id>` — never by editing the store. The
-  signature to match first is in [common-failures.md](common-failures.md).
+  `orbit task locks release <reservation_id> --confirm` — never by editing
+  the store. The signature to match first is in [common-failures.md](common-failures.md).
 
 ## Large tasks and hierarchy
 
