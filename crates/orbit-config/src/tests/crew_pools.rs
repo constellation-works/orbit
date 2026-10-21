@@ -22,6 +22,7 @@ fn crews() -> BTreeMap<String, Crew> {
                     },
                     description: None,
                     tags: Vec::new(),
+                    env: Vec::new(),
                     enabled: true,
                 },
             )

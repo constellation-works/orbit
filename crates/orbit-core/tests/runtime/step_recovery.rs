@@ -332,6 +332,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
             provider: None,
             model: Some(model.to_string()),
             reasoning_effort: None,
+            env: Vec::new(),
         }))
     }
 

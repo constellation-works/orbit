@@ -224,6 +224,22 @@ pub(crate) fn run_header_text_with_lock_holders(
     {
         lines.push(format!("{} {}", bold("Unset env:"), unset.join(", ")));
     }
+    // Crews whose `env` sources the submitting process did not hold: drains
+    // excluded them and their activities were refused.
+    if let Some(unset) = state
+        .map(|state| &state.crew_env_unset)
+        .filter(|crews| !crews.is_empty())
+    {
+        lines.push(format!(
+            "{} {}",
+            bold("Unset crew env:"),
+            unset
+                .iter()
+                .map(orbit_types::workflow::CrewEnvUnset::describe)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
 }

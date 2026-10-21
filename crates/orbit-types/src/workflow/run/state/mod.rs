@@ -29,7 +29,7 @@ pub use failure::{
     is_provider_limit, is_provider_refusal, is_provider_unavailable,
     is_validation_environment_failure,
 };
-pub use pipeline::PipelineState;
+pub use pipeline::{CrewEnvUnset, PipelineState};
 pub use recovery::{
     ActivityCrewDraw, ActivityCrewPoolMember, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit, FinalRecoveryResume,

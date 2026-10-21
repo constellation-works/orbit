@@ -53,6 +53,7 @@ fn agent_loop_activity(
             proc_disallowed_programs: None,
             trusted_host_execution: false,
             tool_disallow_list: None,
+            crew_env: Vec::new(),
         }),
     }
 }

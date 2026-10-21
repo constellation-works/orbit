@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AgentFamily, IdentityError, ProviderModelError};
+use super::{AgentFamily, CrewEnvVar, IdentityError, ProviderModelError};
 
 /// A resolved (orchestrator, helper) duo for a given agent family.
 ///
@@ -226,6 +226,11 @@ pub struct Crew {
     /// serialized form while `true`, so existing records keep their shape.
     #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// `[crews.<name>] env`: variables this crew's agents receive on top of
+    /// `[execution.env] pass`, names only. Admitted only from the global
+    /// config file, so a workspace cannot route host secrets into agents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<CrewEnvVar>,
 }
 
 fn crew_enabled_default() -> bool {

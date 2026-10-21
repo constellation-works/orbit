@@ -27,7 +27,7 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::layering::{
-    reject_workspace_machine_table, resolve_workspace_file_document,
+    reject_workspace_crew_env, reject_workspace_machine_table, resolve_workspace_file_document,
     validate_staged_global_document, validate_staged_workspace_document,
 };
 use crate::operation::OperationLayerSource;
@@ -347,7 +347,7 @@ impl ConfigStore {
             .unwrap_or_default();
         Err(OrbitError::InvalidInput(format!(
             "config key '{key}' belongs to the global config only; rerun with --global to edit \
-             this machine's settings{global_path}"
+             it{global_path}"
         )))
     }
 
@@ -616,7 +616,10 @@ impl ConfigStore {
             ))
         })?;
         match self.scope {
-            ConfigScope::Workspace => reject_workspace_machine_table(&document, &self.path),
+            ConfigScope::Workspace => {
+                reject_workspace_machine_table(&document, &self.path)?;
+                reject_workspace_crew_env(&document, &self.path)
+            }
             ConfigScope::Global => reject_global_plugin_enablement(&document, &self.path),
         }
     }
@@ -761,6 +764,7 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
         "description" => serde_json::json!(crew.description),
         "tags" => serde_json::json!(crew.tags),
         "enabled" => serde_json::json!(crew.enabled),
+        "env" => serde_json::json!(crew.env),
         _ => JsonValue::Null,
     }))
 }

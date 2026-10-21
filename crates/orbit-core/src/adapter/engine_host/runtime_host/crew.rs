@@ -121,8 +121,6 @@ pub(super) fn agent_crew_config_for_input(
     crate::runtime::engine::crew::enforce_crew_allowlist(allowlist.as_ref(), &crew, &origin)
         .map_err(|error| DispatchError::JobValidation(error.to_string()))?;
     Ok(Some(
-        crate::runtime::engine::environment_host::typed_crew_config_from_assignment(
-            &crew.assignment,
-        ),
+        crate::runtime::engine::environment_host::typed_crew_config(&crew),
     ))
 }

@@ -562,6 +562,9 @@ fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &Sect
         if !crew.description.is_empty() {
             let _ = write!(trailing, "  {}", crew.description);
         }
+        if !crew.env.is_empty() {
+            let _ = write!(trailing, "  env {}", crew.env);
+        }
         if !crew.annotation.is_empty() {
             let _ = write!(trailing, "  ← {}", crew.annotation);
         }
@@ -579,6 +582,8 @@ struct CrewRow {
     effort: String,
     tags: String,
     description: String,
+    /// `env` entries (`NAME` / `NAME=SOURCE`, names only), empty when none.
+    env: String,
     /// Which `workflow.*` keys point at this crew.
     annotation: String,
 }
@@ -659,6 +664,10 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
                     .get("description")
                     .map(|(value, _)| value.clone())
                     .filter(|value| value != NO_VALUE)
+                    .unwrap_or_default(),
+                env: crew
+                    .get("env")
+                    .map(|(value, _)| value.clone())
                     .unwrap_or_default(),
                 annotation: annotation.join(", "),
                 name,

@@ -477,6 +477,14 @@ impl RuntimeHost for OrbitRuntime {
         self.agent_session_environment(required_env_vars)
     }
 
+    fn crew_agent_subprocess_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        required_env_vars: &[&str],
+    ) -> Vec<(String, String)> {
+        self.crew_agent_session_environment(crew_env, required_env_vars)
+    }
+
     fn requires_claude_worker_credential(&self) -> bool {
         cfg!(target_os = "macos")
     }

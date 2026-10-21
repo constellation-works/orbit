@@ -131,7 +131,7 @@ pub use run::{
     BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedFailures, BaselineRedHold, CANDIDATE_HELD_EVENT,
     CANDIDATE_HELD_MARKER, CHILD_CANCELLED_ERROR_CODE, CHILD_TIMEOUT_ERROR_CODE,
     CLI_STDERR_TAIL_SEPARATOR, CONTRACT_REFUSAL_MARKER, ClaimFailureClass, CommentLogMark,
-    CommitObservation, CommitObservationStatus, CrewExclusion, CrewExclusionSource,
+    CommitObservation, CommitObservationStatus, CrewEnvUnset, CrewExclusion, CrewExclusionSource,
     DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralLane, DeferralProbe,
     DeferredSandboxArtifact, DeferredSandboxValidation, DeliveryEvidenceGap,
     DeliveryEvidenceProvenance, DrainAdmissionForecast, DrainAdmissionPass, DrainAdmissionsStop,

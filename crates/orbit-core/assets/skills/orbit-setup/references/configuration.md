@@ -159,6 +159,28 @@ disabled crew. Enable one with:
 orbit config set crews.gemini.enabled true
 ```
 
+A crew can run on its own provider account through `env`, a list of variables
+its agents receive on top of `execution.env.pass` (names only, never values):
+
+```toml
+# ~/.orbit/config.toml only
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus-5-5"
+env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]   # or a bare "NAME"
+```
+
+`NAME=SOURCE` gives the agent `NAME` with the value of `SOURCE` from the
+launching shell (or `~/.orbit/clock.env` for clock-started runs); a bare `NAME`
+passes that variable to this crew only. The entry wins over `pass`, and setting
+one Claude credential removes the other from that crew. `env` is global-only:
+a workspace `config.toml` that sets it fails to load, and `orbit config set`
+needs `--global`. With the source unset, drain, ship and job starts warn, the
+drain leaves the crew out of its window, the crew's activities are refused
+rather than run on the default login, and `orbit doctor`'s `env-pass` row
+reports it. Usage limits and failure holds still apply per provider. Details:
+`docs/CONFIG.md`, "Per-crew credentials".
+
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode, Muse), with `enabled = true` on the crews whose

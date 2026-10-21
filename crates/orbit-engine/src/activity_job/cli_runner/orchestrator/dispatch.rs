@@ -51,7 +51,7 @@ use crate::context::RuntimeHost;
 
 use super::environment::{
     activity_deadline_env, add_browser_kit_env, codex_home, provider_child_environment,
-    require_claude_worker_credential,
+    require_claude_worker_credential, require_crew_env,
 };
 use super::evidence::{
     emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
@@ -312,8 +312,13 @@ pub(crate) fn run_cli_backend_for_step(
     // this run's identity and tool pinning override any same-named value the
     // allowlist forwarded from an outer process. [ORB-10917] Tool pinning keeps
     // this environment's PATH, `workflow.validation_env.path` first. [ORB-15204]
-    let mut child_env =
-        provider_child_environment(host, &provider, sandbox, invocation.required_env_vars);
+    let mut child_env = provider_child_environment(
+        host,
+        &provider,
+        sandbox,
+        &spec.crew_env,
+        invocation.required_env_vars,
+    );
     let orbit_env = orbit_tool_env(&child_env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
 
@@ -562,6 +567,7 @@ pub(crate) fn run_cli_backend_for_step(
         }
         None => None,
     };
+    require_crew_env(&spec.crew_env, &child_env)?;
     require_claude_worker_credential(host, &provider, &child_env)?;
     if inspection.is_some() {
         // This invocation has no job-run authority. An outer managed process

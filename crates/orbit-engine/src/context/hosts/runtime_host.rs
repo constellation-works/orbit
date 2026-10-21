@@ -455,6 +455,18 @@ pub trait RuntimeHost: Send + Sync {
     /// PATH and the rest of the resolved validation PATH after it, the same
     /// for every agent lane. [ORB-10917] [ORB-15204] [ORB-15293]
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)>;
+    /// [`Self::agent_subprocess_environment`] for an agent of a crew with
+    /// `[crews.<name>] env` entries: each entry's name gets its source's value
+    /// from the environment the host launched with (runtime defaults such as
+    /// `clock.env` included) and wins over `pass`; an entry whose source is
+    /// unset is absent; a crew that sets one Claude credential has the other
+    /// removed. With no entries it answers exactly what
+    /// `agent_subprocess_environment` does.
+    fn crew_agent_subprocess_environment(
+        &self,
+        crew_env: &[orbit_types::identity::CrewEnvVar],
+        required_env_vars: &[&str],
+    ) -> Vec<(String, String)>;
     /// Whether a Claude activity must be launched with its own credential
     /// (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`) rather than start on
     /// the login the Claude Desktop app shares [ORB-15154].
