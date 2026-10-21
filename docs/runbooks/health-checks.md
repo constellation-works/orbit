@@ -318,8 +318,12 @@ no-op.
 ### Repair retired activity backends
 
 `artifacts-activities` uses the same load and tool-allowlist path as production activity
-catalog construction, including workspace-local `.orbit/resources/activities/` files. A
-schemaVersion 2 `agent_loop` activity that still declares `spec.backend: http` or
+catalog construction, including workspace-local `.orbit/resources/activities/` files.
+Duplicate activity names within one catalog directory tree are reported with both file
+paths; rename one activity or remove the unintended definition. The same name in different
+precedence roots remains a legal override, and retired schemaVersion 1 definitions are
+skipped as they are during catalog loading. A schemaVersion 2 `agent_loop` activity that
+still declares `spec.backend: http` or
 `spec.backend: auto` is a warning that names the file, the rejected field/value, the catalog
 parse error, and one opt-in repair:
 

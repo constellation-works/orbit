@@ -34,6 +34,87 @@ fn health_of(report: &[ArtifactHealth], kind: ArtifactKind) -> &ArtifactHealth {
         .unwrap_or_else(|| panic!("missing artifact health for {kind:?}"))
 }
 
+#[test]
+fn activity_catalog_health_matches_runtime_duplicate_admission() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "activity_catalog_health_matches_runtime_duplicate_admission",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::CatalogError;
+
+    const NAME: &str = "duplicate_admission_fixture";
+    for case in ["same-root", "cross-root", "retired"] {
+        let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+        let (runtime, _, activities) = workspace_runtime(root.path());
+        let global = root.path().join("global/resources/activities");
+        std::fs::create_dir_all(&global).expect("global activities");
+        let preferred = global.join("preferred.yaml");
+        std::fs::write(&preferred, agent_loop_yaml(NAME, "")).expect("global activity");
+        let first = activities.join("first.yaml");
+        std::fs::write(&first, agent_loop_yaml(NAME, "")).expect("workspace activity");
+        let second = activities.join("nested/second.yml");
+        if case != "cross-root" {
+            std::fs::create_dir_all(second.parent().expect("nested directory"))
+                .expect("nested activities");
+            let yaml = agent_loop_yaml(NAME, "");
+            let yaml = if case == "retired" {
+                yaml.replacen("schemaVersion: 2", "schemaVersion: 1", 1)
+            } else {
+                yaml
+            };
+            std::fs::write(&second, yaml).expect("second activity");
+        }
+
+        let catalog = runtime.v2_activity_catalog();
+        let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+        let findings = &health_of(&report, ArtifactKind::Activity).findings;
+        if case == "same-root" {
+            match catalog.expect_err("even shadowed lower-layer duplicates block loading") {
+                CatalogError::DuplicateName {
+                    name,
+                    first: a,
+                    second: b,
+                } => {
+                    assert_eq!(name, NAME);
+                    assert!(
+                        (a == first && b == second) || (a == second && b == first),
+                        "loader must identify both conflicting files: {a:?}, {b:?}"
+                    );
+                }
+                error => panic!("expected duplicate-name error: {error}"),
+            }
+            let faults: Vec<_> = findings
+                .iter()
+                .filter(|finding| finding.condition == ArtifactCondition::Faulty)
+                .collect();
+            assert_eq!(
+                faults.len(),
+                1,
+                "doctor must expose the duplicate blocker: {findings:?}"
+            );
+            let fault = faults[0];
+            assert_eq!(fault.name, NAME);
+            assert!(fault.path == first || fault.path == second);
+            for path in [&first, &second] {
+                assert!(
+                    fault.detail.contains(path.to_str().expect("fixture path")),
+                    "doctor must name both conflicting files: {fault:?}"
+                );
+            }
+        } else {
+            let catalog = catalog.expect("cross-root overrides and retired duplicates are legal");
+            assert_eq!(catalog.source(NAME), Some(preferred.as_path()));
+            assert!(
+                findings.is_empty(),
+                "{case} must stay healthy: {findings:?}"
+            );
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_retirement_confines_linked_and_regular_skill_assets() {
