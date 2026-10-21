@@ -75,9 +75,15 @@ fn census_orders_the_mac_dk_server_and_owner_mix() {
     let root = Arc::new(TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap());
     let (owner, repo) = open_runtime(root.path(), OWNER);
     let owner = owner.with_host_os(Some(HostOs::Linux));
-    let fungible = backlog_task(&owner, &repo, "src/fungible.rs", None);
-    let linux = backlog_task(&owner, &repo, "src/linux.rs", None);
-    let mac = backlog_task(&owner, &repo, "src/mac.rs", None);
+    // Keep the census independent of provider CLIs installed on the test
+    // host: the owner can run the shared Sol crew, but its crew preflight
+    // excludes Opus; followers below get launchable provider stand-ins.
+    launchable_providers(&owner);
+    let missing_claude = root.path().join("missing-claude-cli");
+    follower_cli(&owner, "claude", &missing_claude.to_string_lossy());
+    let fungible = backlog_task(&owner, &repo, "src/fungible.rs", Some("sol"));
+    let linux = backlog_task(&owner, &repo, "src/linux.rs", Some("sol"));
+    let mac = backlog_task(&owner, &repo, "src/mac.rs", Some("opus"));
     for (task, priority, tags) in [
         (&fungible, "high", json!([])),
         (&linux, "low", json!(["os:linux"])),
