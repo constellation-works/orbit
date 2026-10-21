@@ -989,3 +989,11 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
 .task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .task-create [aria-invalid="true"] { border-color: var(--state-error); }
 #task-create-feedback { overflow-wrap: anywhere; }
+
+/* Holding pilot findings use the shared warning palette and a text label. */
+.chip.pilot-warning-chip {
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  border-color: var(--warn-line);
+  white-space: nowrap;
+}

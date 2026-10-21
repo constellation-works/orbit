@@ -421,6 +421,7 @@ fn task_list_page_json(
 ) -> Result<Value, orbit_core::OrbitError> {
     let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
         filter: query.filter(),
+        pilot_warnings: query.pilot_warnings(),
         limit: query.limit(),
         ..Default::default()
     })?;

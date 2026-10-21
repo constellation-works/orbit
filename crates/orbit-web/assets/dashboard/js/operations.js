@@ -1794,12 +1794,19 @@ function autoDrainWindow(payload) {
   const approvals = autoDrainApprovals(payload.approvals);
   if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
   if (stats.children.length === 0) return null;
-  if (!approvals || approvals.lines.length === 0) return stats;
-  const findings = el("ul", { class: "drain-approval-findings" });
-  for (const line of approvals.lines) {
-    findings.append(el("li", { text: line }));
-  }
-  return el("div", { class: "drain-window" }, [stats, findings]);
+  if (!approvals || !approvals.reasons.length) return stats;
+  const summary = el("div", { class: "drain-approval-summary" });
+  approvals.reasons.forEach(([reason, count], index) => {
+    if (index) summary.append(" · ");
+    const label = reason === "warnings" ? "held for pilot warnings" : (reason || "unclassified").replaceAll("_", " ");
+    const item = el(reason === "warnings" ? "a" : "span", { text: `${count} ${label}` });
+    if (reason === "warnings") {
+      item.href = "#tasks?status=proposed&pilot=warnings";
+      item.title = "Show proposed tasks with pilot warnings";
+    }
+    summary.append(item);
+  });
+  return el("div", { class: "drain-window" }, [stats, summary]);
 }
 
 // The card's last row: the coordinator run (or the replica's pull drain), the
@@ -1827,34 +1834,17 @@ function autoDrainFoot(payload) {
 // Whether the live window was started with approve-proposed, and what its
 // passes have done so far. The payload's `approvals` reports the status
 // drain's own input: `approved_total` counts the whole window, while the
-// held figures describe the latest pass, with each task's reason in the title.
+// held figures describe the latest pass. Findings live on each task.
 function autoDrainApprovals(approvals) {
   if (!approvals || approvals.enabled !== true) return null;
   const approved = Number(approvals.approved_total);
   const held = Number(approvals.held_total);
-  const reasons = Object.entries(approvals.held_by_reason || {})
-    .map(([reason, count]) => `${count} × ${(reason || "unclassified").replaceAll("_", " ")}`);
-  const heldTasks = (Array.isArray(approvals.held) ? approvals.held : [])
-    .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}${task.reason === "pilot_verified_no_diff" && task.detail ? ` (${task.detail})` : ""}`);
-  const lines = (Array.isArray(approvals.held) ? approvals.held : []).flatMap((task) => {
-    const findings = Array.isArray(task.findings) ? task.findings : [];
-    return findings.flatMap((finding) => {
-      const kind = String(finding?.kind || "").trim();
-      const text = String(finding?.text || "").trim();
-      return kind && text ? [`${task.task_id}: ${kind}: ${text}`] : [];
-    });
-  });
-  const title = [
-    `Approving proposed tasks. ${AUTO_DRAIN_APPROVE_RULE}`,
-    reasons.length ? `Held in the latest pass: ${reasons.join(", ")}.` : "",
-    heldTasks.join("\n"),
-    lines.join("\n"),
-  ].filter(Boolean).join("\n");
+  const reasons = Object.entries(approvals.held_by_reason || {});
   return {
     approved: Number.isFinite(approved) ? approved : "—",
     held: Number.isFinite(held) && held > 0 ? `${held} held` : "",
-    title,
-    lines,
+    title: `Approving proposed tasks. ${AUTO_DRAIN_APPROVE_RULE}`,
+    reasons,
   };
 }
 

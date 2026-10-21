@@ -630,6 +630,26 @@ fn workspace_task_keys(
     query: &TaskPageQuery,
 ) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
     let filter = query.filter();
+    if query.pilot_warnings() {
+        let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
+            filter,
+            pilot_warnings: true,
+            limit: query.limit(),
+            ..Default::default()
+        })?;
+        return Ok(TaskCandidateKeys {
+            items: page
+                .items
+                .into_iter()
+                .map(|row| TaskCandidateKey {
+                    id: row.task.id,
+                    created_at: row.task.created_at,
+                })
+                .collect(),
+            total: page.total,
+            total_without_cursor: page.total_without_cursor,
+        });
+    }
     if let Some(keys) = runtime.task_candidate_keys(&filter, query.limit())? {
         return Ok(keys);
     }

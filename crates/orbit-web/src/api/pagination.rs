@@ -27,6 +27,7 @@ pub(super) struct TaskCursor {
 pub(super) struct TaskPageQuery {
     statuses: Vec<TaskStatus>,
     no_statuses: bool,
+    pilot_warnings: bool,
     tags: Vec<String>,
     task_type: Option<TaskType>,
     origin: Option<TaskOrigin>,
@@ -41,6 +42,7 @@ impl Default for TaskPageQuery {
         Self {
             statuses: Vec::new(),
             no_statuses: false,
+            pilot_warnings: false,
             tags: Vec::new(),
             task_type: None,
             origin: None,
@@ -57,6 +59,7 @@ impl TaskPageQuery {
         let mut query = Self::default();
         for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
             match key.as_ref() {
+                "pilot" => query.pilot_warnings = value == "warnings",
                 "status" => query.parse_statuses(&value)?,
                 "tag" | "tags" => query.tags.extend(split_values(&value).map(str::to_string)),
                 "type" | "task_type" => {
@@ -119,6 +122,10 @@ impl TaskPageQuery {
         }
     }
 
+    pub(super) fn pilot_warnings(&self) -> bool {
+        self.pilot_warnings
+    }
+
     pub(super) fn limit(&self) -> usize {
         self.limit
     }
@@ -178,6 +185,9 @@ impl TaskPageQuery {
         });
         // Keyed only when set, so a cursor issued before the origin filter
         // existed still binds to the same unfiltered listing.
+        if self.pilot_warnings {
+            key["pilot_warnings"] = json!(true);
+        }
         if let Some(origin) = self.origin {
             key["origin"] = json!(origin.as_str());
         }

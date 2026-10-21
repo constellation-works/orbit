@@ -86,6 +86,7 @@ pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
+pub use pilot::task_pilot_warnings;
 pub(crate) use pilot::{
     HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement, NoDiffClosure,
     OperatorValidationHold, OperatorValidationRequirement, PILOT_VERIFIED_NO_DIFF,

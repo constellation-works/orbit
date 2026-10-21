@@ -1152,3 +1152,196 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
         },
     );
 }
+
+/// Pilot warnings belong to the durable task payload even without a drain.
+/// Advisory findings are excluded; a clean pilot or leaving proposed clears them.
+#[test]
+fn task_payloads_expose_durable_holding_pilot_warnings() {
+    isolated(
+        "projections::task_payloads_expose_durable_holding_pilot_warnings",
+        || {
+            use orbit_core::application::task::TaskUpdateParams;
+            use orbit_types::task::{
+                TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskDecision,
+                TaskEventRowV2,
+            };
+            use orbit_types::workflow::{JobRunState, PipelineState};
+            use std::io::Write;
+            let fixture = Fixture::new();
+            let id = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Pilot warning fixture".into(),
+                    complexity: TaskComplexity::Low,
+                    tags: vec!["no-diff-expected".into()],
+                    description: "Durable findings".into(),
+                    acceptance_criteria: vec!["Expose full findings".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let record = |operation: char, assessment: Value| {
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &id,
+                        TaskUpdateParams {
+                            comment: Some(format!(
+                                "operation_id={}\n{}",
+                                operation.to_string().repeat(64),
+                                json!({"assessment": assessment})
+                            )),
+                            ..Default::default()
+                        },
+                        "task-pilot".into(),
+                    )
+                    .unwrap();
+                // Seed the typed automation event paired with this pilot receipt.
+                let dir = super::codebase::bundle_dir(&fixture.path(""), &id).unwrap();
+                let path = dir.join(TASK_EVENTS_FILE_NAME);
+                let count = fs::read_to_string(&path).unwrap().lines().count();
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: format!("EV-{:04}", count + 1),
+                    at: Utc::now(),
+                    by: "task-pilot".into(),
+                    event_type: "task_pilot_applied".into(),
+                    note: None,
+                    from_status: None,
+                    to_status: None,
+                    operation_id: Some(operation.to_string().repeat(64)),
+                    decision: (operation != 'b').then(|| TaskDecision::DrainApprovalHeld {
+                        classification: "warnings".into(),
+                    }),
+                };
+                let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+                writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+            };
+            let assessment = json!({
+                "utility_warnings": [{"text": "Confirm the operator workflow.\nKeep this second line.", "holds_promotion": true}],
+                "surface_warnings": [{"text": "Optional polish", "holds_promotion": false}, "Update the task surface."],
+                "validation_tool_warnings": ["Browser evidence required."],
+            });
+            let expected = json!([
+                {"kind": "utility_warnings", "text": "Confirm the operator workflow.\nKeep this second line."},
+                {"kind": "surface_warnings", "text": "Update the task surface."},
+                {"kind": "validation_tool_warnings", "text": "Browser evidence required."},
+            ]);
+            record('a', assessment.clone());
+            let server = fixture.server(true);
+            let assert_payloads = |expected: &Value| {
+                let detail =
+                    json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
+                assert_eq!(&detail["pilot_warnings"], expected);
+                let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+                let rows = page["items"]
+                    .as_array()
+                    .or_else(|| page.as_array())
+                    .unwrap();
+                let row = rows.iter().find(|row| row["id"] == id).unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+                let shown = fixture
+                    .runtime
+                    .run_tool(
+                        "orbit.task.show",
+                        json!({"id": id, "fields": ["pilot_warnings"]}),
+                    )
+                    .unwrap();
+                assert_eq!(&shown, expected);
+                let listed = fixture
+                    .runtime
+                    .run_tool("orbit.task.list", json!({}))
+                    .unwrap();
+                let row = listed["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["id"] == id)
+                    .unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+            };
+            assert_payloads(&expected);
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Newer clean task".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            // Warning filtering happens before pagination and keeps accurate totals.
+            for endpoint in ["/api/tasks", "/api/tasks/all"] {
+                let filtered = json_ok(server.get(&format!(
+                    "{endpoint}?workspace=ws_http_fixture&pilot=warnings&limit=1"
+                )));
+                assert_eq!(filtered["total"], 1, "{filtered}");
+                assert_eq!(filtered["items"][0]["id"], id);
+                assert!(filtered["next_cursor"].is_null(), "{filtered}");
+            }
+            let mut drain = fixture.seed_run(
+                "jrun-pilot-warning-view",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            drain.input = Some(json!({"approve_proposed": true, "max_active_leaf_runs": 4}));
+            fixture.save_run(&drain);
+            fixture
+                .runtime
+                .write_run_state(
+                    &drain.run_id,
+                    &PipelineState::new(
+                        drain.run_id.clone(),
+                        drain.job_id.clone(),
+                        drain.input.clone().unwrap(),
+                    ),
+                )
+                .unwrap();
+            let readiness = fixture
+                .runtime
+                .workspace_auto_readiness(&[], None, 500, &[])
+                .unwrap();
+            let held = readiness["approvals"]["held"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == id)
+                .unwrap();
+            assert_eq!(
+                held["findings"], expected,
+                "CLI readiness reads the task's latest pilot source"
+            );
+            let card =
+                json_ok(server.get("/api/workflows/auto/readiness?workspace=ws_http_fixture"));
+            assert_eq!(card["approvals"]["held_by_reason"]["warnings"], 1);
+            let held = card["approvals"]["held"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == id)
+                .unwrap();
+            assert!(
+                held.get("findings").is_none(),
+                "the card's HTTP payload needs no finding prose"
+            );
+            // Ordinary operator comments do not erase the latest verification.
+            json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{id}?workspace=ws_http_fixture"),
+                json!({"comment": "Investigating"}),
+            ));
+            assert_payloads(&expected);
+            record(
+                'b',
+                json!({"utility_warnings": [], "surface_warnings": [], "validation_tool_warnings": []}),
+            );
+            assert_payloads(&json!([]));
+            record('c', assessment);
+            assert_payloads(&expected);
+            json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{id}/approve?workspace=ws_http_fixture"),
+                json!({}),
+            ));
+            assert_payloads(&json!([]));
+        },
+    );
+}

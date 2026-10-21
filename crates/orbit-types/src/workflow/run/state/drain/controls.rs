@@ -85,8 +85,8 @@ pub struct DrainWindowExtension {
 /// can show it without opening the pilot audit.
 ///
 /// `kind` is the assessment field (`utility_warnings`, `surface_warnings`,
-/// and the other warning fields). `text` is that finding's first non-empty
-/// line.
+/// and the other warning fields). `text` is the finding's full text, shared
+/// with the durable per-task warning readout.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DrainHoldFinding {
     pub kind: String,

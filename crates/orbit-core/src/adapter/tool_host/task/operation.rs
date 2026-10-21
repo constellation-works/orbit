@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout,
+    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, task_pilot_warnings,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -240,6 +240,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             has_external_ref_system,
             ..Default::default()
         },
+        pilot_warnings: false,
         ready: input.optional_bool("ready")? == Some(true),
         runs_on: input
             .optional_string("runs_on")?
@@ -263,6 +264,10 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             None => {
                 let mut object = task_base_json(&row.task, &status_by_id);
                 os_readout.insert_into(&row.task, &mut object);
+                object.insert(
+                    "pilot_warnings".into(),
+                    json!(task_pilot_warnings(row.task.status, &row.comments)),
+                );
                 Ok(Value::Object(object))
             }
             Some(fields) => project_listed_task(runtime, &row.task, fields, &os_readout),

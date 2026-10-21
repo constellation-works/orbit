@@ -8,7 +8,7 @@
 //! findings lives here once so the two modes cannot drift.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::NO_AUTO_APPROVE_TAG;
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
@@ -103,7 +103,7 @@ pub(crate) fn promotion_findings<'a>(
 }
 
 /// The warning findings an approval hold can show: one entry per warning-field
-/// item, kind equal to the field and text equal to its first non-empty line.
+/// item, with the original kind and full text.
 pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding> {
     WARNING_FIELDS
         .iter()
@@ -124,17 +124,13 @@ pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding>
         .collect()
 }
 
-/// First non-empty line of a plain or structured warning item. Unrecognized
+/// Full text of a plain or structured warning item. Unrecognized
 /// shapes use compact JSON so even a malformed historical finding is named.
 fn finding_text(value: &Value) -> Option<String> {
     let raw = warning_text(value)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| value.to_string());
-    let text = raw
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())?
-        .to_string();
+    let text = raw.trim().to_string();
     (!text.is_empty()).then_some(text)
 }
 
@@ -149,4 +145,21 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Holding warnings from the task's latest durable pilot verification.
+/// Ordinary edits and comments preserve the last findings until re-piloted;
+/// a clean verification or leaving proposed clears the readout. No live
+/// drain or drain-pass snapshot is needed, and advisory findings are excluded.
+pub fn task_pilot_warnings(status: TaskStatus, comments: &[TaskComment]) -> Vec<DrainHoldFinding> {
+    if status != TaskStatus::Proposed {
+        return Vec::new();
+    }
+    let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Value>(receipt.body)
+        .ok()
+        .and_then(|audit| audit.get("assessment").map(warning_hold_findings))
+        .unwrap_or_default()
 }

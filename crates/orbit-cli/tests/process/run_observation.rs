@@ -3438,7 +3438,7 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
     assert_eq!(
         selected["held"][0]["findings"],
         serde_json::json!([
-            {"kind": "utility_warnings", "text": first},
+            {"kind": "utility_warnings", "text": format!("{first}\n{rest}")},
             {"kind": "surface_warnings", "text": surface},
         ]),
         "{selected}"
@@ -3461,8 +3461,8 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
         "{shown}"
     );
     assert!(
-        !shown.contains(rest),
-        "run show keeps only the first line of a finding: {shown}"
+        shown.contains(&format!("{first}\n{rest}")),
+        "run show keeps the full multiline finding: {shown}"
     );
 
     let readiness = fixture.json(&["run", "readiness", "--json"]);
@@ -3475,7 +3475,7 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
     assert_eq!(
         held["findings"],
         serde_json::json!([
-            {"kind": "utility_warnings", "text": first},
+            {"kind": "utility_warnings", "text": format!("{first}\n{rest}")},
             {"kind": "surface_warnings", "text": surface},
         ]),
         "{held}"
