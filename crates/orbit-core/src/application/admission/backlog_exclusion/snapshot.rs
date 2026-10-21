@@ -292,9 +292,9 @@ pub(super) fn backlog_snapshot_in_mode(
     // closed at local-route admission while `review.timing` is `before_pr` or
     // `before_landing` [ORB-14849]. Hold it here so the drain
     // does not spawn that delivery. Tasks already excluded above keep the
-    // more specific reason. PR delivery skips this, and turning the switch
-    // off (workspace overriding global included) clears it. A PR drain holds
-    // only the tasks a `delivery:task_local_pipeline` tag routes locally.
+    // more specific reason. Turning the switch off (workspace overriding
+    // global included) clears it. In either ship mode, only tasks that resolve
+    // to local delivery would fail at local-route admission.
     // [ORB-16572] A layer the admitting run added with `--review` holds them
     // too: its children inherit it whatever the policy says.
     let policy = runtime.operation_policy();
@@ -327,10 +327,10 @@ pub(super) fn backlog_snapshot_in_mode(
         None
     };
     if let Some((reason, detail)) = local_route_review
-        && (mode == ShipMode::Local || !routed_locally.is_empty())
+        && !routed_locally.is_empty()
     {
         backlog.retain(|task| {
-            if mode == ShipMode::Pr && !routed_locally.contains(&task.id) {
+            if !routed_locally.contains(&task.id) {
                 return true;
             }
             excluded.push(BacklogTaskExclusion {
