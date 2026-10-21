@@ -2986,13 +2986,23 @@ function buildTaskDetail(task, context, drain = null) {
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
   const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
+  const lifecycleActions = buildActionsRow(task, detail, context, { includeComment: false });
+  const commentActions = buildActionsRow(task, detail, context, { includeLifecycle: false });
+  const overview = el("div", { class: "task-overview-content" }, [
+    el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]),
+    ...(lifecycleActions ? [lifecycleActions] : []),
+  ]);
+  const commentsContent = el("div", { class: "comments-tab-content" }, [
+    comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    commentActions,
+  ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
   // the task, so an ordinary single-host detail keeps its five tabs; the last
   // read for the task decides whether it shows before the panel's own read.
   const delivery = el("div", { class: "delivery-tab" });
   const sections = buildDetailTabs(task, detail, [
-    { name: "overview", label: "Overview", content: el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]) },
+    { name: "overview", label: "Overview", content: overview },
     { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
     { name: "history", label: "History", count: history.count, content: history.node },
     { name: "runs", label: "Runs", count: taskRunCount(task), content: runs },
@@ -3006,7 +3016,7 @@ function buildTaskDetail(task, context, drain = null) {
       name: "comments",
       label: "Comments",
       count: comments,
-      content: comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+      content: commentsContent,
     },
   ], context);
   detail.appendChild(metaBlock);
@@ -3025,7 +3035,6 @@ function buildTaskDetail(task, context, drain = null) {
     pullRequest,
   }));
   renderTaskRuns(runs, task, context);
-  detail.appendChild(buildActionsRow(task, detail, context));
   const stamps = buildTaskTimestamps(task, context);
   if (stamps) detail.appendChild(stamps);
   // Activated once the panels exist: the Runs tab reads its runs then.
@@ -3472,10 +3481,11 @@ const PULL_REQUEST_LINK_STATUSES = new Set(["review", "in-progress"]);
 // is the operator override recorded in task history as `forced`.
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 
-function buildActionsRow(task, detail, context) {
-  const actions = el("div", { class: "actions" });
+function buildActionsRow(task, detail, context, { includeLifecycle = true, includeComment = true } = {}) {
+  const kind = includeComment ? "comment-actions" : "lifecycle-actions";
+  const actions = el("div", { class: `actions task-action-row ${kind}` });
   const mutable = canMutateTask(task);
-  if (SHIP_STATUSES.has(task.status)) {
+  if (includeLifecycle && SHIP_STATUSES.has(task.status)) {
     const shipped = shipInFlightTaskIds.has(taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",
@@ -3491,7 +3501,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  {
+  if (includeComment) {
     const btn = el("button", { class: "action comment", text: "comment" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -3500,7 +3510,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (APPROVE_STATUSES.has(task.status)) {
+  if (includeLifecycle && APPROVE_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action approve", text: "approve" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -3510,7 +3520,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (REJECT_STATUSES.has(task.status)) {
+  if (includeLifecycle && REJECT_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action reject", text: "reject" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -3519,7 +3529,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (task.status !== "archived") {
+  if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -3530,9 +3540,11 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  const refusal = hostWriteRefusal();
-  if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
-  return actions;
+  if (includeLifecycle || includeComment) {
+    const refusal = hostWriteRefusal();
+    if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
+  }
+  return actions.children.length ? actions : null;
 }
 
 function buildStatusUpdateControl(task, context) {
