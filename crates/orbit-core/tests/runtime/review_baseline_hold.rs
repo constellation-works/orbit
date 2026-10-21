@@ -1344,6 +1344,75 @@ fn a_check_failing_only_tests_the_base_fails_continues_as_known_red() {
     );
 }
 
+/// Seed the durable state left by interruption after certificate recording
+/// and one history write. Settlement must finish the second write once.
+#[test]
+fn settlement_replay_reconciles_missing_known_red_history() {
+    let mut fixture = with_checks(
+        Fixture::new_with_config(
+            &[],
+            "baseline_commands = [\"sh check.sh\", \"sh ./check.sh\"]\n",
+        ),
+        RED,
+        "after\n",
+    );
+    fixture.admit();
+    fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
+    fixture.settle().unwrap();
+    let mut recorded = certificate(&fixture);
+    let existing = fixture
+        .runtime
+        .get_task_history(&fixture.task_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+        .unwrap();
+    let mut missing = recorded.known_red[0].clone();
+    missing.record_id = Some("V2".into());
+    missing.validation.command = "sh ./check.sh".into();
+    recorded.known_red.push(missing.clone());
+    let mut validation = recorded.validation[0].clone();
+    validation.id = Some("V2".into());
+    validation.command = missing.validation.command.clone();
+    recorded.validation.push(validation);
+    // The certificate is the replay checkpoint. Seed the second verified
+    // check there without its history entry, as an interrupted settle leaves it.
+    let connection =
+        rusqlite::Connection::open(fixture.runtime.global_root().join("orbit.db")).unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE review_certificates SET certificate_json=?1 WHERE attempt_id=?2",
+                rusqlite::params![
+                    serde_json::to_string(&recorded).unwrap(),
+                    recorded.attempt_id
+                ],
+            )
+            .unwrap(),
+        1
+    );
+    for _ in 0..2 {
+        let passed = fixture
+            .settle()
+            .expect("settlement resumes from the certificate");
+        assert_eq!(passed["known_red"], json!(recorded.known_red));
+        let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+        let entries = history
+            .into_iter()
+            .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 2, "each decision is recorded exactly once");
+        assert_eq!(
+            entries[0], existing,
+            "the original history entry is untouched"
+        );
+        assert_eq!(
+            entries[1].decision,
+            Some(TaskDecision::KnownRedValidation(missing.validation.clone()))
+        );
+    }
+}
+
 /// [ORB-15630] A reviewer that ran the registered check with leading
 /// environment assignments claims that check: the claim is admitted as the
 /// registered command, settlement reruns the registered text rather than the

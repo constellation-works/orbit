@@ -167,7 +167,7 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("handoff differs from captured ship contract"));
         }
-        self.validate_handoff_review(
+        let review_known_red = self.validate_handoff_review(
             handoff,
             &ship,
             observation.review.as_ref(),
@@ -218,6 +218,27 @@ impl TaskCommitBoundary {
                     operation_id: None,
                     decision: Some(TaskDecision::KnownRedValidation(known.clone())),
                 });
+        }
+        // Reviewer-baseline checks are carried by the validated certificate,
+        // rather than the claim's required-command logs. Record them inside
+        // the same owner commit as acceptance so receipt replay cannot lose
+        // or duplicate history, and the leaf never needs a local task row.
+        let mut recorded = known_red;
+        for known in review_known_red {
+            if recorded.contains(&known) {
+                continue;
+            }
+            params.append_history.push(orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: params.actor.clone(),
+                event: KNOWN_RED_VALIDATION_EVENT.into(),
+                note: Some(known.text("The accepted review certificate records this check as known red on the claimed candidate.")),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: Some(TaskDecision::KnownRedValidation(known.clone())),
+            });
+            recorded.push(known);
         }
         for reference in &handoff.validation {
             let log: HandoffValidationLog =
