@@ -1809,6 +1809,10 @@ function emptyFieldView(text) {
   return el("div", { class: "field-empty", text });
 }
 
+function taskMarkdownPanel(content) {
+  return el("div", { class: "task-markdown-panel" }, [content]);
+}
+
 // Numbered, because criteria are cited by number ("criterion 3 is met").
 function buildCriteriaList(criteria) {
   const ul = el("ol", { class: "ac-list" });
@@ -2933,7 +2937,7 @@ function buildTaskDetail(task, context, drain = null) {
 
   if (showsEditor("description")) {
     const actions = actionSlot();
-    const block = addField(leftCol, "Description", editor("description", actions), false, false, { actions, class: "description-block" });
+    const block = addField(leftCol, "Description", taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
     if (isLongDescription(task.description)) {
       const open = expandedDescriptions.has(task.id);
       if (!open) block.classList.add("clamped");
@@ -2967,11 +2971,11 @@ function buildTaskDetail(task, context, drain = null) {
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(disclosures, "Plan", markdownView(task.plan), true, true);
+    addField(disclosures, "Plan", taskMarkdownPanel(markdownView(task.plan)), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(disclosures, "Execution summary", markdownView(task.execution_summary), true, true);
+    addField(disclosures, "Execution summary", taskMarkdownPanel(markdownView(task.execution_summary)), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
