@@ -359,7 +359,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("rehome-to"),
-                help: REHOME_TO_HELP,
+                help: REHOME_TO_CLI_HELP,
             }),
         },
         ParamSpec {
@@ -374,7 +374,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("move"),
-                help: MOVE_HELP,
+                help: MOVE_CLI_HELP,
             }),
         },
         ParamSpec {
@@ -478,6 +478,12 @@ const REHOME_TO_HELP: Description = Description::Static(
 );
 const MOVE_HELP: Description = Description::Static(
     "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
+);
+const REHOME_TO_CLI_HELP: Description = Description::Static(
+    "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless --move false. An empty string clears a recorded disposition",
+);
+const MOVE_CLI_HELP: Description = Description::Static(
+    "With --rehome-to: false records the rehome-required disposition without moving, for a workspace that is not registered here; defaults to true",
 );
 const TO_WORKSPACE_HELP: Description =
     Description::Static("Registered name or ID of the workspace that owns this friction");

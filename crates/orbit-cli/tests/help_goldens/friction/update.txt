@@ -23,10 +23,10 @@ Options:
           Optional replacement markdown body
 
       --rehome-to <REHOME_TO>
-          Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition
+          Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless --move false. An empty string clears a recorded disposition
 
       --move <MOVE>
-          With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true
+          With --rehome-to: false records the rehome-required disposition without moving, for a workspace that is not registered here; defaults to true
           
           [possible values: true, false]
 
