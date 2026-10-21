@@ -5,8 +5,9 @@ use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
-    ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation,
-    ClaimPullRequest, ClaimedReviewCarry, LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
+    ClaimAttribution, ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery,
+    ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LocalPullAdmission, LocalPullPhase,
+    ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
@@ -74,6 +75,39 @@ pub(crate) fn attach_claimed_review(
             if evidence.claimed_review.is_none() =>
         {
             evidence.claimed_review = Some(carry);
+        }
+        _ => {}
+    }
+    settlement
+}
+
+/// The crew and model `run` resolved, as its settlement reports them.
+pub(crate) fn leaf_attribution(run: &orbit_types::workflow::JobRun) -> ClaimAttribution {
+    let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
+    ClaimAttribution {
+        crew: named(&run.resolved_crew),
+        crew_model: named(&run.crew_model),
+    }
+}
+
+/// Copy the leaf `run`'s crew and model onto a failure or release that names
+/// neither. Attribution only: the owner keeps them on the claim's settlement
+/// record. A typed handoff carries no evidence, so its delivery reports them
+/// beside it instead. Like [`attach_claimed_review`], every writer stamps
+/// before the first recorded settlement, which is the one the owner receives.
+pub(crate) fn attach_leaf_attribution(
+    mut settlement: ClaimMutation,
+    run: Option<&orbit_types::workflow::JobRun>,
+) -> ClaimMutation {
+    let Some(attribution) = run.map(leaf_attribution) else {
+        return settlement;
+    };
+    match &mut settlement {
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)
+            if evidence.crew.is_none() && evidence.crew_model.is_none() =>
+        {
+            evidence.crew = attribution.crew;
+            evidence.crew_model = attribution.crew_model;
         }
         _ => {}
     }

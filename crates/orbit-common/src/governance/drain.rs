@@ -284,6 +284,18 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
             true,
             "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, `{\"Fail\": <evidence>}`, or `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing else settles a claim.",
         ),
+        param(
+            "crew",
+            ParamType::String,
+            false,
+            "Optional. The crew the leaf run resolved. Attribution only: the owner records it on the claim's settlement record, after any crew the settlement's own evidence names, and never uses it to validate or decide the settlement.",
+        ),
+        param(
+            "crew_model",
+            ParamType::String,
+            false,
+            "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
+        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],

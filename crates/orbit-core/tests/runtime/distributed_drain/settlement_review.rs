@@ -1,7 +1,7 @@
 //! Refused settlements cannot create ledgers or replace operator reset history.
 
 use super::*;
-use orbit_store::contracts::{ClaimedReviewCarry, ReviewResetRequest};
+use orbit_store::contracts::{ClaimAttribution, ClaimedReviewCarry, ReviewResetRequest};
 use orbit_types::workflow::{ReviewBudget, ReviewLedger};
 
 fn session(machine: &str) -> ToolSessionContext {
@@ -96,6 +96,7 @@ fn refused_settlements_leave_review_ledgers_unchanged() {
                         &claim.claim_id,
                         Some(&leaf),
                         mutation(fail, original.clone()),
+                        ClaimAttribution::default(),
                     )
                     .unwrap();
             } else if refusal == "revoked" {
@@ -132,6 +133,7 @@ fn refused_settlements_leave_review_ledgers_unchanged() {
                     &claim.claim_id,
                     Some(if refusal == "run" { "wrong-run" } else { &leaf }),
                     mutation(fail, incoming),
+                    ClaimAttribution::default(),
                 )
                 .expect_err("unauthorized or changed settlement must be refused");
             if refusal == "replay" {
@@ -190,6 +192,7 @@ fn settlement_review_scope_and_replay_preserve_operator_reset() {
                     &claim.claim_id,
                     Some(&leaf),
                     mutation(fail, incoming),
+                    ClaimAttribution::default(),
                 )
                 .expect_err("a foreign carry must be refused before any mutation");
             assert_eq!(read(&pair, &ledger.lineage_key), None);

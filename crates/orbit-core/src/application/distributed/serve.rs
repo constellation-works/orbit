@@ -36,9 +36,9 @@ use orbit_engine::KnownRedUnconfirmed;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
-    ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
-    ExecutionClaim, ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
-    KnownRedObservation, KnownRedOsAcceptance,
+    ClaimAttribution, ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation,
+    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase, HandoffObservation,
+    HandoffReviewObservation, JobRunQuery, KnownRedObservation, KnownRedOsAcceptance,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
@@ -223,6 +223,7 @@ impl crate::OrbitRuntime {
         claim_id: &str,
         run_id: Option<&str>,
         settlement: ClaimMutation,
+        attribution: ClaimAttribution,
     ) -> Result<ClaimMutationResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.drain.claim.settle")?;
         self.ensure_distributed_owner_workspace()?;
@@ -235,12 +236,15 @@ impl crate::OrbitRuntime {
                 machine_id: machine.clone(),
                 run_id: run_id.to_string(),
             });
+        // The leaf's crew and model are attribution only: the record keeps
+        // them, and nothing that decides the settlement reads them.
         let context = ClaimInvocation::trusted_worker(
             claim.task_id.clone(),
             claim.claim_id.clone(),
             machine,
             run,
-        );
+        )
+        .with_attribution(attribution);
         match settlement {
             ClaimMutation::Fail(evidence) => {
                 self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;

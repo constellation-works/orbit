@@ -21,7 +21,7 @@ mod scan;
 mod types;
 
 pub(in crate::application) use block_cause::{
-    SettledFailure, actor_kind, classify_block, failed_claim_settlements,
+    SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 pub(super) use history::HistoryFacts;
 pub use scan::CodebaseFacts;

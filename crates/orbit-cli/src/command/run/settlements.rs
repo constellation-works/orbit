@@ -16,7 +16,7 @@ baseline_red, forge_unavailable, evidence_hold, final_recovery, failure or summa
 before the owner recorded settlements read as unrecorded unless their release kept a class.\n\
 JSON shape: {\"settlements\":[{\"task_id\",\"claim_id\",\"machine_id\",\"machine_name\",\
 \"drain_run_id\",\"leaf_run_id\",\"phase\",\"last_event\",\"settled_at\",\"kind\",\"evidence\",\
-\"failure_class\",\"crew\",\"failed_step_id\",\"reason\"}]}\n\
+\"failure_class\",\"crew\",\"crew_model\",\"failed_step_id\",\"reason\"}]}\n\
 Examples:\n  orbit run settlements\n  orbit run settlements --since 7d\n  \
 orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
 )]

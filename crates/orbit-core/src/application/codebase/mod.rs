@@ -45,7 +45,7 @@ use crate::OrbitRuntime;
 
 pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
-    Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements,
+    Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 pub(in crate::application) use pilot::{
     Contest, HeldWait, PilotEvidence, PilotRun, pilot_evidence,

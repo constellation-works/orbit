@@ -31,7 +31,13 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
         let error = pair
             .wire
             .owner
-            .serve_claim_settle(&wrong_session, &claim.claim_id, Some(&leaf), mutation)
+            .serve_claim_settle(
+                &wrong_session,
+                &claim.claim_id,
+                Some(&leaf),
+                mutation,
+                orbit_store::contracts::ClaimAttribution::default(),
+            )
             .expect_err("another session machine must not settle this claim");
         assert_eq!(
             error.claim_refusal(),
@@ -68,6 +74,7 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
             &claim.claim_id,
             Some(&leaf),
             ClaimMutation::Release(evidence),
+            orbit_store::contracts::ClaimAttribution::default(),
         )
         .expect("the owning session machine can still settle its attempt");
     assert_eq!(

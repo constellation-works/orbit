@@ -97,6 +97,27 @@ pub struct ClaimInvocation {
     pub(crate) operator: bool,
     pub(crate) handoff_observation: Option<HandoffObservation>,
     pub(crate) provider_hold: Option<orbit_types::workflow::ProviderFailureHold>,
+    pub(crate) attribution: ClaimAttribution,
+}
+
+/// The crew and model a claimed leaf ran as, as its follower reports them.
+/// Attribution only: the owner keeps them on the claim's settlement record
+/// for the scorecards and never consults them for validation, a settlement's
+/// outcome or review-crew selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimAttribution {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
+}
+
+impl ClaimAttribution {
+    /// Whether neither field is reported.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.crew.is_none() && self.crew_model.is_none()
+    }
 }
 
 impl ClaimInvocation {
@@ -115,6 +136,7 @@ impl ClaimInvocation {
             operator: false,
             handoff_observation: None,
             provider_hold: None,
+            attribution: ClaimAttribution::default(),
         }
     }
 
@@ -128,6 +150,7 @@ impl ClaimInvocation {
             operator: true,
             handoff_observation: None,
             provider_hold: None,
+            attribution: ClaimAttribution::default(),
         }
     }
 }
@@ -144,6 +167,16 @@ impl ClaimInvocation {
     /// latest status decision; never fill it from a worker payload.
     pub fn with_provider_hold(mut self, hold: orbit_types::workflow::ProviderFailureHold) -> Self {
         self.provider_hold = Some(hold);
+        self
+    }
+
+    /// The crew and model the follower reported beside its settlement, on
+    /// the settle call rather than inside it. A typed handoff carries no
+    /// [`ClaimEvidence`], so this is how its leaf's attribution reaches the
+    /// owner. It is not part of the mutation's identity, so a retry that
+    /// reports it differently still replays the recorded outcome.
+    pub fn with_attribution(mut self, attribution: ClaimAttribution) -> Self {
+        self.attribution = attribution;
         self
     }
 }
@@ -201,6 +234,16 @@ pub struct ClaimEvidence {
     /// ignores it. Absent when the leaf held no ledger for the claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_review: Option<ClaimedReviewCarry>,
+    /// The crew the leaf ran as, from its run's resolved crew. The follower
+    /// fills it on a failure or release; the owner keeps it on the claim's
+    /// settlement record as attribution only. An owner that predates the
+    /// field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    /// The model that crew resolved to on the leaf's run, beside
+    /// [`Self::crew`]. An owner that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_model: Option<String>,
 }
 
 /// Review ledgers a claimed leaf carried home [ORB-16699].

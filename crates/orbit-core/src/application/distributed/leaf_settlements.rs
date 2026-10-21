@@ -5,7 +5,8 @@
 //! it; the settlement its claim recorded is the owner's only account of why
 //! it ended. This is the read-only list of those settlements, for a failure
 //! scan on the owner. Only settled claims appear: an in-flight attempt stays
-//! on the operator's claim inspection.
+//! on the operator's claim inspection. The agent scorecards also read typed
+//! handoffs from it, for the crew and model each pulled attempt ran as.
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase};
@@ -39,14 +40,16 @@ pub struct LeafSettlement {
     pub phase: ExecutionClaimPhase,
     pub last_event: String,
     pub settled_at: String,
-    /// `fail` or `release`; `None` for a claim settled before the owner
-    /// recorded settlements.
+    /// `fail`, `release` or `handoff`; `None` for a claim settled before the
+    /// owner recorded settlements.
     pub kind: Option<ClaimSettlementKind>,
     /// The settlement's evidence class, or `unrecorded` when a claim settled
     /// before the owner recorded settlements and its release kept no class.
     pub evidence: &'static str,
     pub failure_class: Option<ClaimFailureClass>,
     pub crew: Option<String>,
+    /// The model the leaf's crew resolved to, when its follower reported it.
+    pub crew_model: Option<String>,
     pub failed_step_id: Option<String>,
     /// Bounded, and as the leaf reported it: unredacted.
     pub reason: Option<String>,
@@ -69,6 +72,7 @@ impl LeafSettlement {
             evidence: "unrecorded",
             failure_class: None,
             crew: None,
+            crew_model: None,
             failed_step_id: None,
             reason: None,
         };
@@ -78,6 +82,7 @@ impl LeafSettlement {
             settlement.evidence = record.evidence.as_str();
             settlement.failure_class = record.failure_class;
             settlement.crew = record.crew;
+            settlement.crew_model = record.crew_model;
             settlement.failed_step_id = record.failed_step_id;
             settlement.reason = Some(record.reason);
             return Some(settlement);
@@ -120,14 +125,10 @@ impl crate::OrbitRuntime {
         since: Option<chrono::DateTime<chrono::Utc>>,
         reconcile: bool,
     ) -> Result<Vec<LeafSettlement>, OrbitError> {
-        let claims = if reconcile {
-            self.resolve_execution_claims()?
-        } else {
-            self.inspect_execution_claims()?
-        };
-        let mut settlements = claims
+        let mut settlements = self
+            .settled_leaves(reconcile)?
             .into_iter()
-            .filter_map(LeafSettlement::of)
+            .filter(|settlement| settlement.kind != Some(ClaimSettlementKind::Handoff))
             .filter(|settlement| {
                 since.is_none_or(|since| {
                     chrono::DateTime::parse_from_rfc3339(&settlement.settled_at)
@@ -137,5 +138,19 @@ impl crate::OrbitRuntime {
             .collect::<Vec<_>>();
         settlements.sort_by(|a, b| b.settled_at.cmp(&a.settled_at));
         Ok(settlements)
+    }
+
+    /// Every settlement a claimed leaf sent this owner, typed handoffs
+    /// included, in no order. Strictly read-only unless `reconcile`.
+    pub(crate) fn settled_leaves(
+        &self,
+        reconcile: bool,
+    ) -> Result<Vec<LeafSettlement>, OrbitError> {
+        let claims = if reconcile {
+            self.resolve_execution_claims()?
+        } else {
+            self.inspect_execution_claims()?
+        };
+        Ok(claims.into_iter().filter_map(LeafSettlement::of).collect())
     }
 }

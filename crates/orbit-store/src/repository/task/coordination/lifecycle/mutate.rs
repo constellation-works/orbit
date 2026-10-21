@@ -422,6 +422,7 @@ impl TaskCommitBoundary {
                             state.settlement = Some(ClaimSettlementRecord::of(
                                 ClaimSettlementKind::Fail,
                                 &value.evidence,
+                                &auth.attribution,
                                 Utc::now().to_rfc3339(),
                             ));
                             params.status = Some(status);
@@ -516,6 +517,14 @@ impl TaskCommitBoundary {
                         &mut handoff_effects,
                     )?;
                     evidence.summary = Some(handoff.execution_summary.clone());
+                    // Attribution only: the record keeps the crew and model
+                    // the follower reported beside the handoff.
+                    state.settlement = Some(ClaimSettlementRecord::of(
+                        ClaimSettlementKind::Handoff,
+                        &evidence,
+                        &auth.attribution,
+                        Utc::now().to_rfc3339(),
+                    ));
                     state.claim.phase = ExecutionClaimPhase::HandedOff;
                     params.status = Some(TaskStatus::Review);
                     release = true;
@@ -573,6 +582,7 @@ impl TaskCommitBoundary {
                         let settlement = ClaimSettlementRecord::of(
                             ClaimSettlementKind::Fail,
                             value,
+                            &auth.attribution,
                             Utc::now().to_rfc3339(),
                         );
                         params.status_note = Some(
@@ -646,6 +656,7 @@ impl TaskCommitBoundary {
                     let settlement = ClaimSettlementRecord::of(
                         ClaimSettlementKind::Release,
                         value,
+                        &auth.attribution,
                         released_at.to_rfc3339(),
                     );
                     let failed_note = ClaimFailedNote::of(

@@ -709,6 +709,18 @@
         "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, `{\"Fail\": <evidence>}`, or `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing else settles a claim.",
         "param_type": "object",
         "required": true
+      },
+      {
+        "name": "crew",
+        "description": "Optional. The crew the leaf run resolved. Attribution only: the owner records it on the claim's settlement record, after any crew the settlement's own evidence names, and never uses it to validate or decide the settlement.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "crew_model",
+        "description": "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
+        "param_type": "string",
+        "required": false
       }
     ]
   },

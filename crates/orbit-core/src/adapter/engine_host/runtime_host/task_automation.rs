@@ -192,7 +192,7 @@ pub(super) fn apply_task_automation_update(
             "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                 status: update.status, plan: update.plan, context_files: update.context_files,
                 external_refs: update.external_refs, status_note: update.status_note,
-                evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None},
+                evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None},
                 ..Default::default()
             }
         }))?;
