@@ -93,6 +93,13 @@ orbit tool run orbit.task.add --input '{
 }'
 ```
 
+Write the title as a concrete outcome that fits the commit subject. The pipeline
+writes the title as `<type>: <title>` and cuts that part at 72 characters with
+an ellipsis, so a longer title ends mid-word in the history. Keep titles to at
+most 67 characters for a bug, 66 for a feature, 65 for a chore and 62 for a
+refactor, which is 72 minus the type's prefix. Put the detail in the
+description, not the title.
+
 Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
 chosen for delegation. On an authorized takeover, correct a stale assignment
