@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Vision
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-20
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
@@ -37,8 +37,9 @@ records what this doc used to leave open:
 1. **Do responses become data too?** A spec declares the request but not the
    response shape. A declared response schema would let the CLI table columns,
    the dashboard's TypeScript types, and an MCP output schema derive from one
-   place, at the cost of a second, larger wall of contract strings. Revisit once
-   two nouns besides friction have migrated and their renderers can be compared.
+   place, at the cost of a second, larger wall of contract strings. Now that
+   several nouns besides friction have migrated, compare their renderers before
+   deciding whether declared response schemas are worthwhile.
 2. **Should requests become typed structs?** The friction pilot kept
    `serde_json::Value` partly because handlers accepted undeclared aliases.
    Kernel v2 declares aliases and validates input at the tool entry, so a

@@ -7,11 +7,11 @@ status: Accepted
 feature: operations-as-data
 doc_role: design
 type: design
-summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, and the read-only codebase noun. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
+summary: The operation spec kernel v2, generic MCP/CLI adapters, and tool-entry validation are implemented for friction, auto-task, drain, workspace claim, task, workflow-run, search, read-only codebase, and agent scorecard operations. Deprecated orchestrator scorecard aliases share the registry. The original migration phases are complete, with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-common/src/governance/orchestrator.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-tools/src/builtin/orbit/orchestrator.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-cli/src/command/orchestrator.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs", "crates/orbit-core/src/application/agents/**"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-17118]
 ---
 
 # Operations as Data — Design
@@ -72,7 +72,7 @@ pub struct NounSpec<V: 'static> {
     pub cli_about: &'static str,            // `orbit friction --help` summary
     pub audit_target_type: &'static str,    // "friction"
     pub audit_target_param: &'static str,   // "id"; auto-task's is "name"
-    pub cli_groups: &'static [CliGroup],    // intermediate subcommands; none so far
+    pub cli_groups: &'static [CliGroup],    // intermediate subcommands; task uses artifact and locks
     pub operations: &'static [OperationSpec<V>],
 }
 
@@ -94,8 +94,8 @@ pub struct OperationSpec<V: 'static> {
 pub struct ParamSpec {
     pub name: &'static str,
     pub aliases: &'static [&'static str], // accepted wire spellings, resolved at the tool entry
-    pub param_type: ParamType,         // String | StringList | Integer | Boolean
-                                       // | Switch | Enum(&[EnumValue]) | Object | Array (§2.2)
+    pub param_type: ParamType,         // String | Path | StringList | Integer | UnsignedInteger | Boolean
+                                       // | Switch | Enum(&[EnumValue]) | EnumList(&[EnumValue]) | Object | Array (§2.2)
     pub required: bool,
     pub preserve_empty: bool,
     pub default: Option<&'static str>, // CLI default, shown as `[default: …]` (§2.2)
@@ -923,16 +923,28 @@ Accepted aliases and retired lexical-only fields live in the spec. Unknown
 fields start in warn-and-audit mode, as for other migrated reads. The behaviour
 comparison is recorded in [4_decisions.md](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
-After phase 5, the read-only `codebase` noun also adopted the registry pattern:
-`analytics`, `show`, and `related` are declared by `CodebaseVerb` in
+After phase 5, the read-only `codebase` and agent scorecard nouns also adopted
+the registry pattern. The `codebase` operations `analytics`, `show`, and
+`related` are declared by `CodebaseVerb` in
 [governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs),
 rendered by the CLI adapter in
 [command/codebase.rs](../../../crates/orbit-cli/src/command/codebase.rs), and
 dispatched by Orbit Core in
 [codebase_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/codebase_tools.rs).
-Each operation has `Effect::Read` and a workspace-required MCP scope. This
-later addition does not reopen the original phase 0–5 migration plan or change
-the hand-wired tool verdicts below.
+Each operation has `Effect::Read` and a workspace-required MCP scope. The
+`agents` operations `scorecard` and `show` use `AgentsVerb` in
+[governance/agents.rs](../../../crates/orbit-common/src/governance/agents.rs),
+the CLI renderer in [command/agents.rs](../../../crates/orbit-cli/src/command/agents.rs),
+and the handler table in
+[agents_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/agents_tools.rs).
+They are read-only and workspace-scoped over MCP. The deprecated
+`orchestrator` `scorecard` and `show` aliases use their own shared registry in
+[governance/orchestrator.rs](../../../crates/orbit-common/src/governance/orchestrator.rs)
+and Core handler in
+[orchestrator_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs);
+they return the orchestrator agent scorecard with a deprecation note naming
+`orbit agents` as the replacement. These later additions do not reopen the
+original phase 0–5 migration plan or change the hand-wired tool verdicts below.
 
 Every remaining hand-wired builtin was inspected rather than inferred from its
 name. Similar CLI names do not establish equivalent operations:
@@ -956,10 +968,11 @@ migration phase.
   parameter names, flag spellings and help text makes one file a
   high-blast-radius edit. That is the intended trade, since the strings were
   always contract and only scattered, but a careless edit now fails differently.
-- **The kernel grows until task lands.** Every new `ParamType` or `CliArgKind`
+- **The kernel grows with each noun.** Every new `ParamType` or `CliArgKind`
   variant has to be handled in the MCP adapter, the CLI adapter and
-  `parse_input`. Kernel v2 is sized to auto-task and task; each phase may still
-  add a variant, and should add it only when the noun in hand needs it.
+  `parse_input`. Kernel v2 started with auto-task and task and now also serves
+  the codebase and agent scorecard registries. Add another variant only when
+  the noun in hand needs it.
 - **Surface tables spread a noun across files.** Under §1, one noun's behaviour
   lives in the spec plus one exhaustive match per surface that needs one. Every
   table is compiler-checked, but a reader still opens several files.
