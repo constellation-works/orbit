@@ -1832,18 +1832,91 @@ function buildFileList(task) {
   return ul;
 }
 
+function parseContextSelector(selector) {
+  const match = /^([a-z]+):(.*)$/.exec(selector);
+  if (!match) return { kind: "file", target: selector, cut: 0, base: selector, dir: "" };
+  const [, kind, target] = match;
+  let cut = 0;
+  if (kind === "file") {
+    cut = target.lastIndexOf("/") + 1;
+  } else if (kind === "dir") {
+    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
+    cut = trimmed.lastIndexOf("/") + 1;
+  }
+  return {
+    kind,
+    target,
+    cut,
+    base: target.slice(cut),
+    dir: target.slice(0, cut),
+  };
+}
+
+function disambiguateSelector(target, allTargets) {
+  if (allTargets.length <= 1) return "";
+  const segs = target.split("/");
+  segs.pop();
+  if (segs.length === 0) return "root";
+  const root = segs[0];
+  const rootCount = allTargets.filter((t) => t.split("/")[0] === root).length;
+  if (rootCount === 1) return root;
+  for (let i = 0; i < segs.length; i++) {
+    const prefix = segs.slice(0, i + 1).join("/") + "/";
+    if (allTargets.filter((t) => t.startsWith(prefix)).length === 1) {
+      return segs[i];
+    }
+  }
+  return segs[segs.length - 1];
+}
+
+function formatDirectory(dirPath) {
+  const span = el("span", { class: "selector-dim" });
+  if (!dirPath) return span;
+  const parts = dirPath.split("/");
+  for (let i = 0; i < parts.length; i++) {
+    if (i < parts.length - 1) {
+      const seg = `${parts[i]}/`;
+      if (i === 0) {
+        span.appendChild(el("span", { class: "selector-root", text: seg }));
+      } else {
+        span.appendChild(document.createTextNode(seg));
+      }
+      span.appendChild(el("wbr"));
+    } else if (parts[i]) {
+      span.appendChild(document.createTextNode(parts[i]));
+    }
+  }
+  return span;
+}
+
 function refreshFileList(ul) {
   const task = ul.contentionTask;
   const applicable = task.status === "backlog" || task.status === "in-progress";
   const nodes = [];
-  for (const path of Array.isArray(task.context_files) ? task.context_files : []) {
+  const rawPaths = Array.isArray(task.context_files) ? task.context_files : [];
+  const parsed = rawPaths.map(parseContextSelector);
+  const baseMap = new Map();
+  for (const p of parsed) {
+    if (!p.base) continue;
+    if (!baseMap.has(p.base)) baseMap.set(p.base, []);
+    baseMap.get(p.base).push(p.target);
+  }
+
+  for (let i = 0; i < rawPaths.length; i++) {
+    const path = rawPaths[i];
+    const p = parsed[i];
+    const dups = p.base ? baseMap.get(p.base) || [] : [];
+    const isDuplicate = dups.length > 1;
+    const disambig = isDuplicate ? disambiguateSelector(p.target, dups) : "";
+
     const matches = applicable ? taskContextContenders(task, path) : [];
     const state = matches === null ? "Contention unknown: current workspace data unavailable"
       : matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
-    const link = el("a", { class: "context-selector", title: [path, state].filter(Boolean).join(" · ") }, selectorParts(path));
+    const link = el("a", { class: "context-selector", title: [path, state].filter(Boolean).join(" · ") }, selectorParts(path, { isDuplicate, disambig }));
     bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
     if (state) link.setAttribute("aria-label", `${path}: ${state}`);
     const li = el("li", {}, [link]);
+    if (isDuplicate) li.classList.add("context-duplicate-base");
     if (matches === null) li.classList.add("context-contention-unknown");
     if (matches?.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
     nodes.push(li);
@@ -1863,17 +1936,29 @@ onTaskRuntimeChange(() => {
 // A context selector is `kind:target`. The basename — what an operator scans
 // for — leads on its own line, with the kind and, for path selectors, the
 // directory dimmed under it; the text content is still the whole selector.
-function selectorParts(selector) {
+function selectorParts(selector, { isDuplicate = false, disambig = "" } = {}) {
   const match = /^([a-z]+):(.*)$/.exec(selector);
   if (!match) return [el("span", { class: "selector-base", text: selector })];
   const [, kind, target] = match;
-  const cut = kind === "file" || kind === "dir" ? target.lastIndexOf("/") + 1 : 0;
+  let cut = 0;
+  if (kind === "file") {
+    cut = target.lastIndexOf("/") + 1;
+  } else if (kind === "dir") {
+    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
+    cut = trimmed.lastIndexOf("/") + 1;
+  }
   const kindNode = el("span", { class: "selector-kind", text: `${kind}:` });
   kindNode.dataset.kind = kind;
+
+  const baseNode = el("span", { class: "selector-base", text: target.slice(cut) });
+  if (disambig) {
+    baseNode.dataset.disambig = disambig;
+  }
+
   return [
     kindNode,
-    el("span", { class: "selector-dim", text: target.slice(0, cut) }),
-    el("span", { class: "selector-base", text: target.slice(cut) }),
+    formatDirectory(target.slice(0, cut)),
+    baseNode,
   ];
 }
 
