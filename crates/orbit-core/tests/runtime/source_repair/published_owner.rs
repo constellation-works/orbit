@@ -1108,11 +1108,74 @@ pub(super) fn legacy_publication_behind_a_stopped_successor_cannot_start_fresh()
     let binding = f.inspect();
     assert_eq!(binding["source_run_id"], f.source.run_id);
     assert_eq!(binding["superseded"]["run_id"], successor.run_id);
-    let (incoming, setup) = next(&f);
-    let error = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":incoming.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}),false,&HashMap::new(),None).unwrap_err();
+    let mut unpublished = f.request("inspect");
+    unpublished["id"] = json!(successor.run_id);
     assert!(
-        error.to_string().contains("explicit source repair"),
+        f.runtime
+            .run_tool_as_human("orbit.workflow.run.resume", unpublished)
+            .is_err(),
+        "a setup-only predecessor cannot be inspected as the publisher"
+    );
+    let (mut incoming, setup) = next(&f);
+    assert_eq!(setup["prior_job_run_id"], successor.run_id);
+    let successor_state = f
+        .runtime
+        .read_run_state(&successor.run_id)
+        .unwrap()
+        .unwrap();
+    assert!(successor_state.pipeline.get("worktree").is_some());
+    assert!(successor_state.pipeline.get("push").is_none());
+    let error = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":incoming.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}),false,&HashMap::new(),None).unwrap_err();
+    let guidance = error.to_string();
+    assert!(
+        guidance.contains("explicit source repair"),
         "known legacy publication requires explicit source selection: {error}"
+    );
+    assert!(
+        !guidance.contains(&format!("publishing run '{}'", successor.run_id)),
+        "an unpublished predecessor cannot be offered as the publishing source: {guidance}"
+    );
+    assert!(guidance.contains("--discard-candidate"), "{guidance}");
+    assert_eq!(
+        git(
+            &PathBuf::from(setup["workspace_path"].as_str().unwrap()),
+            &["status", "--porcelain"]
+        ),
+        "",
+        "refusal leaves the incoming checkout untouched"
+    );
+
+    // Stop the refused incoming attempt before following the preserving route:
+    // explicitly select the original publisher, never the setup-only predecessor.
+    incoming.state = JobRunState::Cancelled;
+    incoming.pid = None;
+    incoming.finished_at = Some(Utc::now());
+    save_run(&f, &incoming);
+    let listed = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.workflow.run.list",
+            json!({"job_id":"task_pr_pipeline"}),
+        )
+        .unwrap();
+    let publisher = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["run_id"] == f.source.run_id)
+        .expect("the older publisher remains available for explicit selection");
+    let mut request = f.request("inspect");
+    request["id"] = publisher["run_id"].clone();
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request)
+        .unwrap();
+    assert_eq!(inspection["binding"]["source_run_id"], f.source.run_id);
+    assert_eq!(inspection["binding"]["pull_request"], "17");
+    assert_eq!(inspection["binding"]["head_sha"], f.head);
+    assert_eq!(
+        inspection["binding"]["superseded"]["run_id"],
+        incoming.run_id
     );
 }
 

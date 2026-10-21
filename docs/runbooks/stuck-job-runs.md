@@ -844,9 +844,12 @@ merged/closed PR or uncertain merge intent explicitly before trying again.
 For a publication requeued before preservation bindings were introduced, use
 explicit source repair against the **original publishing run**. Inspection also
 accepts an owner-local failed source with a durable applied final-recovery
-requeue. If the task now names a newer replacement, inspection binds every
-owner run that bound the task after the publishing run, up to the current
-binding, in `binding.superseded`: it names the current binding and digests each
+requeue. A refusal that reports no publication evidence for the predecessor
+does not identify that predecessor as the publisher: select the older publishing
+run from `orbit.workflow.run.list` and inspect it explicitly. Stop any newer
+attempt before inspection. If the task now names a newer replacement, inspection
+binds every owner run that bound the task after the publishing run, up to the
+current binding, in `binding.superseded`: it names the current binding and digests each
 run's entire stopped execution and checkpoints. Each must be a single-task
 `task_pr_pipeline` run of the same task on the same machine, created after the
 source, conclusively stopped, unclaimed and with no local pull record, and have
