@@ -144,6 +144,7 @@ fn deferred_pass(previous: Option<&DrainAdmissionPass>, reason: &str) -> DrainAd
         waiting_by_reason: BTreeMap::new(),
         consecutive_idle_passes: 0,
         resource_throttle: None,
+        task_pilot_warning: None,
         admission_refusal: None,
         last_pass_error_code: None,
         last_pass_error: None,

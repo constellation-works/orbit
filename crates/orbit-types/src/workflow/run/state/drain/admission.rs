@@ -63,6 +63,13 @@ pub struct DrainAdmissionPass {
     /// Host resource pressure that held this pass's admissions [ORB-13901].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_throttle: Option<ResourceThrottle>,
+    /// Why no task pilot prepares this workspace's tasks on the machine that
+    /// owns it: its task-pilot routine is absent, owned by another machine,
+    /// disabled or paused here, so tasks that need a pilot assessment wait
+    /// without one ever coming. Names the workspace, the machine and the
+    /// fix. Set afresh each local pass; pull passes leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_pilot_warning: Option<String>,
     /// [ORB-15637] Why this pull pass requested no new claim although its
     /// window was open: the owner's probe refusal, a refused settlement
     /// (`settlement_refused`), the failure breaker (`circuit_open`), a host

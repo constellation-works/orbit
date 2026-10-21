@@ -144,6 +144,18 @@ export function drainCrewNote(payload) {
   return note;
 }
 
+// The Drain card's warning that the open drain's latest pass found no task
+// pilot enabled on this machine: tasks that need an assessment wait for one
+// that never comes. The sentence names the workspace, machine and fix. Null
+// when a pilot runs or no drain is open.
+export function drainPilotNote(payload) {
+  const warning = payload?.capacity?.task_pilot_warning;
+  if (typeof warning !== "string" || !warning) return null;
+  const note = el("p", { class: "operation-control-note drain-pilot-note", text: warning });
+  note.setAttribute("role", "status");
+  return note;
+}
+
 // The readiness pools in the order the Backlog card lists them, each with the
 // words its dot stands for.
 export const DRAIN_POOLS = [

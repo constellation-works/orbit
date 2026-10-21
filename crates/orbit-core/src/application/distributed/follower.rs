@@ -161,6 +161,7 @@ impl crate::OrbitRuntime {
                     waiting_by_reason: waiting.by_reason,
                     consecutive_idle_passes,
                     resource_throttle: resource_throttle.clone(),
+                    task_pilot_warning: None,
                     admission_refusal: admission_refusal.map(ToOwned::to_owned),
                     last_pass_error: error.map(ToOwned::to_owned).or_else(|| {
                         was_degraded

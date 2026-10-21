@@ -364,6 +364,20 @@ queues those without a fresh assessment after the 2-minute debounce or the
 unchanged backlog stays quiet. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
+
+A local drain (`orbit run auto`, the dashboard start, MCP
+`orbit.workflow.auto`) warns when no task pilot will prepare its tasks on this
+machine: the workspace declares no `preparation_eligible` routine, or its
+routine names another `owner_machine`, is disabled, or is paused here
+(`orbit routine resume <name>`). The warning names the workspace, the machine
+and the fix. It is a `Warning:` line at start, `task_pilot_warning` on every
+admission pass (`drain_last_pass` in `orbit run show --json`), and
+`capacity.task_pilot_warning` in readiness while the window is open. The
+dashboard shows it in the Fleet drains row, the Drain card and the drain's run
+detail. Without the warning, tasks that need an assessment show only
+`task_pilot_preparation_required`, and that wait never clears. A pull drain
+does not warn, because its owner prepares the work.
+
 The task-pilot pipeline never promotes tasks or dispatches them; promotion and
 shipping remain separate operator-authorized steps.
 

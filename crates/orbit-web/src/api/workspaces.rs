@@ -91,6 +91,7 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
         "top_wait_reason": null,
         "holds": [],
         "queued_drains": [],
+        "task_pilot_warning": null,
     });
     let readiness = if entry.active {
         pinned
@@ -178,6 +179,8 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
             // Windows waiting for the live one's slot, as readiness reports
             // them: run ids, policy and crew names, never env values.
             row["queued_drains"] = capacity["queued_drains"].clone();
+            // The live drain's own record that no task pilot runs here.
+            row["task_pilot_warning"] = capacity["task_pilot_warning"].clone();
         }
         Err(error) => {
             tracing::warn!(workspace = %entry.id, %error, "fleet readiness unavailable");
