@@ -1,7 +1,8 @@
-/* Drain page: a heading and the Overview | Log tabs, then (Overview) a
-   host-throttle banner, summary tiles, and two columns — the live window,
-   why tasks wait and fleet drains on the left; Start a window and the locks
-   held on the right. Log keeps its own full-height view. */
+/* Drain page: a heading and the Overview | Start a window | Log tabs, then
+   (Overview) a host-throttle banner, summary tiles, and two columns — the
+   live window, how it was started, a pull drain's claims and why tasks wait
+   on the left; fleet drains and the locks held on the right. Start a window
+   is the composer; Log keeps its own full-height view. */
 .main-col > .tab-pane[data-tab="drain"] { overflow: hidden; }
 main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding-top: 22px; }
 #drain-main #side-dock { width: 100%; max-width: 1320px; min-width: 0; justify-self: center; gap: 0; }
@@ -9,6 +10,8 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 #drain-main #dock-pane-drain { overflow-y: auto; gap: 16px; padding: 18px 0 28px; }
 #drain-main #dock-pane-drain .panel { flex: 0 0 auto; min-height: 0; }
 #drain-main #dock-pane-drain .panel[hidden] { display: none; }
+#drain-main #dock-pane-start { overflow-y: auto; padding: 18px 0 0; }
+#side-dock[data-mode="start"] .dock-pane[data-pane="start"] { display: flex; }
 #drain-main #dock-pane-log { min-height: 320px; padding-top: 16px; }
 
 /* The page heading. The page's name is the top bar's (hidden) heading; this
@@ -28,7 +31,7 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 }
 
 /* Every card header: title left, a muted note or count right. */
-#dock-pane-drain .panel > header {
+#dock-pane-drain .panel > header, #dock-pane-start .panel > header {
   align-items: baseline; gap: 4px 12px; padding: 14px 18px; border-bottom: 1px solid var(--hair);
 }
 .drain-title { margin: 0; color: var(--fg-strong); font: 600 14px var(--font-sans); letter-spacing: 0; }
@@ -299,7 +302,7 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 
 /* Start a window. */
 .drain-start-sub { color: var(--fg-mute); font: 400 12.5px var(--font-sans); font-variant-numeric: tabular-nums; }
-#auto-drain-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; }
+#auto-drain-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; container: drain-compose / inline-size; }
 .drain-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .drain-field-label { color: var(--fg-soft); font: 400 13px var(--font-sans); }
 /* The label line: its help is an info hint whose bubble spans the line. */
@@ -318,11 +321,12 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-mode-select:disabled { color: var(--fg-disabled); }
 .drain-mode-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The window length is a segmented control of buttons. */
-.drain-durations {
-  display: grid; gap: 3px; padding: 3px;
+.drain-segments {
+  display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; min-width: 0;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
-  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
+.drain-segments > .drain-duration { flex: 1 0 auto; min-width: 40px; padding: 0 8px; }
+.drain-duration:disabled { color: var(--fg-disabled); cursor: not-allowed; }
 .drain-duration {
   min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 6px;
   background: transparent; color: var(--fg-dim); font: 500 13px var(--font-sans); cursor: pointer;
@@ -372,17 +376,158 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-divider::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hair); }
 
 /* The sunk footer: what the window will do, a throttle warning, Start. */
+/* `.panel` hides overflow, which would make the card the footer's scroll
+   container; clip keeps the rounded corners and lets the footer stick to the
+   bottom of the scrolling pane. */
+.drain-start-card { overflow: clip; }
 .drain-start-foot {
+  position: sticky; bottom: 0; z-index: 1;
   display: flex; flex-direction: column; gap: 12px; margin: 0 -18px; padding: 16px 18px 18px;
   border-top: 1px solid var(--hair); background: var(--bg-well);
 }
 .drain-start-summary { margin: 0; color: var(--fg-soft); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .drain-start-held { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; }
-.drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: 14px; }
+.drain-start-actions { display: flex; justify-content: flex-end; }
+.drain-start-actions > .operation-button.drain-start { min-width: min(100%, 240px); min-height: 44px; font-size: 14px; }
+@container drain-compose (max-width: 560px) {
+  .drain-start-actions > .operation-button.drain-start { width: 100%; }
+}
+
+/* The composer: two columns of sections that stack in a narrow card. */
+.drain-compose { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; min-width: 0; }
+@container drain-compose (max-width: 760px) {
+  .drain-compose { grid-template-columns: minmax(0, 1fr); }
+}
+.drain-compose-col { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.drain-compose-section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.drain-compose-title {
+  margin: 0; color: var(--fg-mute); font: 500 11px var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
+}
+.drain-compose-section.owner-decides .drain-field-label, .drain-field.owner-decides .drain-field-label { color: var(--fg-mute); }
+/* Every control names the flag it sets. */
+.drain-flag {
+  margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--bg-control);
+  color: var(--accent-hover); font: 11.5px var(--font-mono); overflow-wrap: anywhere;
+}
+.drain-field-hint > .drain-flag:first-child { margin-left: 0; }
+
+/* Where the work comes from: two radio cards. */
+.drain-sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); align-items: start; gap: 10px; }
+.drain-source {
+  display: flex; gap: 12px; align-items: flex-start; min-width: 0; padding: 12px 14px; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-well);
+  color: inherit; font: inherit; cursor: pointer;
+}
+.drain-source.selected { border-color: var(--accent); background: var(--accent-wash); }
+.drain-source:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drain-source-dot { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--fg-disabled); }
+.drain-source.selected .drain-source-dot { border: 5px solid var(--accent); }
+.drain-source-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.drain-source-title { color: var(--fg-strong); font-weight: 600; font-size: 13.5px; }
+.drain-source-detail { color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; }
+.drain-source-refusal { color: var(--danger-fg); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+
+/* Allowed crews: chips that strike through when excluded. */
+.drain-crews-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.drain-crews-bulk { display: inline-flex; gap: 12px; }
+.drain-link-button { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; }
+.drain-link-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drain-crews { display: flex; flex-wrap: wrap; gap: 6px; }
+.drain-crew {
+  min-height: 34px; padding: 0 11px; border-radius: var(--radius); border: 1px dashed var(--border-strong);
+  background: transparent; color: var(--fg-mute); font: 12.5px var(--font-mono); text-decoration: line-through; cursor: pointer;
+}
+.drain-crew.on { border: 1px solid var(--accent-line); background: var(--bg-selected); color: var(--fg); text-decoration: none; }
+.drain-crew:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Complexity pools: one row per tier with its source, share bar and members. */
+.drain-tiers { display: flex; flex-direction: column; gap: 12px; }
+.drain-tier { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg-well); min-width: 0; }
+.drain-tier-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.drain-tier-label { color: var(--fg-soft); font-size: 13px; font-weight: 500; }
+.drain-tier-modes { flex: 0 1 auto; }
+.drain-tier-modes > .drain-duration { height: 28px; font-size: 12px; }
+.drain-tier-input, .drain-token-input {
+  width: 100%; min-width: 0; height: 36px; padding: 0 10px; box-sizing: border-box;
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-control); color: var(--fg); font: 12.5px var(--font-mono);
+}
+.drain-token-input:disabled { color: var(--fg-disabled); }
+.drain-tier-input:focus-visible, .drain-token-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.drain-tier-bar { display: flex; gap: 2px; height: 6px; border-radius: 3px; overflow: hidden; }
+.drain-tier-members { display: flex; flex-wrap: wrap; gap: 6px; }
+.drain-tier-member {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-elev); font: 12px var(--font-mono); color: var(--fg);
+}
+.drain-tier-member.excluded { border-color: var(--warn-line); color: var(--fg-mute); }
+.drain-tier-member.excluded .drain-tier-name { text-decoration: line-through; }
+.drain-tier-pct { color: var(--fg-mute); }
+.drain-tier-swatch { width: 8px; height: 8px; border-radius: 2px; }
+.shade-0 { background: var(--accent); }
+.shade-1 { background: var(--status-in-progress); }
+.shade-2 { background: var(--status-review); }
+.shade-3 { background: var(--status-done); }
+.drain-tier-share.excluded, .drain-tier-swatch.excluded { background: var(--border-strong); }
+
+/* Blocking errors (red, square) and warnings (amber, round) above the command. */
+.drain-issues { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.drain-issues[hidden] { display: none; }
+.drain-issue { position: relative; padding-left: 15px; font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-issue::before { content: ""; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; }
+.drain-issue.blocking { color: var(--danger-fg); }
+.drain-issue.blocking::before { border-radius: 1px; background: var(--status-blocked); }
+.drain-issue.warning { color: var(--warn-fg); }
+.drain-issue.warning::before { border-radius: 50%; background: var(--status-proposed); }
+
+/* The equivalent command, copyable. */
+.drain-command-block { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.drain-command {
+  margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
+  color: var(--fg-soft); font: 12px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.drain-command:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.drain-command-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.drain-command-actions > .drain-field-hint { margin: 0 auto 0 0; }
+
+/* How this window was started: one cell per setting and what set it. */
+#drain-started-body, #drain-pull-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 18px; min-width: 0; }
+.drain-started-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 1px; margin: 0; border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; background: var(--hair); }
+.drain-started-cell { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--bg-elev); min-width: 0; }
+.drain-started-cell dt { color: var(--fg-mute); font-size: 11.5px; }
+.drain-started-cell dd { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; min-width: 0; }
+.drain-started-value { color: var(--fg-strong); font-size: 13px; overflow-wrap: anywhere; }
+.drain-started-cell .drain-flag { margin-left: 0; }
+.drain-started-cell.not-recorded .drain-started-value { color: var(--fg-mute); font-style: italic; }
+.drain-started-cell.owner-decides { background: var(--bg-well); }
+.drain-started-cell.owner-decides .drain-started-value, .drain-started-cell.owner-decides .drain-flag { color: var(--fg-disabled); }
+.drain-started-actions { display: flex; justify-content: flex-end; }
+
+/* A replica's claim budget: 2N cells and the admission sum. */
+.drain-pull-owner { margin: 0; color: var(--fg-soft); font-size: 13px; overflow-wrap: anywhere; }
+.drain-budget { display: flex; flex-direction: column; gap: 8px; }
+.drain-budget-cells { display: flex; flex-wrap: wrap; gap: 4px; }
+.drain-budget-cell { width: 26px; height: 18px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-well); }
+.drain-budget-cell.implementing, .drain-budget-key.implementing::before { background: var(--status-in-progress); border-color: transparent; }
+.drain-budget-cell.reviewing, .drain-budget-key.reviewing::before { background: var(--status-review); border-color: transparent; }
+.drain-budget-cell.open, .drain-budget-key.open::before { background: transparent; border: 1px dashed var(--accent); }
+.drain-budget-cell.later, .drain-budget-key.later::before { background: var(--bg-well); }
+.drain-budget-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--fg-mute); font-size: 12px; }
+.drain-budget-key { display: inline-flex; align-items: center; gap: 6px; }
+.drain-budget-key::before { content: ""; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--border); box-sizing: border-box; }
+.drain-budget-sum { margin: 0; color: var(--fg-soft); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
+.drain-claims-head { margin: 0; color: var(--fg-soft); font-size: 13px; }
+.drain-claims-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.drain-claims-scroll { overflow-x: auto; }
+.drain-claims { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.drain-claims th { color: var(--fg-mute); font-weight: 500; text-align: left; padding: 4px 8px 6px 0; border-bottom: 1px solid var(--hair); }
+.drain-claims td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--hair); color: var(--fg); overflow-wrap: anywhere; }
+.drain-settlements ul { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--fg-mute); font-size: 12.5px; }
+.drain-settlements li.warn { color: var(--warn-fg); }
 
 /* A Start's result sits under the Start card (index.html), as a panel of its own,
    so it shows on Drain and in the Tasks dock alike. */
-.drain-col-side > .operation-feedback { min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+#side-dock > .operation-feedback:not(:empty) { min-height: 0; margin-top: 12px; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

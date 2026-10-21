@@ -808,9 +808,11 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
 .tasks-dock .drain-banner,
 .tasks-dock .drain-summary,
 .tasks-dock #drain-waits-panel,
+.tasks-dock #drain-started-panel,
+.tasks-dock #drain-pull-panel,
 .tasks-dock #drain-fleet-panel { display: none !important; }
 .tasks-dock .drain-throttle-line { display: block; }
-.tasks-dock #dock-pane-drain { overflow-y: auto; padding-bottom: 16px; }
+.tasks-dock #dock-pane-drain, .tasks-dock #dock-pane-start { overflow-y: auto; padding-bottom: 16px; }
 .tasks-dock .drain-columns { display: block; }
 .tasks-dock .drain-col { gap: 12px; }
 .tasks-dock .drain-col + .drain-col { margin-top: 12px; }

@@ -52,6 +52,8 @@ class Node {
 
   appendChild(child) { this.append(child); return child; }
 
+  replaceChildren(...children) { this.textContent = ''; this.append(...children); }
+
   removeChild(child) {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);

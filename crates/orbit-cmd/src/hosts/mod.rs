@@ -25,8 +25,9 @@ pub use list::{list_hosts, list_registered_hosts, show_host, show_registered_hos
 pub use mutate::{HostChange, HostChangeEntry, add_host, remove_host, rename_host};
 pub use probe::local_host_facts;
 pub use route::{
-    HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, remote_task_holder,
-    resolve_host_workspace, route_task_id, routed_client, selector_remote_host, task_prefix_remote,
+    HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, pull_selector,
+    remote_task_holder, resolve_host_workspace, route_task_id, routed_client, selector_remote_host,
+    task_prefix_remote,
 };
 
 // Shared with the sibling modules through `super::`.

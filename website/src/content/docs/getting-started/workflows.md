@@ -73,11 +73,11 @@ file locks.
 
 | From | Do |
 |---|---|
-| Dashboard | Open **Drain**. Pick a window length and parallel tasks, then **Start**. |
+| Dashboard | Open **Drain** › **Start a window**. Pick a window length and parallel tasks, then **Start**. |
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-![The Drain page: a throttle banner, summary tiles for slots, queue and locked files, the Auto-drain card and why tasks are waiting, and beside them Start a window, with window length, parallel tasks, Stop at review or Mark done and Start, above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain page's Overview: a throttle banner, summary tiles for slots, queue and locked files, the Auto-drain card and why tasks are waiting, and beside them Fleet drains above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The window bounds only when new work starts; a task already running when it
 closes still finishes. The **Start a window** card's eligible and waiting

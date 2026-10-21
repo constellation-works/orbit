@@ -48,12 +48,12 @@ let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
 let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
-// Drain and Log share one dock. It sits on the Drain page and, while Tasks
+// Overview, Start a window and Log share one dock. It sits on the Drain page and, while Tasks
 // shows, beside the task list (placeDock). The Drain route selects its view;
 // on Tasks the view is the last one chosen. Agent and wrapping preferences
 // stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "log"];
+const DOCK_MODES = ["drain", "start", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -167,9 +167,9 @@ export function placeDock(tab) {
 }
 
 // On the Drain page a view is a route; on Tasks choosing one only switches it.
-function chooseDockMode(mode) {
+export function chooseDockMode(mode) {
   setDockMode(mode);
-  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "log" ? "#drain/log" : "#drain";
+  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
 }
 
 // The router selects the Drain page view through this presentation handle.
@@ -186,7 +186,7 @@ function wireDockModeToggle() {
   for (const btn of toggle.querySelectorAll(".dock-seg")) {
     btn.addEventListener("click", () => chooseDockMode(btn.dataset.mode));
   }
-  // Arrow keys move between the two segments, matching the window selectors;
+  // Arrow keys move between the segments, matching the window selectors;
   // Home and End jump to the first and last, as a tablist promises.
   toggle.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;

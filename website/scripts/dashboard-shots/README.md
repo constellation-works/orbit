@@ -83,7 +83,7 @@ pixels even when the capture script sanitizes text.
 | `dashboard-tasks.png` | 2880 × 1732 | The whole Tasks view: top bar with host resources and the refresh clock, the rail, status cards, and the Drain dock | Quickstart, Use the Dashboard |
 | `dashboard-approve-ship.png` | 1648 × 1416 | The task list: Awaiting approval with **Approve**, In progress with **View run**, Backlog with its readiness strip and **Ship** | First Task |
 | `dashboard-run-detail.png` | 2396 × 1782 | A successful `task_pr_pipeline` run and its step timeline | First Task |
-| `dashboard-drain-card.png` | 2448 × 2878 | The Drain page's Overview: throttle banner, summary tiles, the Auto-drain card, why tasks are waiting and fleet drains, then Start a window and Locks held | Delivery Workflows, Use the Dashboard |
+| `dashboard-drain-card.png` | 2448 × 2878 | The Drain page's Overview: throttle banner, summary tiles, the Auto-drain card and why tasks are waiting, then fleet drains and Locks held | Delivery Workflows, Use the Dashboard |
 | `dashboard-automation.png` | 2880 × 1732 | Automation → Routines with the sweep clock, the next hour, and each routine | Use the Dashboard, Schedule Recurring Work |
 | `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with each host's health | Use the Dashboard |
 

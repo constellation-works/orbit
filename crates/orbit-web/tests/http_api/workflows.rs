@@ -1803,3 +1803,172 @@ fn auto_start_and_ship_accept_a_strengthen_only_review_option() {
         },
     );
 }
+
+const TWO_CREWS: &str = "[crews.alpha]\nmodel = \"alpha-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [crews.beta]\nmodel = \"beta-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"alpha\"\n";
+
+/// The 4xx error text a refused start answers with.
+fn refusal(response: reqwest::blocking::Response) -> (u16, String) {
+    let status = response.status().as_u16();
+    let value: Value = response.json().expect("JSON error body");
+    assert!((400..500).contains(&status), "{status} {value}");
+    (
+        status,
+        value["error"].as_str().unwrap_or_default().to_string(),
+    )
+}
+
+/// A dashboard window restricted to one crew with a tier's pool replaced
+/// records the same run input `orbit run auto --allow-crew alpha
+/// --low-complexity-crews alpha:2 beta:1 --hard-complexity-crews` does, and a
+/// blank or unconfigured crew is refused in the runtime's words before any
+/// run exists.
+#[test]
+fn auto_start_records_the_crew_restriction_and_pool_overrides() {
+    isolated(
+        "workflows::auto_start_records_the_crew_restriction_and_pool_overrides",
+        || {
+            let _credential = held_worker_credential();
+            let fixture = notice_fixture(TWO_CREWS);
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto?workspace={WS}");
+
+            let before = run_ids(&fixture);
+            let (_, blank) = refusal(server.send(
+                "POST",
+                &uri,
+                json!({"for_duration":"1m","allow_crew":[" "]}),
+            ));
+            assert_eq!(blank, "crew name in the allowlist must not be empty");
+            let (_, unknown) = refusal(server.send(
+                "POST",
+                &uri,
+                json!({"for_duration":"1m","allow_crew":["gamma"]}),
+            ));
+            assert!(unknown.contains("gamma"), "{unknown}");
+            assert_eq!(run_ids(&fixture), before, "a refused start persists no run");
+
+            let started = json_ok(server.send(
+                "POST",
+                &uri,
+                json!({
+                    "for_duration": "1m",
+                    "concurrency": 2,
+                    "allow_crew": ["alpha"],
+                    "low_complexity_crews": ["alpha:2", "beta:1"],
+                    "hard_complexity_crews": [],
+                }),
+            ));
+            assert_eq!(started["source"], "local", "{started}");
+            assert_eq!(started["allowed_crews"], json!(["alpha"]), "{started}");
+            let input = run_input(&fixture, &started);
+            assert_eq!(input["for_seconds"], 60, "{input}");
+            assert_eq!(input["max_active_leaf_runs"], 2, "{input}");
+            assert_eq!(input["allowed_crews"], json!(["alpha"]), "{input}");
+            assert_eq!(
+                input["low_complexity_crews"],
+                json!(["alpha:2", "beta:1"]),
+                "{input}"
+            );
+            assert_eq!(input["hard_complexity_crews"], json!([]), "{input}");
+            assert!(
+                input.get("medium_complexity_crews").is_none(),
+                "an omitted tier keeps the workspace pool: {input}"
+            );
+        },
+    );
+}
+
+/// `--pull` refuses on the dashboard what it refuses on the command line, in
+/// the same words and before any owner is contacted: the flags clap rejects
+/// beside it, `--review`, `--host` without it, a blank crew, a pull from the
+/// owner checkout and a local window on a replica. Readiness names the same
+/// checkout refusals the Start form shows before submission.
+#[test]
+fn pull_starts_refuse_what_the_cli_refuses() {
+    isolated("workflows::pull_starts_refuse_what_the_cli_refuses", || {
+        let uri = format!("/api/workflows/auto?workspace={WS}");
+        let readiness_uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+
+        let replica = Fixture::replica_of("hm_fixture_remote");
+        let server = replica.server(true);
+        let before = run_ids(&replica);
+        let selector = format!("hm_fixture_remote/{WS}");
+        for (extra, flag) in [
+            (json!({"approve_proposed": true}), "--approve-proposed"),
+            (
+                json!({"auto_concurrency": "shadow"}),
+                "--auto-concurrency <MODE>",
+            ),
+            (json!({"auto_fix": true}), "--auto-fix"),
+            (
+                json!({"low_complexity_crews": []}),
+                "--low-complexity-crews [<CREW>...]",
+            ),
+        ] {
+            let mut body = json!({"for_duration": "1m", "pull": selector});
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let (status, error) = refusal(server.send("POST", &uri, body));
+            assert_eq!(status, 400);
+            assert_eq!(
+                error,
+                format!("the argument '--pull <SELECTOR>' cannot be used with '{flag}'")
+            );
+        }
+        let (_, review) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":selector,"review":"before-pr"}),
+        ));
+        assert_eq!(
+            review,
+            orbit_core::application::review::pull_review_request_refusal()
+        );
+        let (_, host) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","host":"dk-server-2"}),
+        ));
+        assert_eq!(
+            host,
+            "the following required arguments were not provided: --pull <SELECTOR>"
+        );
+        let (_, blank) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":selector,"allow_crew":[""]}),
+        ));
+        assert_eq!(blank, "crew name in the allowlist must not be empty");
+
+        let options = json_ok(server.get(&readiness_uri))["start_options"].clone();
+        assert_eq!(options["checkout"], "replica", "{options}");
+        assert_eq!(
+            options["owner_machine_id"], "hm_fixture_remote",
+            "{options}"
+        );
+        let (status, local) = refusal(server.send("POST", &uri, json!({"for_duration":"1m"})));
+        assert_eq!(status, 409);
+        assert_eq!(options["local_refusal"], local, "{options}");
+        assert_eq!(run_ids(&replica), before, "refusals persist no run");
+
+        let owner = Fixture::new();
+        let server = owner.server(true);
+        let options = json_ok(server.get(&readiness_uri))["start_options"].clone();
+        assert_eq!(options["checkout"], "owner", "{options}");
+        assert!(options["local_refusal"].is_null(), "{options}");
+        let (status, pull) = refusal(server.send(
+            "POST",
+            &uri,
+            json!({"for_duration":"1m","pull":format!("{}/{WS}", owner.machine_id())}),
+        ));
+        assert_eq!(status, 409);
+        assert_eq!(options["pull_refusal"], pull, "{options}");
+        assert!(
+            run_ids(&owner).is_empty(),
+            "the owner's refused pull persists no run"
+        );
+    });
+}

@@ -160,6 +160,8 @@ pub use application::workspace_sync::{
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
+/// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
+pub use orbit_config::ComplexityCrewPools;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
