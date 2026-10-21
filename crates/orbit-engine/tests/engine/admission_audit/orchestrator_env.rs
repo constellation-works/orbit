@@ -14,6 +14,98 @@ use std::{
 use tempfile::tempdir;
 const STDOUT_MARKER: &str = "provider-stdout-marker";
 const STDERR_MARKER: &str = "provider-stderr-marker";
+
+/// The public CLI dispatch path advertises only tools the managed agent can
+/// call, while retaining the activity's full effective-tool policy.
+#[test]
+fn agent_implement_envelope_omits_tools_without_agent_capability() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::agent_implement_envelope_omits_tools_without_agent_capability"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+    );
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-agent-tools", "grok:grok-build");
+    let host = TestHost::with_command(script.display().to_string())
+        .with_additional_tools(&["orbit.workflow.run.show", "orbit.workflow.run.list"]);
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(10));
+    spec.tool_disallow_list = Some(Vec::new());
+
+    run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-agent-tools",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("agent implementation dispatch");
+
+    let events = audit.events_snapshot().expect("audit snapshot");
+    let stdin_blob_ref = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::CliInvocationStarted {
+                stdin_blob_ref: Some(blob_ref),
+                ..
+            } => Some(blob_ref.clone()),
+            _ => None,
+        })
+        .expect("provider stdin blob");
+    let effective_tools = events
+        .into_iter()
+        .find_map(|event| match event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                effective_tools, ..
+            } => Some(effective_tools),
+            _ => None,
+        })
+        .expect("effective activity tools");
+    assert!(effective_tools.contains(&"orbit.workflow.run.show".to_string()));
+    assert!(effective_tools.contains(&"orbit.workflow.run.list".to_string()));
+
+    let provider_input = persisted_blobs(&audit_root)
+        .read(&stdin_blob_ref)
+        .expect("read provider stdin");
+    let envelope_json = provider_input
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .find(|line| !line.is_empty())
+        .expect("provider input ends with activity envelope JSON");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(envelope_json).expect("activity envelope JSON");
+    let tools = envelope["tools"].as_array().expect("advertised tools");
+
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.workflow.run.show")),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.workflow.run.list")),
+        "{tools:?}"
+    );
+    assert!(
+        tools.contains(&serde_json::json!("orbit.task.show")),
+        "{tools:?}"
+    );
+    assert!(
+        tools.contains(&serde_json::json!("orbit.search")),
+        "{tools:?}"
+    );
+}
+
 /// [ORB-10917] End-to-end guard for the composed dispatch environment: a
 /// benignly named ambient credential must not survive into the provider child.
 /// The ambient value is set by this test rather than inherited from the

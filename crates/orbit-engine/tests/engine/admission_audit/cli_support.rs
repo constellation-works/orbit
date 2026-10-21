@@ -16,6 +16,7 @@ pub(super) struct TestHost {
     command: String,
     sandbox: Option<ResolvedSandbox>,
     workspace_root: Option<PathBuf>,
+    registered_tools: Vec<String>,
 }
 
 impl TestHost {
@@ -24,7 +25,17 @@ impl TestHost {
             command,
             sandbox: None,
             workspace_root: None,
+            registered_tools: TEST_REGISTERED_TOOLS
+                .iter()
+                .map(|tool| (*tool).to_string())
+                .collect(),
         }
+    }
+
+    pub(super) fn with_additional_tools(mut self, tools: &[&str]) -> Self {
+        self.registered_tools
+            .extend(tools.iter().map(|tool| (*tool).to_string()));
+        self
     }
 
     pub(super) fn with_workspace_root(mut self, root: PathBuf) -> Self {
@@ -52,7 +63,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
             requested_tools: Vec::new(),
             effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
                 disallow_list,
-                TEST_REGISTERED_TOOLS.iter().copied(),
+                self.registered_tools.iter().map(String::as_str),
             ),
             omitted_requirement_notes: Vec::new(),
         })
