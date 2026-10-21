@@ -40,6 +40,39 @@ pub struct ClockStatus {
     pub platform: &'static str,
 }
 
+/// The one health classification of a [`ClockStatus`]. Each surface renders
+/// it in its own vocabulary, so the variants keep apart every state a surface
+/// labels differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockHealth {
+    /// Enabled with a future trigger and no reported issue.
+    Healthy,
+    /// Enabled with a future trigger, but the manager reported an issue.
+    ScheduledWithIssue,
+    /// Enabled without a verified future trigger.
+    Missed,
+    /// Paused and stopped.
+    Paused,
+    /// Paused and not running, but the manager reported an issue.
+    PausedWithIssue,
+    /// Paused, yet the native timer is still running.
+    RunningWhilePaused,
+}
+
+impl ClockStatus {
+    /// Classify this status; see [`ClockHealth`].
+    pub fn health(&self) -> ClockHealth {
+        match (self.enabled, self.schedulable, self.health_issue.is_some()) {
+            (false, _, _) if self.running == Some(true) => ClockHealth::RunningWhilePaused,
+            (false, _, true) => ClockHealth::PausedWithIssue,
+            (false, _, false) => ClockHealth::Paused,
+            (true, false, _) => ClockHealth::Missed,
+            (true, true, true) => ClockHealth::ScheduledWithIssue,
+            (true, true, false) => ClockHealth::Healthy,
+        }
+    }
+}
+
 pub(super) fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
     match platform {
         ClockPlatform::Launchd => ManagerCommand {

@@ -17,10 +17,11 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
-    ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState,
-    set_clock_cadence, set_clock_enabled, set_routine_enabled,
+    ClockHealth, ClockStatus, FireField, RoutineField, RoutineStatus, RoutineStatusReport,
+    RoutineToggleOutcome, RoutineToggleRefusal, set_clock_cadence, set_clock_enabled,
+    toggle_listed_routine,
 };
-use orbit_core::{AuditEventInsertParams, OrbitRuntime, RoutineFireRecord, RoutineFireState};
+use orbit_core::{AuditEventInsertParams, OrbitRuntime};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde::{Deserialize, Serialize};
@@ -201,70 +202,62 @@ pub(super) async fn toggle_routine(
         }
     };
     let started = Instant::now();
-    let global_root = state.global_root().to_path_buf();
-    let report = match blocking("routine statuses", move || routine_statuses(&global_root)).await {
-        Ok(report) => report,
-        Err(response) => return *response,
-    };
-    // A replica's owner-only routine is listed with the owner named; a
-    // toggle is refused with the same reason and writes nothing.
-    if let Some(owned) = report
-        .owner_only
-        .iter()
-        .find(|owned| owned.routine.definition.name == body.name)
-    {
-        let refusal = json!({
-            "error": owned.reason,
-            "code": "owner_authority",
-            "owner_machine": owned.owner_machine,
-        });
-        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
-    }
-    let Some(status) = report
-        .statuses
-        .iter()
-        .find(|status| status.routine.definition.name == body.name)
-    else {
-        return named_entity_not_found(
-            "routine_not_found",
-            format!("routine '{}' was not found", body.name),
-        );
-    };
-    if status.routine.source_workspace != body.source
-        || status.routine.source_orbit_dir != runtime.shared_root()
-    {
-        let refusal = json!({
-            "error": format!(
-                "select routine source workspace '{}' before changing '{}'",
-                status.routine.source_workspace, body.name
-            ),
-            "code": "workspace_mismatch",
-        });
-        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
-    }
-    let actual_target = status.routine.definition.target.as_ref_string();
-    if body.target != actual_target {
-        return refuse_routine_toggle(
-            &runtime,
-            workspace,
-            &body,
-            &caller,
-            started,
-            target_mismatch(&actual_target),
-        )
-        .await;
-    }
-
-    let outcome = match blocking("routine toggle", {
-        let routine = status.routine.clone();
-        let expected_enabled = body.expected_enabled;
-        let enabled = body.enabled;
-        move || Ok(set_routine_enabled(&routine, expected_enabled, enabled))
+    let selected = match blocking("routine toggle", {
+        let global_root = state.global_root().to_path_buf();
+        let shared_root = runtime.shared_root();
+        let (name, source, target) = (body.name.clone(), body.source.clone(), body.target.clone());
+        let (expected_enabled, enabled) = (body.expected_enabled, body.enabled);
+        move || {
+            let report = routine_statuses(&global_root)?;
+            Ok(toggle_listed_routine(
+                &report,
+                &name,
+                Some((&source, &shared_root)),
+                &target,
+                expected_enabled,
+                enabled,
+            ))
+        }
     })
     .await
     {
+        Ok(selected) => selected,
+        Err(response) => return *response,
+    };
+    let outcome = match selected {
         Ok(Ok(outcome)) => outcome,
-        Ok(Err(error)) => {
+        // A replica's owner-only routine is listed with the owner named; a
+        // toggle is refused with the same reason and writes nothing.
+        Ok(Err(RoutineToggleRefusal::OwnerAuthority {
+            reason,
+            owner_machine,
+        })) => {
+            let refusal = json!({
+                "error": reason,
+                "code": "owner_authority",
+                "owner_machine": owner_machine,
+            });
+            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
+                .await;
+        }
+        Ok(Err(RoutineToggleRefusal::NotFound)) => {
+            return named_entity_not_found(
+                "routine_not_found",
+                format!("routine '{}' was not found", body.name),
+            );
+        }
+        Ok(Err(RoutineToggleRefusal::WorkspaceMismatch { source_workspace })) => {
+            let refusal = json!({
+                "error": format!(
+                    "select routine source workspace '{source_workspace}' before changing '{}'",
+                    body.name
+                ),
+                "code": "workspace_mismatch",
+            });
+            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
+                .await;
+        }
+        Err(error) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -281,7 +274,6 @@ pub(super) async fn toggle_routine(
             .await;
             return map_runtime_error(error);
         }
-        Err(response) => return *response,
     };
     let refusal = match &outcome {
         RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => None,
@@ -290,7 +282,7 @@ pub(super) async fn toggle_routine(
             "code": "stale_routine_state",
             "actual_enabled": actual_enabled,
         })),
-        // The definition was retargeted between selection and write.
+        // The definition was retargeted since the caller selected it.
         RoutineToggleOutcome::TargetConflict { actual_target } => {
             Some(target_mismatch(&actual_target.as_ref_string()))
         }
@@ -549,62 +541,54 @@ pub(super) fn report_json(
         "clock": clock,
         "cron_zone": host_cron_zone(),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
-        "retired": report.listed_retired(include_inactive_plugins).map(|routine| json!({
-            "name": routine.name,
-            "source": routine.source_workspace,
-            "origin": routine.origin.as_str(),
-            "path": routine.path.display().to_string(),
-            "target": format!("job:{}", routine.job),
-            "reason": routine.reason,
-            "plugin_inactive": routine.skipped,
-        })).collect::<Vec<_>>(),
-        "owner_only": report.owner_only.iter().map(|owned| json!({
-            "name": owned.routine.definition.name,
-            "source": owned.routine.source_workspace,
-            "origin": owned.routine.origin.as_str(),
-            "target": owned.routine.definition.target.as_ref_string(),
-            "enabled": owned.routine.definition.enabled,
-            "owner_machine": owned.owner_machine,
-            "reason": owned.reason,
-        })).collect::<Vec<_>>(),
+        "retired": report.retired_rows(include_inactive_plugins),
+        "owner_only": report.owner_only_rows(),
         "inactive_plugin_counts": inactive_plugin_counts,
-        "load_errors": report.load_errors.iter().map(|e| json!({
-            "source_workspace": e.source_workspace,
-            "path": e.path.as_ref().map(|p| p.display().to_string()),
-            "message": e.message,
-        })).collect::<Vec<_>>(),
+        "load_errors": report.load_error_rows(),
     })
 }
 
 fn status_json(status: &RoutineStatus) -> Value {
-    let definition = &status.routine.definition;
-    json!({
-        "name": definition.name,
-        "description": definition.description,
-        "source": status.routine.source_workspace,
-        "target": definition.target.as_ref_string(),
-        "enabled": definition.enabled,
-        "paused_at": status.paused_at,
-        "effective": status.effective(),
-        "cron": definition.trigger.cron,
-            "trigger": definition.trigger,
-            "automation": status.automation.as_ref().map(super::automation::summary),
-        "first_observed_at": status.first_observed_at,
-        "last_evaluated_slot": status.last_evaluated_slot,
-        "next_due": status.next_due,
-        "next_evaluation": next_evaluation_json(
-            status.schedule_display_state(),
-            status.next_due.clone(),
-        ),
-        "last_fire": status.last_fire.as_ref().map(fire_json),
-        "recent_fires": status.recent_fires.iter().map(fire_json).collect::<Vec<_>>(),
-        "failure_streak": {
-            "count": status.failure_streak.count,
-            "since": status.failure_streak.since,
-            "truncated": status.failure_streak.truncated,
-        },
-    })
+    let mut row = status.project(ROUTINE_COLUMNS);
+    if let Some(automation) = &status.automation {
+        row.insert("automation".into(), super::automation::summary(automation));
+    }
+    Value::Object(row)
 }
+
+const FIRE_COLUMNS: &[(&str, FireField)] = &[
+    ("slot", FireField::Slot),
+    ("attempt", FireField::Attempt),
+    ("state", FireField::State),
+    ("ok", FireField::Ok),
+    ("run_id", FireField::RunId),
+    ("detail", FireField::Detail),
+    ("started_at", FireField::StartedAt),
+    ("finished_at", FireField::FinishedAt),
+    ("duration_ms", FireField::DurationMs),
+];
+
+/// A routine row's columns; `automation` is summarized on render.
+const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
+    ("name", RoutineField::Name),
+    ("description", RoutineField::Description),
+    ("source", RoutineField::Source),
+    ("origin", RoutineField::Origin),
+    ("target", RoutineField::Target),
+    ("enabled", RoutineField::Enabled),
+    ("paused_at", RoutineField::PausedAt),
+    ("effective", RoutineField::Effective),
+    ("cron", RoutineField::Cron),
+    ("trigger", RoutineField::Trigger),
+    ("automation", RoutineField::Automation),
+    ("first_observed_at", RoutineField::FirstObservedAt),
+    ("last_evaluated_slot", RoutineField::LastEvaluatedSlot),
+    ("next_due", RoutineField::NextDue),
+    ("next_evaluation", RoutineField::NextEvaluation),
+    ("last_fire", RoutineField::LastFire(FIRE_COLUMNS)),
+    ("recent_fires", RoutineField::RecentFires(FIRE_COLUMNS)),
+    ("failure_streak", RoutineField::FailureStreak),
+];
 
 /// The zone cron triggers are evaluated in: the host's local zone, as the
 /// routine and auto-task schedulers use. `name` is the IANA name when the
@@ -653,18 +637,6 @@ fn zone_name_from_sources(
         .map(str::to_string)
 }
 
-pub(super) fn next_evaluation_json(state: ScheduleDisplayState, at: Option<String>) -> Value {
-    json!({
-        "state": state.as_str(),
-        "at": if state == ScheduleDisplayState::Waiting {
-            None
-        } else {
-            at
-        },
-        "hypothetical": state.is_hypothetical(),
-    })
-}
-
 pub(super) fn clock_json(clock: &ClockStatus) -> Value {
     json!({
         "provider": clock.platform,
@@ -674,10 +646,13 @@ pub(super) fn clock_json(clock: &ClockStatus) -> Value {
         "loaded": clock.loaded,
         "running": clock.running,
         "schedulable": clock.schedulable,
-        "health": if !clock.enabled && clock.running == Some(true) { "unhealthy" }
-            else if !clock.enabled { "paused" }
-            else if clock.schedulable { "healthy" }
-            else { "missed" },
+        // A reported issue alone does not change the dashboard's token.
+        "health": match clock.health() {
+            ClockHealth::Healthy | ClockHealth::ScheduledWithIssue => "healthy",
+            ClockHealth::Missed => "missed",
+            ClockHealth::Paused | ClockHealth::PausedWithIssue => "paused",
+            ClockHealth::RunningWhilePaused => "unhealthy",
+        },
         "health_issue": clock.health_issue,
         "last_tick_at": clock.last_tick_at,
         "next_tick_at": clock.next_tick_at,
@@ -859,40 +834,4 @@ pub(super) async fn record_operation_audit(
         Err(join_error) => join_error.to_string(),
     };
     tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
-}
-
-/// One fire attempt, enriched with coarse outcome and wall-clock duration.
-pub(super) fn fire_json(fire: &RoutineFireRecord) -> Value {
-    let finished = fire.state.is_terminal();
-    json!({
-        "slot": fire.slot,
-        "attempt": fire.attempt,
-        "state": fire.state.as_str(),
-        "ok": fire_ok(fire.state),
-        "run_id": fire.run_id,
-        "detail": fire.detail,
-        "started_at": fire.created_at,
-        "finished_at": finished.then(|| fire.updated_at.clone()),
-        "duration_ms": duration_ms(fire),
-    })
-}
-
-pub(super) fn fire_ok(state: RoutineFireState) -> Option<bool> {
-    match state {
-        RoutineFireState::Succeeded => Some(true),
-        RoutineFireState::Skipped => None,
-        RoutineFireState::Failed | RoutineFireState::TimedOut | RoutineFireState::Error => {
-            Some(false)
-        }
-        RoutineFireState::Intent | RoutineFireState::Dispatched => None,
-    }
-}
-
-pub(super) fn duration_ms(fire: &RoutineFireRecord) -> Option<i64> {
-    if !fire.state.is_terminal() {
-        return None;
-    }
-    let start = DateTime::parse_from_rfc3339(&fire.created_at).ok()?;
-    let end = DateTime::parse_from_rfc3339(&fire.updated_at).ok()?;
-    Some((end - start).num_milliseconds())
 }

@@ -131,6 +131,29 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     let after_toggle = std::fs::read(&routine_path).unwrap();
     let conflict = client.call_tool_err("orbit_routine_control", toggle);
     assert_eq!(conflict["code"], "invalid_input", "{conflict}");
+    for (name, target, message) in [
+        (
+            "missing-routine",
+            "job:stdio-maintenance",
+            "invalid input: routine unavailable in this workspace",
+        ),
+        (
+            "stdio-routine",
+            "job:elsewhere",
+            "invalid input: routine target changed; refresh before retrying",
+        ),
+    ] {
+        let refused = client.call_tool_err(
+            "orbit_routine_control",
+            json!({"workspace":selector,"action":"toggle","name":name,"target":target,
+                "expected_enabled":false,"enabled":true}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(
+            refused["message"], message,
+            "the shared toggle selection keeps each MCP refusal: {refused}"
+        );
+    }
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);

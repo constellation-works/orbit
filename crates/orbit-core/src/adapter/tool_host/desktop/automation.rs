@@ -11,11 +11,28 @@ use crate::{
     application::{
         job::JobCatalogFilter,
         routines::{
-            RoutineToggleOutcome,
+            FireField, RoutineField, RoutineToggleOutcome,
             status::{checkout_routine_statuses, toggle_checkout_routine},
         },
     },
 };
+
+/// A routine list item's status columns; `description` is bounded on render.
+const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
+    ("name", RoutineField::Name),
+    ("description", RoutineField::Description),
+    ("enabled", RoutineField::Enabled),
+    ("effective", RoutineField::Effective),
+    ("target", RoutineField::Target),
+    ("schedule", RoutineField::Trigger),
+    ("state", RoutineField::State),
+    ("next_due", RoutineField::NextDue),
+    ("paused_at", RoutineField::PausedAt),
+    (
+        "last_fire",
+        RoutineField::LastFire(&[("state", FireField::State), ("at", FireField::UpdatedAt)]),
+    ),
+];
 
 fn text(value: &str) -> String {
     let (value, truncated) = bounded_text(value, 4096);
@@ -47,11 +64,11 @@ pub(super) fn read(
             notes.extend(report.load_errors.iter().map(|e|text(&e.message)));
             notes.extend(report.listed_retired(true).map(|r|text(&format!("{}: {}",r.name,r.reason))));
             let mut rows=report.statuses.iter().map(|s|{
-                let d=&s.routine.definition;
-                json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"effective":s.effective(),
-                    "target":d.target.as_ref_string(),"schedule":d.trigger,"state":s.schedule_display_state().as_str(),
-                    "next_due":s.next_due,"paused_at":s.paused_at,"last_fire":s.last_fire.as_ref().map(|f|json!({"state":f.state,"at":f.updated_at})),
-                    "toggle_available":true,"toggle_reason":null})
+                let mut row=s.project(ROUTINE_COLUMNS);
+                row.insert("description".into(),json!(text(&s.routine.definition.description)));
+                row.insert("toggle_available".into(),json!(true));
+                row.insert("toggle_reason".into(),Value::Null);
+                Value::Object(row)
             }).collect::<Vec<_>>();
             // A replica lists what its owner schedules so the refusal is
             // visible before an operator tries to toggle it.

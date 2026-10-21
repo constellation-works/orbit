@@ -26,7 +26,7 @@ pub use settings::{
     ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
     save_clock_settings, set_clock_cadence,
 };
-pub use status::{ClockStatus, clock_status, doctor_clock_not_running_issue};
+pub use status::{ClockHealth, ClockStatus, clock_status, doctor_clock_not_running_issue};
 
 #[cfg(test)]
 mod tests;

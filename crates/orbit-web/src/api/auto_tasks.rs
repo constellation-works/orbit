@@ -22,8 +22,8 @@ use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
     OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, host_cron_zone, named_entity_not_found, next_evaluation_json,
-    record_operation_audit, selection_conflict,
+    explicit_workspace, host_cron_zone, named_entity_not_found, record_operation_audit,
+    selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -609,7 +609,7 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
 /// inspection could not read labelled unavailable.
 fn next_evaluation_projection(row: &AutoTaskListingRow, automation: Option<&Value>) -> Value {
     let (state, at) = row.schedule_with_trigger(!automation_unavailable(automation));
-    next_evaluation_json(state, at.map(|slot| slot.to_rfc3339()))
+    state.next_evaluation(at.map(|slot| slot.to_rfc3339()))
 }
 
 fn automation_unavailable(automation: Option<&Value>) -> bool {

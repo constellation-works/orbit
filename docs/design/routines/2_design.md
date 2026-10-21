@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-19
+last_updated: 2026-10-20
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -90,6 +90,16 @@ clock object is `health: unknown` with the bounded diagnostic in `error` /
 `health_issue`, `enabled` is JSON null, and clock controls are disabled. That
 projection never invents paused or disabled clock authority. `orbit clock status`
 continues to fail closed with the same diagnostic.
+Core owns one projection of a routine status row, its fire records and the
+`retired`, `owner_only` and `load_errors` rows; `orbit routine list` and `show`,
+`GET /api/routines` and the MCP `orbit.routine.control` list each select the
+fields they render from it. Core also owns one clock-health classification,
+which each surface names in its own vocabulary: `orbit clock status` reads any
+reported health issue as `unhealthy`, while the dashboard's `health` stays
+`healthy` for an enabled clock with a future trigger and reports an enabled
+clock without one as `missed`. Dashboard and MCP routine toggles run the same
+Core selection (owner-only refusal, name lookup, source workspace, target);
+the dashboard keeps its own authorization, audit rows and error codes.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
 does not look armed; a theoretical next slot is labeled hypothetical. The time
