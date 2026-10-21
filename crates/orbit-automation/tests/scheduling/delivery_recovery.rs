@@ -303,6 +303,7 @@ fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
         now: now(),
         baseline: revision(2),
         released_refs: vec![],
+        inspected_state: Some(&state),
         action_terminal: false,
         action_failed_without_evidence: false,
     };
@@ -312,7 +313,10 @@ fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
         panic!("expected a typed refusal, got {error}");
     };
     assert!(reasons.contains(refusal::ACTION_EXECUTING), "{reasons}");
-    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(state));
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap(),
+        Some(state.clone())
+    );
 
     operation.action_terminal = true;
     operation.action_failed_without_evidence = true;
@@ -344,6 +348,7 @@ fn reset_can_forget_a_terminal_action_with_acceptable_evidence() {
         now: now(),
         baseline: revision(2),
         released_refs: vec![],
+        inspected_state: Some(&state),
         action_terminal: liveness.terminal,
         action_failed_without_evidence: liveness.failed_without_evidence,
     };
@@ -351,4 +356,70 @@ fn reset_can_forget_a_terminal_action_with_acceptable_evidence() {
     assert!(applied.applied);
     assert!(!applied.action.unwrap().reissuable);
     assert!(store.automation_state(CONSUMER).unwrap().is_none());
+}
+
+/// The retry is admitted through the public evaluator, with virtual backoff.
+/// No timing race or synthetic load is needed to move beyond the probed action.
+#[test]
+fn reset_cannot_inherit_terminal_proof_across_retry_admission() {
+    let (store, host, trigger, inspected) = wedged();
+    let liveness = delivery::action_liveness(&host, &inspected, now()).unwrap();
+    assert!(liveness.terminal);
+    let request = ResetRequest {
+        reason: "discard the closed action's debt".into(),
+        force: false,
+    };
+    let operation = reset::Reset {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        host_refusal: None,
+        request: &request,
+        by: "operator",
+        now: now(),
+        baseline: revision(2),
+        released_refs: vec!["refs/orbit/automation/fixture/batch/through".into()],
+        inspected_state: Some(&inspected),
+        action_terminal: liveness.terminal,
+        action_failed_without_evidence: liveness.failed_without_evidence,
+    };
+
+    host.page(2, 2);
+    evaluate(store.as_ref(), &host, &trigger, true);
+    host.stopped.store(false, Ordering::SeqCst);
+    *host.raw_evidence.lock().unwrap() = None;
+    let replacement = evaluate_at(store.as_ref(), &host, &trigger, true, 6)
+        .unwrap()
+        .state
+        .unwrap();
+    assert!(replacement.generation > inspected.generation);
+    let active = replacement.active.as_ref().unwrap();
+    assert_eq!(active.state, BatchState::Admitted);
+    assert_ne!(
+        active.action_id,
+        inspected.active.as_ref().unwrap().action_id
+    );
+    assert!(
+        !delivery::action_liveness(&host, &replacement, now())
+            .unwrap()
+            .terminal
+    );
+
+    for result in [
+        reset::preview(store.as_ref(), &operation),
+        reset::apply(store.as_ref(), &operation),
+    ] {
+        assert!(matches!(result,
+            Err(AutomationError::Deferred(reason)) if reason == "concurrent_evaluation"));
+        assert_eq!(
+            store.automation_state(CONSUMER).unwrap(),
+            Some(replacement.clone())
+        );
+        assert!(
+            store
+                .automation_recoveries(CONSUMER, 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

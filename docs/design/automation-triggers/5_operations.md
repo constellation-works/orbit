@@ -634,6 +634,13 @@ evidence is not executing and needs no `--force` — `member_consumer`, `unknown
 the discarded landings never appear in a receipt, and the record is the only
 trace they existed.
 
+Both preview and apply bind action liveness to the exact inspected consumer
+snapshot, including its generation and action identity. If an evaluation settles
+that action or admits a retry before reset loads the checkpoint, reset returns
+`concurrent_evaluation` before deleting state, writing an audit record or releasing
+pins. Inspect and retry against the current consumer. `--force` permits abandoning
+a live action in that inspected snapshot; it does not bypass concurrent movement.
+
 ## Rollback and limits
 
 Disable delivery definitions and allow admitted work to settle before rolling back.

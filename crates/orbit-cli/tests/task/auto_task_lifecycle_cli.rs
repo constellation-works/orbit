@@ -982,6 +982,101 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     );
     assert_eq!(reset["applied"], true);
     assert!(store.automation_state(&consumer).unwrap().is_none());
+
+    // Recreate the closed action's checkpoint, then deterministically admit a
+    // live replacement after Core's liveness probe and before reset applies.
+    // This exercises the public runtime boundary including real retained refs.
+    assert!(store.automation_initialize(&baselined).unwrap());
+    assert!(
+        store
+            .automation_commit(&baselined, &admitted, None)
+            .unwrap()
+    );
+    let live = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Live replacement review",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Attach coverage evidence",
+        "--json",
+    ]);
+    let mut replacement = admitted.clone();
+    replacement.generation += 1;
+    let active = replacement.active.as_mut().unwrap();
+    active.attempt += 1;
+    active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
+    active.action_id = Some(live["id"].as_str().unwrap().to_string());
+    let pin = format!(
+        "refs/orbit/automation/{}/fixture-batch/through",
+        orbit_common::security::release::sha256_hex(consumer.as_bytes()),
+    );
+    git(&fixture, &["update-ref", &pin, "HEAD"]);
+    let pinned = git(&fixture, &["rev-parse", &pin]);
+    let history = store.automation_recoveries(&consumer, 10).unwrap();
+    let request = orbit_types::workflow::automation::recovery::ResetRequest {
+        reason: "discard the closed review's debt".into(),
+        force: false,
+    };
+    let error = orbit_core::test_support::with_reset_probe_hook(
+        {
+            let store = store.clone();
+            let previous = admitted.clone();
+            let next = replacement.clone();
+            move || assert!(store.automation_commit(&previous, &next, None).unwrap())
+        },
+        || {
+            orbit_core::application::automation::reset_auto_task(
+                &runtime,
+                &definition,
+                &request,
+                Utc::now(),
+            )
+        },
+    )
+    .expect_err("a live replacement cannot inherit the closed review's terminal proof");
+    assert!(
+        error.to_string().contains("concurrent_evaluation"),
+        "{error}"
+    );
+    assert_eq!(
+        store.automation_state(&consumer).unwrap(),
+        Some(replacement)
+    );
+    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap(), history);
+    assert_eq!(git(&fixture, &["rev-parse", &pin]), pinned);
+
+    let preview = operator_json(
+        &fixture,
+        &["auto-task", "reset", &definition.name, "--json"],
+    );
+    assert!(
+        preview["refusals"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("action_executing"))
+    );
+    let forced = operator_json(
+        &fixture,
+        &[
+            "auto-task",
+            "reset",
+            &definition.name,
+            "--force",
+            "--reason",
+            "Explicitly abandon the live replacement",
+            "--json",
+        ],
+    );
+    assert_eq!(forced["applied"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert_eq!(
+        store.automation_recoveries(&consumer, 10).unwrap().len(),
+        history.len() + 1
+    );
+    assert!(git(&fixture, &["for-each-ref", "--format=%(refname)", &pin]).is_empty());
 }
 
 /// The auto-task defaults seeded into every workspace stay inert, declare a
@@ -1313,6 +1408,11 @@ fn auto_task_lifecycle_and_recovery() {
 
 #[test]
 fn retired_coverage_and_closed_actions() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::retired_coverage_and_closed_actions",
+    ) {
+        return;
+    }
     for (name, check) in [
         (
             "auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage",

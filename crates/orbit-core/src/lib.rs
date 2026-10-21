@@ -70,6 +70,7 @@ pub mod test_support {
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
+    pub use crate::application::automation::with_reset_probe_hook;
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
     pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
