@@ -1469,6 +1469,9 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
         answer["next_steps"]
     );
     assert_eq!(bounded_invocation["answer"]["extra"], answer["extra"]);
+    assert_eq!(bounded_invocation["answer"], *answer);
+    assert_eq!(bounded_invocation["answer_truncated"], false);
+    assert_eq!(bounded_invocation["answer_omitted_fields"], json!([]));
 
     // The CLI reads the same answer, as JSON and as text.
     let shown = orbit_ok(
@@ -1519,6 +1522,118 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
         input["trusted_host_admission"]["workspace_path"],
         linked.to_str().unwrap()
     );
+}
+
+/// Compact reads bound the serialized answer even when the provider capture
+/// admits much more, while the full MCP read retains every structured value.
+#[test]
+fn compact_agent_answers_have_a_serialized_budget() {
+    let workspace = McpWorkspace::init();
+    let response_file = workspace.home.join("oversized-answer.json");
+    for provider in ["codex", "claude"] {
+        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&workspace.home), provider);
+        std::fs::write(
+            McpWorkspace::stub_bin_dir(&workspace.home).join(provider),
+            format!(
+                "#!/bin/sh\ncat > /dev/null\ncat {}\n",
+                orbit_common::process::shell::quote_posix_arg(response_file.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+    }
+    admit_fixture_claude_worker_token(&workspace);
+    let mut client = workspace.serve_with_args_and_env(
+        &["--operator"],
+        &[
+            (FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN),
+            ("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "2097152"),
+        ],
+    );
+    let large_text = "界🙂\n\"\\".repeat(24_000);
+    for result in [
+        json!({"summary": "large report", "report_markdown": large_text}),
+        json!({"summary": "nested values", "nested": {"reports": [{"text": large_text}]}}),
+        json!({
+            "summary": "large collections",
+            "findings": vec![json!({"detail": "界🙂\n\"\\".repeat(20)}); 600],
+            "next_steps": vec![json!({"action": "界🙂\n\"\\".repeat(20)}); 600],
+        }),
+        json!({"summary": "界🙂\n\"\\\u{0001}".repeat(2000)}),
+    ] {
+        let envelope =
+            json!({"schemaVersion": 1, "status": "success", "result": result, "error": null});
+        std::fs::write(&response_file, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        let submitted = client.call_tool_ok(
+            "orbit_agent_invoke",
+            json!({"prompt": "oversized answer probe", "cwd": workspace.work,
+                "timeout_seconds": 30, "wait_seconds": 30, "model": "codex"}),
+        );
+        assert_eq!(submitted["state"], "success", "{submitted}");
+        let run_id = submitted["run_id"].as_str().unwrap();
+        let mut previous = None;
+        for limit in [1, 50] {
+            let bounded = client.call_tool_ok(
+                "orbit_workflow_run_show",
+                json!({"workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id, "limit": limit}),
+            );
+            let invocation = &bounded["run"]["agent_invocation"];
+            let answer = &invocation["answer"];
+            let bytes = serde_json::to_vec(answer).unwrap();
+            assert!(
+                bytes.len() <= 4096,
+                "compact answer returned {} bytes",
+                bytes.len()
+            );
+            assert_eq!(invocation["answer_max_bytes"], 4096);
+            assert_eq!(invocation["answer_truncated"], true);
+            assert!(invocation.get("preview").is_none());
+            assert!(answer.get("final_message").is_none());
+            assert_eq!(invocation["summary"], answer["summary"]);
+            let omitted = invocation["answer_omitted_fields"].as_array().unwrap();
+            if result.get("report_markdown").is_some() || result.get("nested").is_some() {
+                assert!(omitted.contains(&json!("extra")));
+                assert!(answer.get("extra").is_none());
+            } else if result.get("findings").is_some() {
+                for field in ["findings", "next_steps"] {
+                    assert!(omitted.contains(&json!(field)));
+                    assert!(answer.get(field).is_none());
+                }
+            } else {
+                assert_ne!(answer["summary"], result["summary"]);
+            }
+            let text = std::str::from_utf8(&bytes).expect("UTF-8 compact answer");
+            assert_eq!(serde_json::from_str::<Value>(text).unwrap(), *answer);
+            if let Some(summary) = answer["summary"].as_str() {
+                assert!(result["summary"].as_str().unwrap().starts_with(summary));
+                assert!(!summary.is_empty(), "keep a useful summary excerpt");
+            }
+            if let Some(previous) = &previous {
+                assert_eq!(
+                    answer, previous,
+                    "log page length must not alter the answer budget"
+                );
+            }
+            previous = Some(answer.clone());
+            let retrieval = &invocation["answer_retrieval"];
+            assert_eq!(retrieval["tool"], "orbit.workflow.run.show");
+            assert!(retrieval["arguments"].get("view").is_none());
+            let full =
+                client.call_tool_ok("orbit_workflow_run_show", retrieval["arguments"].clone());
+            let full_answer = &full["agent_invocation"]["answer"];
+            assert_eq!(full_answer["summary"], result["summary"]);
+            for field in ["findings", "next_steps"] {
+                assert_eq!(
+                    full_answer[field],
+                    result.get(field).cloned().unwrap_or(json!([]))
+                );
+            }
+            let mut extra = result.as_object().unwrap().clone();
+            for field in ["summary", "findings", "next_steps"] {
+                extra.remove(field);
+            }
+            assert_eq!(full_answer["extra"], Value::Object(extra));
+        }
+    }
 }
 
 /// [ORB-13899] An invocation that exits 0 without a response envelope did not

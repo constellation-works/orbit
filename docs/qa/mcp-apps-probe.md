@@ -74,6 +74,19 @@ offset/limit, explicit truncation and a next offset. Task details independently
 page comments, history and artifact metadata; they do not return artifact file
 contents. Runs use observed state without reconciliation, keep provider input
 and response payloads out of the projection, and expose audited log excerpts.
+Compact run reads cap `run.agent_invocation.answer` at 4096 serialized JSON
+bytes, independently of provider capture settings and log pagination. They omit
+the duplicate raw `final_message` and stream `preview`. Small structured answers
+keep their fields. For oversized answers the projection prioritizes `summary`,
+then keeps each other top-level answer field only if the complete field fits;
+oversized collections or nested values are omitted as a whole. A summary too
+large to fit is shortened at a UTF-8 character boundary, counting JSON escapes
+against the budget. The legacy invocation `summary` mirrors that excerpt.
+`answer_max_bytes`, `answer_truncated` and `answer_omitted_fields` describe this
+projection; omitted fields must not be interpreted as empty results. The
+`answer_retrieval` tool/arguments object gives an explicit full run read (without
+`view: "bounded"`) for the complete persisted structured answer. Durable stdout
+blob references remain available for the raw provider output.
 Run reads retain the canonical operator run-read gate. Usage is explicitly
 unavailable rather than zero when no usable measurement exists.
 
