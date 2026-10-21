@@ -421,6 +421,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         waiting_by_reason: BTreeMap::new(),
         consecutive_idle_passes: 0,
         resource_throttle: resource.throttle.clone(),
+        task_pilot_warning: runtime.task_pilot_warning(),
         admission_refusal: None,
         last_pass_error_code: None,
         last_pass_error: None,

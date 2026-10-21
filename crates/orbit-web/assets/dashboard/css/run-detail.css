@@ -110,6 +110,8 @@ a.failure-id-link:focus-visible {
 }
 .child-dispatch-meta { color: var(--fg-dim); }
 .requests-held { border-left: 3px solid var(--state-held); overflow-wrap: anywhere; }
+.pilot-warning { border-left: 3px solid var(--warn-fg); overflow-wrap: anywhere; }
+.pilot-warning .child-dispatch-notice { margin-bottom: 0; color: var(--warn-fg); }
 .requests-held .child-dispatch-notice:last-child { margin-bottom: 0; }
 .settlement-remedy { margin: 0 0 8px; color: var(--fg-dim); line-height: 1.5; }
 .waiting-task { color: var(--fg-dim); }

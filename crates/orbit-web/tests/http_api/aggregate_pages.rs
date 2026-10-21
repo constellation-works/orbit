@@ -118,6 +118,21 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
             );
             drain.input = Some(serde_json::json!({"max_active_leaf_runs": 4}));
             write_seeded_run(&alpha, &drain);
+            // Its latest pass found no task pilot enabled on this machine.
+            let mut state = orbit_types::workflow::PipelineState::new(
+                drain.run_id.clone(),
+                drain.job_id.clone(),
+                serde_json::json!({}),
+            );
+            state.pull_drain.drain_last_pass = Some(
+                serde_json::from_value(serde_json::json!({
+                    "recorded_at": Utc::now(),
+                    "queued": 0,
+                    "task_pilot_warning": "Task pilot is not enabled for workspace 'alpha'",
+                }))
+                .unwrap(),
+            );
+            alpha.write_run_state(&drain.run_id, &state).unwrap();
             // A second window started while that one runs waits behind it.
             let mut queued = seed_run(
                 &alpha,
@@ -148,7 +163,13 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
             assert_eq!(queued["run_id"], "jrun-fleet-queued", "{payload:#}");
             assert_eq!(queued["allowed_crews"], serde_json::json!(["sol"]));
             assert_eq!(queued["for_seconds"], 28800);
+            assert_eq!(
+                row("alpha")["task_pilot_warning"],
+                "Task pilot is not enabled for workspace 'alpha'",
+                "the live drain's pilot warning reaches its row: {payload:#}"
+            );
             assert_eq!(row("bravo")["phase"], "idle");
+            assert_eq!(row("bravo")["task_pilot_warning"], serde_json::Value::Null);
             assert_eq!(
                 row("bravo")["eligible_count"],
                 1,

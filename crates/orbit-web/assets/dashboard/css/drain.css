@@ -226,7 +226,7 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 }
 
 /* Holds the operator cannot clear from here: amber boxes. */
-.drain-throttle-note, .drain-throttle-line, .drain-provider-limit-note, .drain-provider-auth, .drain-crew-note {
+.drain-throttle-note, .drain-throttle-line, .drain-provider-limit-note, .drain-provider-auth, .drain-crew-note, .drain-pilot-note {
   margin: 0; padding: 9px 11px; border: 1px solid var(--warn-line); border-radius: 8px;
   background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
 }
@@ -573,6 +573,7 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .fleet-detail { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-left: 15px; color: var(--fg-mute); font-size: 11px; overflow-wrap: anywhere; }
 .fleet-eligible { color: var(--fg-dim); }
 .fleet-holds { color: var(--warn-fg); }
+.fleet-pilot-warning { margin: 2px 0 0; padding-left: 15px; color: var(--warn-fg); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .fleet-unavailable { color: var(--fg-mute); grid-column: 1 / -1; }
 .fleet-host-down { color: var(--warn-fg); }
 .fleet-empty { margin: 0; color: var(--fg-mute); }

@@ -863,6 +863,7 @@ fn failed_pull_protocol_is_visible_after_terminalization() {
                 .unwrap();
             let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
             state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+                task_pilot_warning: None,
                 capacity: None,
                 recorded_at: now,
                 queued: 0,

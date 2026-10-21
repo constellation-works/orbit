@@ -115,6 +115,16 @@ function detailLine(row) {
   return parts.length ? el('div', { class: 'fleet-detail' }, parts) : null;
 }
 
+// The live drain's record that no task pilot runs on this host, in full: it
+// names the workspace, the machine and how to enable the pilot.
+function pilotWarning(row) {
+  if (typeof row.task_pilot_warning !== 'string' || !row.task_pilot_warning) return null;
+  const node = el('p', { class: 'fleet-pilot-warning', text: row.task_pilot_warning });
+  node.setAttribute('data-field', 'task-pilot');
+  node.setAttribute('role', 'status');
+  return node;
+}
+
 // One queued window in a line: its run, ceiling, completion, crews and length.
 function queuedSummary(drain) {
   const crews = drain.allowed_crews?.length ? drain.allowed_crews.join(', ') : 'all crews';
@@ -138,6 +148,8 @@ function workspaceRow(row, selectScope) {
   ]));
   const detail = detailLine(row);
   if (detail) item.append(detail);
+  const pilot = pilotWarning(row);
+  if (pilot) item.append(pilot);
   item.addEventListener('click', () => selectScope(row.host_selector, row.workspace_id));
   return item;
 }

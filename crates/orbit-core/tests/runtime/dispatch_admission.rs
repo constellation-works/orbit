@@ -61,6 +61,7 @@ mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
 mod submission_notices;
+mod task_pilot_warning;
 mod unknown_footprint;
 mod unlocked_context;
 

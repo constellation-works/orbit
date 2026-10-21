@@ -378,6 +378,8 @@ export function renderRunDetailMeta() {
   if (unsetCrewEnv) wrap.appendChild(unsetCrewEnv);
   const passWarning = buildPassWarning(run);
   if (passWarning) wrap.appendChild(passWarning);
+  const pilotWarning = buildPilotWarning(run);
+  if (pilotWarning) wrap.appendChild(pilotWarning);
   const waiting = buildStillWaiting(run.drain_last_pass || null, run);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
@@ -702,6 +704,21 @@ function buildPassWarning(run) {
   const message = el("pre", { class: "run-failure-message mono" });
   appendLinkified(message, pass.last_pass_error, run.workspace_id || getWorkspace());
   panel.appendChild(message);
+  return panel;
+}
+
+// A live local drain whose latest pass found no task pilot enabled on this
+// machine: its tasks that need an assessment wait for one that never comes.
+// The sentence names the workspace, the machine and the fix.
+function buildPilotWarning(run) {
+  const warning = run.drain_last_pass?.task_pilot_warning;
+  if (typeof warning !== "string" || !warning || !LIVE_RUN_STATES.has(run.state)) return null;
+  const panel = el("div", { class: "child-dispatch-panel pilot-warning" });
+  panel.setAttribute("role", "status");
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Warning: " }),
+    el("span", { text: warning }),
+  ]));
   return panel;
 }
 

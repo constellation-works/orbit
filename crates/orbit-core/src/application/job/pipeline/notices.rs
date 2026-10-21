@@ -5,9 +5,9 @@
 //! [ORB-13901], a validation environment that may not find the user's
 //! toolchain [ORB-13987], backlog only a host of another OS can start, an
 //! `execution.env.pass` variable or `[crews.<name>] env` source the launching
-//! environment does not hold [ORB-14777], or a host that runs no required
-//! validation. CLI, MCP and the
-//! dashboard all render the same [`SubmissionNotices`].
+//! environment does not hold [ORB-14777], a workspace whose task pilot is not
+//! enabled on this machine, or a host that runs no required validation. CLI,
+//! MCP and the dashboard all render the same [`SubmissionNotices`].
 
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::{Value, json};
@@ -51,6 +51,9 @@ pub struct SubmissionNotices {
     /// Claude crews a drain here excludes for want of a worker credential
     /// [ORB-16663]. Drains only.
     pub claude_worker_credential_warning: Option<String>,
+    /// That no task pilot prepares this workspace's tasks on this machine.
+    /// Local drains only: a pull drain's owner prepares its work.
+    pub task_pilot_warning: Option<String>,
     /// That this host declares no required validation commands. Drains only.
     pub required_validation_note: Option<String>,
 }
@@ -68,6 +71,7 @@ impl SubmissionNotices {
             .chain(self.unset_env_pass_warning.clone())
             .chain(self.unset_crew_env_warning.clone())
             .chain(self.claude_worker_credential_warning.clone())
+            .chain(self.task_pilot_warning.clone())
             .collect()
     }
 
@@ -121,6 +125,9 @@ impl OrbitRuntime {
             claude_worker_credential_warning: kind
                 .is_drain()
                 .then(|| self.claude_worker_credential_warning())
+                .flatten(),
+            task_pilot_warning: (kind == SubmissionKind::Drain)
+                .then(|| self.task_pilot_warning())
                 .flatten(),
             required_validation_note: kind
                 .is_drain()

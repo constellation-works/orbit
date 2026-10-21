@@ -857,6 +857,14 @@ pub fn explain_workspace_auto_readiness(
             // [ORB-14624] Light slots a CPU-only throttle still admits into;
             // `applies` is true while it is spending them.
             "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
+            // The open local drain's latest pass found no task pilot enabled
+            // on this machine, so its tasks that need an assessment wait for
+            // one that never comes. Names the workspace, machine and fix.
+            "task_pilot_warning": status_state
+                .as_ref()
+                .filter(|_| drain_phase == "draining")
+                .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
+                .and_then(|pass| pass.task_pilot_warning.clone()),
         },
         "approvals": approvals,
         "provider_limits": provider_limits.readings,

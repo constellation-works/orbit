@@ -2118,6 +2118,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         serde_json::json!({}),
     );
     state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        task_pilot_warning: None,
         capacity: None,
         recorded_at: now,
         queued: 0,
@@ -2247,6 +2248,7 @@ fn run_show_counts_local_deferred_tasks_once() {
         serde_json::json!({}),
     );
     state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
+        task_pilot_warning: None,
         capacity: None,
         recorded_at: now,
         queued: 3,
@@ -2346,6 +2348,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         serde_json::json!({}),
     );
     state.pull_drain.drain_last_pass = Some(DrainAdmissionPass {
+        task_pilot_warning: None,
         capacity: None,
         recorded_at: now,
         queued: 9,
@@ -2490,6 +2493,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
         serde_json::json!({}),
     );
     state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        task_pilot_warning: None,
         capacity: None,
         recorded_at: now,
         queued: 0,
@@ -2622,6 +2626,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         serde_json::json!({}),
     );
     state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        task_pilot_warning: None,
         capacity: None,
         recorded_at: now,
         queued: 0,

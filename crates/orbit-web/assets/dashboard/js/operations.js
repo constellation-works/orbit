@@ -6,7 +6,7 @@ import { chooseDockMode, setDockMode } from './log-tail.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
-import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
+import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
 import { hideDrainStarted, renderDrainStarted } from './drain-started.js';
@@ -2727,6 +2727,7 @@ function renderAutoDrain(payload) {
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
     drainCrewNote(payload),
+    drainPilotNote(payload),
   ].filter(Boolean);
   if (reasons.submit) {
     body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
