@@ -987,6 +987,7 @@ input.field-editor-input {
 }
 .row-detail .ac-list > li {
   position: relative;
+  flex-shrink: 0;
   min-height: 22px;
   padding: 6px 16px 6px 48px;
   color: var(--fg-soft);

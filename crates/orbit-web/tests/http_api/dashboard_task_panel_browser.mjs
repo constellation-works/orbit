@@ -670,6 +670,49 @@ try {
     assert.equal(await toggle.innerText(), 'Show full AC', 'Collapsed toggle button reads "Show full AC"');
     assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'Collapsed toggle button has aria-expanded="false"');
 
+    // In clamped state, criteria rows must not shrink below their content height or overlap.
+    const listHeight = await criteriaBlock.locator('.ac-list').evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(listHeight <= 180, 'Clamped criteria list cuts off at clamp height');
+
+    const rowMetrics = await criteriaBlock.evaluate(block => {
+      const list = block.querySelector('.ac-list');
+      const listRect = list.getBoundingClientRect();
+      const rows = Array.from(list.querySelectorAll(':scope > li'));
+      return rows.map((li, index) => {
+        const rect = li.getBoundingClientRect();
+        return {
+          index,
+          top: rect.top,
+          bottom: rect.bottom,
+          height: rect.height,
+          scrollHeight: li.scrollHeight,
+          visible: rect.top < listRect.bottom && rect.bottom > listRect.top,
+        };
+      });
+    });
+
+    const visibleRows = rowMetrics.filter(row => row.visible);
+    assert.ok(visibleRows.length >= 2, 'Clamped list renders visible leading criteria rows');
+    for (const row of visibleRows) {
+      assert.ok(
+        row.height >= row.scrollHeight - 1,
+        `Visible criterion row ${row.index} bounding box height (${row.height}) must be at least its scrollHeight (${row.scrollHeight})`
+      );
+    }
+
+    for (let i = 0; i < rowMetrics.length - 1; i++) {
+      const current = rowMetrics[i];
+      const next = rowMetrics[i + 1];
+      assert.ok(
+        current.bottom <= next.top + 0.5,
+        `Consecutive criteria rows ${i} and ${i + 1} bounding boxes must not intersect (current bottom: ${current.bottom}, next top: ${next.top})`
+      );
+      assert.ok(
+        current.top + current.scrollHeight <= next.top + 1,
+        `Consecutive criteria rows ${i} and ${i + 1} content must not overlap (current content bottom: ${current.top + current.scrollHeight}, next top: ${next.top})`
+      );
+    }
+
     await capture(page, 'task-detail-collapsed-dark-1440.png');
 
     // Edit action while collapsed: editor shows every criterion and hides toggle
@@ -742,6 +785,42 @@ try {
     await capture(page, 'task-detail-expanded-dark-375.png');
     await reopenedBlock.locator('.ac-toggle').click();
     assert.equal(await reopenedBlock.evaluate(node => node.classList.contains('clamped')), true, 'Clicking toggle at 375px collapses the list');
+
+    const rowMetrics375 = await reopenedBlock.evaluate(block => {
+      const list = block.querySelector('.ac-list');
+      const listRect = list.getBoundingClientRect();
+      const rows = Array.from(list.querySelectorAll(':scope > li'));
+      return rows.map((li, index) => {
+        const rect = li.getBoundingClientRect();
+        return {
+          index,
+          top: rect.top,
+          bottom: rect.bottom,
+          height: rect.height,
+          scrollHeight: li.scrollHeight,
+          visible: rect.top < listRect.bottom && rect.bottom > listRect.top,
+        };
+      });
+    });
+
+    const visibleRows375 = rowMetrics375.filter(row => row.visible);
+    assert.ok(visibleRows375.length >= 2, 'Clamped list at 375px renders visible leading criteria rows');
+    for (const row of visibleRows375) {
+      assert.ok(
+        row.height >= row.scrollHeight - 1,
+        `Visible criterion row ${row.index} at 375px bounding box height (${row.height}) must be at least its scrollHeight (${row.scrollHeight})`
+      );
+    }
+    for (let i = 0; i < rowMetrics375.length - 1; i++) {
+      assert.ok(
+        rowMetrics375[i].bottom <= rowMetrics375[i + 1].top + 0.5,
+        `Consecutive criteria rows ${i} and ${i + 1} at 375px bounding boxes must not intersect`
+      );
+      assert.ok(
+        rowMetrics375[i].top + rowMetrics375[i].scrollHeight <= rowMetrics375[i + 1].top + 1,
+        `Consecutive criteria rows ${i} and ${i + 1} at 375px content must not overlap`
+      );
+    }
     await capture(page, 'task-detail-collapsed-dark-375.png');
 
     // Copy shots to screenshots directory
