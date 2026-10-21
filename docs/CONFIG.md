@@ -1092,6 +1092,8 @@ Background commands cannot be turned off for a headless run. `agy` 1.3.3 has no 
 | Flags | `run --format json --auto`. `--auto` is required unattended (otherwise every permission request is auto-rejected) and is not a security boundary. `--continue`, `--session` and `--share` are never passed. |
 | Sandbox | Write: `$XDG_DATA_HOME/opencode`, the config root (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`), `$XDG_STATE_HOME/opencode` and `$XDG_CACHE_HOME/opencode`. |
 
+Unset or empty XDG variables use the HOME-based defaults: `~/.local/share/opencode`, `~/.config/opencode`, `~/.local/state/opencode` and `~/.cache/opencode`, respectively. Non-empty absolute XDG overrides keep the `opencode` subdirectory; `$OPENCODE_CONFIG_DIR` selects the config directory directly.
+
 Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` has no OpenCode target; Orbit tools go through the shell tool. Only assistant `text` parts are read; a terminal `error` event or non-zero exit fails the step. No provider token usage is reported.
 
 ### Muse Code CLI

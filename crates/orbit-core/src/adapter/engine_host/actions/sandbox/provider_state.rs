@@ -266,21 +266,23 @@ fn linux_opencode_state_roots_with(
     .collect()
 }
 
-/// `<xdg base>/<app>`: the explicit XDG variable when set, otherwise its
-/// specified default relative to `$HOME`.
+/// `<xdg base>/<app>`: the explicit XDG variable when non-empty, otherwise its
+/// specified default relative to `$HOME`. XDG treats empty values as unset.
 fn xdg_scoped_root(
     home: Option<&Path>,
     xdg_base: Option<PathBuf>,
     home_relative_default: &[&str],
     app: &str,
 ) -> Option<PathBuf> {
-    let base = xdg_base.or_else(|| {
-        home.map(|home| {
-            home_relative_default
-                .iter()
-                .fold(home.to_path_buf(), |path, segment| path.join(segment))
-        })
-    })?;
+    let base = xdg_base
+        .filter(|base| !base.as_os_str().is_empty())
+        .or_else(|| {
+            home.map(|home| {
+                home_relative_default
+                    .iter()
+                    .fold(home.to_path_buf(), |path, segment| path.join(segment))
+            })
+        })?;
     Some(base.join(app))
 }
 
