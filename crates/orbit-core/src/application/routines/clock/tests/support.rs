@@ -53,6 +53,20 @@ impl MockRunner {
         }
     }
 
+    /// Queue both probe and stdout responses ahead of the boolean results.
+    pub(super) fn with_probes_and_outputs(
+        probes: Vec<Result<ManagerCommandOutput, OrbitError>>,
+        outputs: Vec<Result<Option<String>, OrbitError>>,
+        results: Vec<Result<bool, OrbitError>>,
+    ) -> Self {
+        Self {
+            results: Mutex::new(results.into_iter().rev().collect()),
+            outputs: Mutex::new(outputs.into_iter().rev().collect()),
+            probes: Mutex::new(probes.into_iter().rev().collect()),
+            commands: Mutex::new(Vec::new()),
+        }
+    }
+
     /// Queue stdout responses ahead of the boolean results [`Self::run`] consumes.
     pub(super) fn with_outputs(
         outputs: Vec<Result<Option<String>, OrbitError>>,

@@ -100,14 +100,21 @@ impl ClockCommand {
             ClockSubcommand::Set { cadence_seconds } => {
                 let global_root = selected_global_root(root_override)?;
                 let report = set_clock_cadence(&global_root, cadence_seconds)?;
-                let text = format!(
-                    "host scheduler clock cadence set to {cadence_seconds} seconds and reloaded"
-                );
+                let text = if report.paused {
+                    format!(
+                        "host scheduler clock cadence set to {cadence_seconds} seconds; the clock is paused, so the new cadence applies after `orbit clock enable`"
+                    )
+                } else {
+                    format!(
+                        "host scheduler clock cadence set to {cadence_seconds} seconds and reloaded"
+                    )
+                };
                 Ok(Payload::detail(
                     json!({
                         "action": "set_cadence",
                         "configured_cadence_seconds": cadence_seconds,
                         "activated": report.activated,
+                        "paused": report.paused,
                     }),
                     text,
                 )

@@ -235,7 +235,7 @@ fn apply_clock_enabled(
 /// A failed status command is disabled or missing only when the manager's
 /// diagnostic names that state; transport and ambiguous failures
 /// must stop before the control path can mutate the manager.
-fn observe_clock_enabled_for_pause(
+pub(super) fn observe_clock_enabled_for_pause(
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
 ) -> Result<(bool, bool), OrbitError> {
