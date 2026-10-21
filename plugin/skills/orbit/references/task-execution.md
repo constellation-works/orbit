@@ -260,8 +260,8 @@ human task comment whose first line is `post-deploy: met <N>` or
 `post-deploy: failed <N>`, with the measurement's evidence on the lines after
 it, records `post_deploy_recorded`. An agent comment of that shape records
 nothing. Once every owed criterion is recorded met, the operator approves the
-task to `done` (`orbit task approve`); a failed one is repaired through an
-ordinary new task. In the execution summary mark each owed criterion `not_run`
+task to `done` (`orbit task update <id> --approve`); a failed one is repaired
+through an ordinary new task. In the execution summary mark each owed criterion `not_run`
 (owed after deploy), never passed.
 
 **Keep `context_files` current.** You may declare newly identified modification targets
