@@ -115,6 +115,14 @@ globalThis.fetch = async (path, options = {}) => {
     if (url.pathname === '/api/workflows/auto' && refuseAutoFix) return response({ error: 'fixture repair authority refused', code: 'authorization_denied' }, 403);
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', auto_concurrency: { mode: body.auto_concurrency || 'shadow', source: body.auto_concurrency ? 'explicit' : 'configured', configured_mode: 'shadow' }, approve_proposed: body.approve_proposed === true, auto_fix: body.auto_fix === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
+    const cancelledRun = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/)?.[1];
+    if (cancelledRun) {
+      const runId = decodeURIComponent(cancelledRun);
+      if (Array.isArray(drainCapacityOverride.queued_drains)) {
+        drainCapacityOverride = { ...drainCapacityOverride, queued_drains: drainCapacityOverride.queued_drains.filter(drain => drain.run_id !== runId) };
+      }
+      return response({ run_id: runId, outcome: 'cancelled', previous_state: 'pending', final_state: 'cancelled' });
+    }
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
       return response({ job_id: 'fixture', run_id: submittedJob.run_id, state: 'submitted', submitted_at: submittedJob.created_at });
@@ -1425,5 +1433,53 @@ forecastText = forecastCard()?.textContent || '';
 assert(forecastText.includes('host capacity unknown') && forecastText.includes('admit 89%') && forecastText.includes('headroom unknown'), `an unmeasured host says its headroom is unknown: ${forecastText}`);
 assert(!forecastText.includes('headroom 0.0'), `an unknown headroom must not read as zero: ${forecastText}`);
 drainCapacityOverride = {};
+await fetchAndRenderAutoDrainPane();
+// A window started while another runs waits for it. The card lists it under
+// the live window with its run, ceiling, completion, crews and window, flags a
+// Claude crew it would start with no credential, and cancels it alone through
+// the per-run cancel. With nothing queued the card is unchanged.
+drainRunId = 'jrun-20260923-0400-a1';
+drainPhase = 'draining';
+drainCapacityOverride = {};
+await fetchAndRenderAutoDrainPane();
+// The panel's own refresh status is not part of the card.
+const cardMarkup = () => Array.from(get('auto-drain-body').children).filter(node => !node.hasAttribute('data-panel-status')).map(node => node.outerHTML).join('');
+const unqueuedCard = cardMarkup();
+drainCapacityOverride = { queued_drains: [] };
+await fetchAndRenderAutoDrainPane();
+assert(!get('auto-drain-queued') && cardMarkup() === unqueuedCard, 'an empty queue renders the card exactly as before');
+const queuedClaude = 'jrun-20261021-0332-t1';
+const queuedDone = 'jrun-20261021-0340-t2';
+drainCapacityOverride = { queued_drains: [
+  { run_id: queuedClaude, completion: 'review', max_active_leaf_runs: 5, allowed_crews: ['opus'], for_seconds: 28800, submitted_at: '2026-10-21T03:32:00Z', env_pass_unset: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'], uncredentialed_crews: ['opus'] },
+  { run_id: queuedDone, completion: 'done', max_active_leaf_runs: 2, allowed_crews: null, for_seconds: 0, submitted_at: '2026-10-21T03:40:00Z', env_pass_unset: ['FIXTURE_TOKEN'], uncredentialed_crews: [] },
+] };
+await fetchAndRenderAutoDrainPane();
+const queuedRow = runId => get('auto-drain-queued')?.querySelector(`[data-run-id="${runId}"]`);
+const queuedFact = (runId, field) => queuedRow(runId)?.querySelector(`[data-field="${field}"]`)?.textContent;
+assert(get('auto-drain-live') && get('auto-drain-run').textContent.includes('jrun-…0400-a1'), 'the live window still renders as before');
+assert(get('auto-drain-queued')?.querySelector('.drain-queued-title').textContent === 'Queued · 2 windows', `queued heading: ${get('auto-drain-queued')?.textContent}`);
+assert(queuedRow(queuedClaude).querySelector('a').textContent === 'jrun-…0332-t1' && queuedRow(queuedClaude).querySelector('.drain-queued-state').textContent === 'Waiting for the live window', `the queued window names its run and waits for the live one: ${queuedRow(queuedClaude)?.textContent}`);
+assert([queuedFact(queuedClaude, 'ceiling'), queuedFact(queuedClaude, 'completion'), queuedFact(queuedClaude, 'crews'), queuedFact(queuedClaude, 'window')].join(' | ') === '5 parallel | completes to review | opus | 8h window', `queued facts: ${queuedRow(queuedClaude)?.textContent}`);
+assert(/^Starts when jrun-…0400-a1 ends · (1h 59m|2h 00m) left$/.test(queuedRow(queuedClaude).querySelector('.drain-queued-start').textContent), `it starts when the live window ends: ${queuedRow(queuedClaude).querySelector('.drain-queued-start')?.textContent}`);
+assert(queuedRow(queuedClaude).querySelector('.drain-queued-flag')?.textContent === 'No Claude credential for opus: this window was started without CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY.', `a Claude window without a credential is flagged: ${queuedRow(queuedClaude)?.textContent}`);
+assert(getComputedStyle(queuedRow(queuedClaude).querySelector('.drain-queued-flag')).color === getComputedStyle(get('auto-drain-body')).getPropertyValue('--warn-fg').trim().replace(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i, (_, r, g, b) => `rgb(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)})`), 'the flag is drawn in the warning colour');
+assert(!queuedRow(queuedDone).querySelector('.drain-queued-flag') && queuedRow(queuedDone).querySelector('.drain-queued-env').textContent === 'Started without FIXTURE_TOKEN', 'another unset name is listed without a credential flag');
+assert([queuedFact(queuedDone, 'ceiling'), queuedFact(queuedDone, 'completion'), queuedFact(queuedDone, 'crews'), queuedFact(queuedDone, 'window')].join(' | ') === '2 parallel | completes to done | all crews | single pass', `an unrestricted single-pass window: ${queuedRow(queuedDone)?.textContent}`);
+const cancelQueued = runId => descendants(get('auto-drain-body')).find(node => node.type === 'button' && node.getAttribute('aria-label') === `Cancel queued window ${runId}`);
+assert(cancelQueued(queuedClaude) && !cancelQueued(queuedClaude).disabled, 'each queued window offers Cancel');
+const confirmsBeforeCancel = confirmations.length;
+const requestsBeforeCancel = requests.length;
+cancelQueued(queuedClaude).click(); await tick(); await tick(); await tick(); await tick();
+const cancelPosts = requests.slice(requestsBeforeCancel).filter(request => request.method === 'POST');
+assert(cancelPosts.length === 1 && cancelPosts[0].path === `/api/runs/${queuedClaude}/cancel` && cancelPosts[0].body.force === false && cancelPosts[0].workspace === 'one', `Cancel posts the per-run cancel for that window alone: ${JSON.stringify(cancelPosts)}`);
+assert(confirmations.length === confirmsBeforeCancel + 1 && confirmations.at(-1).includes(queuedClaude) && confirmations.at(-1).includes('the live window keeps running'), `Cancel confirms first: ${confirmations.at(-1)}`);
+assert(get('auto-drain-operation-feedback').textContent === `Queued window ${queuedClaude} cancelled.`, `the cancel reports its result: ${get('auto-drain-operation-feedback').textContent}`);
+assert(!queuedRow(queuedClaude) && queuedRow(queuedDone) && get('auto-drain-live'), 'the card drops the cancelled window and keeps the live one');
+cancelQueued(queuedDone).click(); await tick(); await tick(); await tick(); await tick();
+assert(!get('auto-drain-queued') && cardMarkup() === unqueuedCard, 'with the last queued window cancelled the card shows only the live drain');
+drainCapacityOverride = {};
+drainRunId = null;
+drainPhase = 'idle';
 await fetchAndRenderAutoDrainPane();
 globalThis.operationsTestsPassed = true;

@@ -737,7 +737,14 @@ Per pass:
    Readiness names the running `workspace_auto_pipeline` and its live worker
    ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.
    Pending coordinators appear separately in `capacity.queued_drains` with
-   their run id, submitted ceiling, and completion policy.
+   their run id, submitted ceiling, completion policy, `allowed_crews` (`null`
+   when unrestricted), window (`for_seconds`, `0` for a single pass),
+   `submitted_at`, the `execution.env.pass` names their submission did not hold
+   (`env_pass_unset`, names only), and `uncredentialed_crews`: the Claude crews
+   in their window when that submission recorded every listed Claude credential
+   name unset. `orbit run readiness` prints each as a `Queued drain:` line, and
+   the dashboard Drain card lists them under the live window with a per-run
+   cancel.
 7. The detached worker clears `ORBIT_ROOT` unconditionally. With no explicit `--root`, its
    cwd is therefore the workspace selector; when a parent explicitly forwarded `--root`,
    that argument is the selector. Before any step executes, the worker compares the

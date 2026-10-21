@@ -1831,6 +1831,121 @@ function autoDrainFoot(payload) {
   ]);
 }
 
+// A queued window's length: `for_seconds` 0 is a single pass.
+function autoDrainWindowLength(seconds) {
+  const total = Number(seconds);
+  if (!Number.isFinite(total) || total <= 0) return "single pass";
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (!hours) return minutes ? `${minutes}m window` : `${total}s window`;
+  return `${hours}h${minutes ? ` ${String(minutes).padStart(2, "0")}m` : ""} window`;
+}
+
+// Windows started while another runs wait for its slot (one coordinator per
+// workspace). Each is listed under the live window with what it will admit,
+// when it starts and, when its start lacked every Claude credential, the
+// Claude crews in its window that will run without one. Null when none wait,
+// so the card is unchanged.
+function autoDrainQueued(payload) {
+  const capacity = payload.capacity || {};
+  const queued = (Array.isArray(capacity.queued_drains) ? capacity.queued_drains : []).filter(drain => drain?.run_id);
+  if (!queued.length) return null;
+  const section = el("section", { class: "drain-queued" });
+  section.id = "auto-drain-queued";
+  section.setAttribute("aria-label", "Queued windows");
+  section.append(el("h4", { class: "drain-queued-title", text: `Queued · ${autoDrainPlural(queued.length, "window")}` }));
+  const list = el("ul", { class: "drain-queued-list" });
+  for (const drain of queued) list.append(autoDrainQueuedRow(payload, drain));
+  section.append(list);
+  return section;
+}
+
+function autoDrainQueuedRow(payload, drain) {
+  const capacity = payload.capacity || {};
+  const runId = String(drain.run_id);
+  const row = el("li", { class: "drain-queued-row" });
+  row.dataset.runId = runId;
+  const head = el("div", { class: "drain-queued-head" }, [
+    runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)),
+    el("span", { class: "drain-queued-state", text: capacity.drain_run_id ? "Waiting for the live window" : "Waiting for its slot" }),
+    autoDrainQueuedCancel(payload, runId),
+  ]);
+  const crews = Array.isArray(drain.allowed_crews) && drain.allowed_crews.length ? drain.allowed_crews.join(", ") : "all crews";
+  const facts = el("div", { class: "drain-queued-facts" }, [
+    ["ceiling", `${drain.max_active_leaf_runs ?? "default"} parallel`],
+    ["completion", drain.completion === "done" ? "completes to done" : "completes to review"],
+    ["crews", crews],
+    ["window", autoDrainWindowLength(drain.for_seconds)],
+  ].map(([key, text]) => {
+    const fact = el("span", { class: "drain-queued-fact", text });
+    fact.dataset.field = key;
+    return fact;
+  }));
+  row.append(head, facts);
+  if (capacity.drain_run_id) {
+    const left = autoDrainTimeLeft(capacity.ends_at);
+    const ends = Date.parse(capacity.ends_at || "");
+    row.append(el("div", {
+      class: "drain-queued-start",
+      text: `Starts when ${autoDrainShortRunId(String(capacity.drain_run_id))} ends${left && left !== "window closed" ? ` · ${left}` : ""}`,
+      title: Number.isFinite(ends) ? `The live window closes ${formatDateTime(capacity.ends_at)}` : "",
+    }));
+  }
+  const unset = Array.isArray(drain.env_pass_unset) ? drain.env_pass_unset.filter(Boolean) : [];
+  const uncredentialed = Array.isArray(drain.uncredentialed_crews) ? drain.uncredentialed_crews.filter(Boolean) : [];
+  if (uncredentialed.length) {
+    const flag = el("div", {
+      class: "drain-queued-flag",
+      text: `No Claude credential for ${uncredentialed.join(", ")}: this window was started without ${unset.join(", ")}.`,
+    });
+    flag.setAttribute("role", "note");
+    row.append(flag);
+  } else if (unset.length) {
+    row.append(el("div", { class: "drain-queued-env", text: `Started without ${unset.join(", ")}` }));
+  }
+  return row;
+}
+
+// Cancels this queued run alone through the run cancel path; a never-started
+// window has admitted nothing, and the live window is not touched.
+function autoDrainQueuedCancel(payload, runId) {
+  const key = `auto-drain:cancel-queued:${runId}`;
+  const refusal = workspaceReadOnlyReason();
+  const pending = pendingOperations.has(key);
+  const button = el("button", {
+    class: "operation-button drain-queued-cancel",
+    text: pending ? "Cancelling…" : "Cancel",
+    title: refusal || `Cancel queued window ${runId} before it starts`,
+  });
+  button.type = "button";
+  button.dataset.drainFocus = `cancel-queued:${runId}`;
+  button.setAttribute("aria-label", `Cancel queued window ${runId}`);
+  button.disabled = Boolean(refusal) || pending;
+  button.addEventListener("click", async () => {
+    const visit = captureWorkspaceVisit();
+    if (pendingOperations.has(key)) return;
+    const workspace = selectedWorkspace();
+    if (!window.confirm(`Cancel queued window ${runId}? It has not started and has admitted no work; the live window keeps running.\n\nWorkspace "${workspace?.name || workspace?.id}"`)) return;
+    pendingOperations.add(key);
+    feedback("auto-drain-operation-feedback", "pending", `Cancelling queued window ${runId}…`);
+    renderAutoDrain(payload);
+    try {
+      const result = await postJson(visit.path(`/api/runs/${encodeURIComponent(runId)}/cancel`), { reason: null, force: false });
+      if (!visit.isCurrent()) return;
+      feedback("auto-drain-operation-feedback", "success", result?.outcome === "already_terminal"
+        ? `Queued window ${runId} had already ended.`
+        : `Queued window ${runId} cancelled.`);
+      await refreshDrainAfterAction();
+    } catch (error) {
+      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Cancelling queued window ${runId} failed: ${error.message}`);
+    } finally {
+      pendingOperations.delete(key);
+      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+    }
+  });
+  return button;
+}
+
 // Whether the live window was started with approve-proposed, and what its
 // passes have done so far. The payload's `approvals` reports the status
 // drain's own input: `approved_total` counts the whole window, while the
@@ -2960,7 +3075,7 @@ function renderAutoDrain(payload) {
     drainCrewNote(payload),
   ].filter(Boolean);
   if (reasons.submit) {
-    body.append(autoDrainForecast(payload), ...holds, el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
     renderAutoDrainStart(payload, reasons);
     return;
   }
@@ -2970,6 +3085,7 @@ function renderAutoDrain(payload) {
     ...holds,
     autoDrainForecast(payload),
     autoDrainFoot(payload),
+    autoDrainQueued(payload),
   ].filter(Boolean));
   renderAutoDrainStart(payload, reasons);
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();

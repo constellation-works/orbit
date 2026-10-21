@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Credential variables that keep `claude` off the Desktop app's shared login.
-const CLAUDE_WORKER_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+pub const CLAUDE_WORKER_CREDENTIAL_ENV: [&str; 2] =
+    ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
 /// How to supply a worker credential, the remediation a refused Claude activity
 /// and a drain's submission both name [ORB-16663].

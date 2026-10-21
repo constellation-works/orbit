@@ -118,6 +118,16 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
             );
             drain.input = Some(serde_json::json!({"max_active_leaf_runs": 4}));
             write_seeded_run(&alpha, &drain);
+            // A second window started while that one runs waits behind it.
+            let mut queued = seed_run(
+                &alpha,
+                "jrun-fleet-queued",
+                "workspace_auto_pipeline",
+                JobRunState::Pending,
+            );
+            queued.input =
+                Some(serde_json::json!({"for_seconds": 28800, "allowed_crews": ["sol"]}));
+            write_seeded_run(&alpha, &queued);
             let server = spawn_server(
                 tmp.path(),
                 true,
@@ -134,6 +144,10 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
             assert_eq!(row("alpha")["phase"], "draining", "{payload:#}");
             assert_eq!(row("alpha")["slots_used"], 0);
             assert_eq!(row("alpha")["slots_ceiling"], 4);
+            let queued = &row("alpha")["queued_drains"][0];
+            assert_eq!(queued["run_id"], "jrun-fleet-queued", "{payload:#}");
+            assert_eq!(queued["allowed_crews"], serde_json::json!(["sol"]));
+            assert_eq!(queued["for_seconds"], 28800);
             assert_eq!(row("bravo")["phase"], "idle");
             assert_eq!(
                 row("bravo")["eligible_count"],
@@ -142,6 +156,7 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
             );
             for row in rows {
                 assert!(row["holds"].is_array());
+                assert!(row["queued_drains"].is_array());
                 assert!(row.get("top_wait_reason").is_some());
                 assert_eq!(row["counts_truncated"], false);
             }
