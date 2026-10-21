@@ -330,6 +330,13 @@ cursor and manifest back.
 The reset cannot be, so a ref release failing after it leaves only that
 audited reset applied.
 
+Reset resolves the configured branch remotely first, retaining its local head
+before fetching so preview, applied reset and forced deletion can recover even
+when origin consumes the entire source deadline. A successful fetch still wins,
+including when there is no local branch. Pin inspection and release use a fresh
+bounded local source pass, as does deletion's final pin cleanup, so a spent
+fetch budget cannot prevent audited teardown.
+
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer
 discarded: each is logged, and `list` errors outright only when *nothing* loaded,
