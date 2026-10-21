@@ -1479,6 +1479,39 @@ one. From then on:
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
 
+  The one automatic repair is a new claim on the same task, admitted to a
+  pull. While the stopped claim is `repair_pending`, the task is
+  `in-progress`. The repair is reserved for the executor that delivered
+  the candidate, because it already holds the candidate's objects. Its next
+  `orbit run auto --pull` pass takes the repair before any backlog task. No
+  other follower ever takes it. If that executor stops pulling (its
+  admissions stopped, its host offline, its window over), the owner's own
+  `orbit run auto` drain takes the repair 30 minutes after the landing
+  stopped:
+  - Until then, each pass of the owner drain lists the task in its last
+    pass's waiting tasks (`orbit run show <drain>`, the dashboard Drain
+    card) with reason `repair_reserved`. The detail names the original
+    executor and the time the owner takes over.
+  - After that, the pass starts one repair-only pull drain against the owner
+    itself, a one-pass `workspace_pull_pipeline` child of the drain marked
+    `owner_repair_pull`. It reports the task as `repair_owner_fallback`,
+    naming that pull run. The owner admits the pull's request under its
+    local identity. It offers only pending repairs, never a backlog task.
+    The owner wave admits the backlog.
+  - The repair takes one of the drain's free slots. It passes the same
+    crew screen as the drain's `--allow-crew` list, and the same OS,
+    browser-kit and capacity screens as any pull. The superseded claim
+    settles `revoked` in the same commit, and the repair leaf runs on the
+    owner as a claimed leaf.
+  - An owner drain whose admissions are stopped, or that is held by a
+    scheduled shutdown or has no free slot, starts no repair pull. Its pass
+    says what the repair waits for.
+  - A repair pull that ends without taking the repair, for example because
+    its crew is not runnable here, has its own last pass, which says why.
+    The owner drain starts another one 10 minutes after that pull ended.
+  - To hand a repair back to its original executor before the owner takes
+    it, restart that executor's pull drain.
+
   A **candidate** failure once that repair is spent (the claim is the
   repair, or the task already returned to the backlog for a landing repair)
   does not leave the task in `review`. The owner ends the claim, keeps its

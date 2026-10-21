@@ -113,6 +113,7 @@ pub use repository::task::{TaskCommitBoundary, admission_refusal};
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
     pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
 }
 

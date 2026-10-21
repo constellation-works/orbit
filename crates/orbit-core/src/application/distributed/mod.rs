@@ -48,6 +48,7 @@ mod final_recovery;
 mod follower;
 mod host_provider_hold;
 mod leaf_settlements;
+mod owner_repair;
 mod probe;
 mod pull_waiting;
 mod serve;
@@ -63,6 +64,7 @@ pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURC
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub(crate) use host_provider_hold::HostProviderHold;
 pub use leaf_settlements::LeafSettlement;
+pub(crate) use owner_repair::OwnerRepairDrain;
 pub use probe::{
     AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,
 };

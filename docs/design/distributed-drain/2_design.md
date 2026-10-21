@@ -1007,8 +1007,9 @@ are a new authorized attempt with fresh validation and handoff; the owner never 
 A stop on a base conflict (`DIRTY`), a stale base (`BEHIND`) or a local candidate that can no
 longer fast-forward is repairable ([ORB-14261]). The stop revokes the handoff's authority, moves the
 claim to `repair_pending` and returns the task to `in-progress`, still holding its footprint. The
-next pull by the claim's original executor — or, once 30 minutes have passed, the owner's own local
-drain; never another follower — admits the repair before any backlog task: a new claim carrying
+next pull by the claim's original executor — or, once 30 minutes have passed, the repair-only pull
+the owner's own `orbit run auto` drain starts against itself ([ORB-17303]); never another follower
+— admits the repair before any backlog task: a new claim carrying
 `ClaimRepair` (the superseded claim, its handoff, the preserved candidate and the stop evidence),
 with the superseded claim settled as `revoked` and a `pulled_by` event naming both, in one commit.
 The pull's ship contract must match the candidate's base, landing branch and delivery route. The

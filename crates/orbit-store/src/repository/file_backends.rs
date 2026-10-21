@@ -148,6 +148,15 @@ impl TaskStoreBackend for TaskV2Store {
                 .collect()),
         }
     }
+    fn pending_repairs(
+        &self,
+        owner: &crate::contracts::AdmissionIdentity,
+    ) -> Result<Vec<crate::contracts::PendingRepair>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.pending_repairs(owner),
+            None => Ok(Vec::new()),
+        }
+    }
     fn lookup_admission(
         &self,
         identity: &crate::contracts::AdmissionIdentity,
