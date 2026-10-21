@@ -430,16 +430,44 @@ impl OrbitRuntime {
         }
         if matching.is_empty() && !published {
             if !records.is_empty() || task.github_pr_number().is_some() {
-                return Err(refuse(
-                    "a published candidate predates the current binding; inspect explicit source repair with the stopped successor",
-                ));
+                // Name the publishing run and the route that applies to it:
+                // a conclusively stopped source can be inspected through
+                // explicit source repair; anything else is discarded so the
+                // next run implements fresh. There may be no successor at
+                // all, so the message never points at one.
+                let stopped = source.as_ref().is_some_and(|run| {
+                    run.finished_at.is_some()
+                        && run_owner_liveness(run) == RunOwnerLiveness::Stopped
+                });
+                return Err(refuse(if stopped {
+                    format!(
+                        "a published candidate predates the current binding; inspect explicit \
+                         source repair for publishing run '{source_id}' \
+                         (orbit.workflow.run.resume with source_repair), or discard the \
+                         candidate (orbit task update {} --status backlog \
+                         --discard-candidate) so the next run implements fresh",
+                        task.id
+                    )
+                } else {
+                    format!(
+                        "a published candidate predates the current binding and publishing \
+                         run '{source_id}' is not a conclusively stopped source for explicit \
+                         source repair; discard the candidate (orbit task update {} \
+                         --status backlog --discard-candidate) so the next run implements \
+                         fresh",
+                        task.id
+                    )
+                }));
             }
             return Ok(None);
         }
         if matching.len() != 1 {
-            return Err(refuse(
-                "published candidate lacks a unique requeue binding; inspect explicit source repair",
-            ));
+            return Err(refuse(format!(
+                "published candidate lacks a unique requeue binding; inspect explicit source \
+                 repair for publishing run '{source_id}', or discard the candidate (orbit task \
+                 update {} --status backlog --discard-candidate) so the next run implements fresh",
+                task.id
+            )));
         }
         if predecessor()? != source_id {
             return Err(refuse(
