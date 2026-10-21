@@ -11,7 +11,7 @@ Options:
           Local port for the tunnel. Defaults to 7878, falling back to an ephemeral port if 7878 is already in use
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --remote-port <REMOTE_PORT>
           Port the remote `orbit web serve` listens on (remote loopback)

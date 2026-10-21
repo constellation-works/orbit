@@ -7,7 +7,7 @@ Options:
           Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric)
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --description <DESCRIPTION>
           Human description of the recurring chore
@@ -15,7 +15,7 @@ Options:
           [default: ""]
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --cron <CRON>
           5-field cron expression (mutually exclusive with `--every-minutes`)

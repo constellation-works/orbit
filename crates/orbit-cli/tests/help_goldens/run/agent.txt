@@ -11,13 +11,13 @@ Options:
           Absolute directory the agent starts in. Defaults to the current directory; must be inside this workspace's checkout
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --crew <CREW>
           Configured crew selecting provider, model, and reasoning effort. Defaults to the workspace's default crew
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --timeout <TIMEOUT>
           Provider wall-clock bound (seconds, or e.g. 30m, 2h). Defaults to 1800; maximum 7200. Queue time is excluded

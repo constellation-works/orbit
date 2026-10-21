@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --yes
           Confirm permanent removal of the plugin install
@@ -17,7 +17,7 @@ Options:
           Remove only this host's record of the plugin, leaving every installed file in place. Clears a record whose install path this host refuses, without deleting the path it names
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --purge-state
           Also delete this plugin's Orbit-owned state directory

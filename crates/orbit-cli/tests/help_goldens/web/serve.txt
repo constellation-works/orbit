@@ -9,7 +9,7 @@ Options:
           [default: 127.0.0.1]
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --port <PORT>
           Port to bind to

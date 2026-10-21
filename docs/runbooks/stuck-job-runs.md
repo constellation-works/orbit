@@ -45,6 +45,44 @@ both text and JSON. The run continues independently. Inspect the reported run
 ID before resubmitting work. A run whose own execution ends in `timeout`
 retains that state; its JSON `wait_timeout` is `false`.
 
+### Read `orbit run show` output
+
+This is the field reference `orbit run show --help` used to carry.
+
+JSON shape: {"run":<job-run>,"pull_claim":<claim|null>,"crew_window":<window|null>,"catalog_layers":[{"reference":"job:…|activity:…","layer":"workspace|shipped|plugin:<ns>|explicit","shadows":[…]}],"pipeline_state":<state|null>,"steps":[<step>],"steps_source":"record|audit","provider_processes":[{"pid":...,"liveness":"alive|exited|unknown","stopped_descendants":[...],"blocked_on_stopped_descendant":<descendant|null>,...}]} or {"run_id":...,"job_id":...,"step":<step>,"step_output":<json|null>} with -s.
+
+The State: line above is `.run.state`, not a top-level `.state`;
+
+`.run.review_layer` (the Review: line) is the review layer before landing a delivery run captured at submission, `{"timing":"none|before-pr|before-landing","source":...}`, where `source` is `run-option` when the run's `--review` added it, `claim` for a claimed leaf, and otherwise the policy layer that decided it; it is absent for a run that captured none.
+
+`.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none; a run that ended `success` or `cancelled` cannot resume, so `.step_output_pointers` maps each step index whose output `.pipeline` holds to the JSON pointer of that entry, in place of its `.step_outputs` copy.
+
+`.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. The `#` column of the table is one-based and Duration is human-readable (`3h 39m 51s`);
+
+`.steps[].step_index` stays zero-based and every duration stays in milliseconds. A step from the audit trail is numbered in the order steps started, which is not the position `.pipeline_state.step_output_pointers` and `.step_outputs` key by when an earlier step was skipped (by `when:` or by resume); `-s` reads that step's output by its id, not by index. A run whose record holds only a run-level step (an interrupted run's) shows its audit steps instead. The Catalog: lines name only layers other than `shipped` unless `--verbose` is given;
+
+`.catalog_layers` always lists every reference.
+
+`.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run.
+
+`.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped.
+
+`.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. A local drain records there an admission pass it deferred because a task-store lock stayed held past its deadline (`last_pass_error_code` `lock_busy`, the Admission pass deferred: line, whose `last_pass_error` names the holder): that pass admits nothing, keeps the previous pass's waiting backlog with its `waiting_recorded_at`, and the next pass retries after the poll interval; ten consecutive deferred passes fail the drain with that error, and a pass that completes resets the count.
+
+`.pipeline_state.drain_pass_counters` (the Admission passes: line) counts what limited every admission pass of a drain's lineage, local or pull, since `since`: `passes`, and `outcomes` with exactly one per pass, the first that applies of `admitted`, `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held` and `deferred`; `held_by_reason` and `throttle_by_resource` split those two, and `waiting_by_reason` counts the passes in which a reason kept at least one task waiting, so its entries overlap. The counters survive terminalization and resume; a pull pass whose window has closed only settles and is not counted. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff` (a claimed leaf was released because the owner's store stayed locked: no claim is requested for 5 minutes from when it ended, `.crew_window.owner_busy_backoff` names `until`, and a third such episode in the window suppresses the host with `.crew_window.host_suppressed_by_busy_owner` set, whose remedy is on the owner), or the owner's probe refusal; `before_pr_reviewer_unavailable` names the review's timing (before-PR or before-landing) and, while its crew is only backed off for capacity, the time it lifts, when requests resume by themselves.
+
+`.pipeline_state.pull_breaker` (the Breaker: line) is the failure breaker while it is open or half-open: it opens after three claims in a row settle as failures (released claims and Orbit's refusals of an implementer's handoff do not count), with `failures`, their `failure_classes` newest first, `opened_at` and `half_open_at`, when it admits one probe claim; a probe that succeeds closes it and one that fails reopens it with twice the wait. It is absent while closed. A pull drain's Throttled: line is this host's own pressure; the owner's throttle never holds a pull claim.
+
+`.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines), each with its `stage`: `implementing`, or `reviewing` once it is in the before-landing review of its open PR, when the drain admits a replacement beside it, up to its concurrency; it is empty for every other run;
+
+`.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once;
+
+`.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable`, `leaf_released` or `provider_limit`) and `reason`, and `auth_exclusions` (provider, host, excluded_at, error_class, relogin_hint, credential_source and next_probe_at). Declared auth probes may re-admit these crews in the same window. A `provider_limit` exclusion, and a `provider_unavailable` one for model capacity (a backoff of 10 minutes that doubles with each repeat in the window, up to an hour), carry `until` (the Crews: line reads `(<source> until <time>)`) and lift by themselves then, in the same window; other exclusions, provider authentication among them, last until the next drain. It is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped;
+
+`.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.
+
+Step records expose `lock_wait_ms` for file and store mutex acquisition inside the synchronous leaf. Positive waits appear in the step table and detail; historical steps have null timing. Child-process waits are excluded.
+
 ## Check the agent subprocess before cancelling
 
 Two separate execution channels spawn agents, and they do not share a run store:
@@ -350,6 +388,16 @@ actor and any reason; inspect it with `orbit run events <run_id> --type run.canc
 Cancellation is truthful about the race with completion: a run that reached a terminal
 state before the signal landed reports `already_terminal` and keeps its real outcome
 rather than being overwritten with `cancelled`.
+
+### What `orbit run cancel` does
+
+Cancels a job run that has not reached a terminal state: signals the owner process of a running run (TERM then KILL), stops the agent processes the run still has open, releases the run's task reservations, and finalizes the run as `cancelled`. The primary remediation for a stuck `pending` run with no live worker (orphan reconciliation also clears those on workspace open). A run that already finished returns a stable `already_terminal` result without replacing its outcome.
+
+A running follower pull drain (`workspace_pull_pipeline`) is cancelled gracefully: it stops requesting work at once, returns the claims it had not launched to the owner's backlog, and keeps running — reported as `cancelling`, with the leaves it is waiting for — until every launched leaf has finished and its outcome reached the owner; then it ends `cancelled`. The command returns immediately; `orbit run show <run_id>` follows the wait. `--force` does not wait: it stops the drain and each of its running leaves, and returns every claim to the owner's backlog with a comment naming the drain and the reason. It touches only the leaves that drain carries. A leaf whose stop cannot be confirmed keeps its claim on the owner, is listed, and makes the command exit 1. A queued drain, or one whose worker is gone, is cancelled at once. Cancelling a drain that already ended delivers whatever it left behind, and `--force` also stops leaves it left running.
+
+`--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the task runs it started, which a plain cancel leaves running. A child whose stop cannot be confirmed is listed with its reason and makes the command exit 1. For any other run it changes nothing.
+
+Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
 
 ## Operator agent invocations
 

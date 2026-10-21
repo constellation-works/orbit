@@ -10,35 +10,7 @@ use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 #[derive(Args)]
 #[command(
     about = "Cancel a job run, or report its existing terminal outcome",
-    after_help = "Cancels a job run that has not reached a terminal state: signals the \
-owner process of a running run (TERM then KILL), stops the agent processes \
-the run still has open, releases the run's task reservations, and finalizes \
-the run as `cancelled`. The primary remediation \
-for a stuck `pending` run with no live worker (orphan reconciliation also \
-clears those on workspace open). A run that already finished returns a stable \
-`already_terminal` result without replacing its outcome.\n\n\
-A running follower pull drain (`workspace_pull_pipeline`) is cancelled \
-gracefully: it stops requesting work at once, returns the claims it had not \
-launched to the owner's backlog, and keeps running — reported as \
-`cancelling`, with the leaves it is waiting for — until every launched leaf \
-has finished and its outcome reached the owner; then it ends `cancelled`. \
-The command returns immediately; `orbit run show <run_id>` follows the wait. \
-`--force` does not wait: it stops the drain and each of its running leaves, \
-and returns every claim to the owner's backlog with a comment naming the \
-drain and the reason. It touches only the leaves that drain carries. A leaf \
-whose stop cannot be confirmed keeps its claim on the owner, is listed, and \
-makes the command exit 1. A queued drain, or one whose worker is gone, is \
-cancelled at once. Cancelling a drain that already ended delivers whatever it \
-left behind, and `--force` also stops leaves it left running.\n\n\
-`--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the \
-task runs it started, which a plain cancel leaves running. A child whose stop \
-cannot be confirmed is listed with its reason and makes the command exit 1. For any other run \
-it changes nothing.\n\n\
-Cancelling a task leaf returns its task to the backlog with the reason and \
-keeps the candidate available to resume. `--block` keeps the task blocked for \
-the existing manual recovery flow, including for the leaves and children a \
-`--force` or cascading cancel stops; a pull drain's released claims always \
-return to the owner's backlog.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+    after_help = "Stops a pending or running run, releases its task reservations and marks it `cancelled`;\na finished run reports `already_terminal`. A cancelled task leaf returns its task to the\nbacklog unless `--block`. A pull drain cancels gracefully, waiting for launched leaves\nunless `--force`; `--force` also stops a local drain's child runs. Exits 1 if a stop\ncannot be confirmed. Details: docs/runbooks/stuck-job-runs.md.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel

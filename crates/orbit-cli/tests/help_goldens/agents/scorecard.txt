@@ -9,7 +9,7 @@ Options:
           [possible values: orchestrators, implementers, reviewers, pilots]
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --window <WINDOW>
           Count work in this period ending now
@@ -18,7 +18,7 @@ Options:
           [possible values: 1h, 24h, 7d, 30d, 90d, all]
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --min-support <MIN_SUPPORT>
           Units of work a row needs before it is ranked

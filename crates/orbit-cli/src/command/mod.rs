@@ -127,14 +127,11 @@ Options:
     help_template = ROOT_HELP_TEMPLATE
 )]
 pub struct Cli {
-    /// Override the Orbit root directory (highest precedence)
+    /// Orbit data directory to use (overrides every other source)
     #[arg(long, global = true)]
     pub root: Option<PathBuf>,
 
-    /// Select a workspace by registered name, logical ID (`ws_*`), or absolute
-    /// checkout path. Distinct from `--root`, which overrides the Orbit data
-    /// directory. Only active workspaces may be bound; commands fail if the
-    /// workspace status is not active.
+    /// Active workspace to use: registered name, `ws_*` ID or checkout path.
     #[arg(long, global = true, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 

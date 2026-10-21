@@ -11,13 +11,13 @@ Options:
           Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
 
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --reason <REASON>
           Explanation recorded with the operator decision
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --discard-candidate
           Discard the published or kept candidate and rerun from scratch

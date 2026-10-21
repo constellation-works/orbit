@@ -4,7 +4,7 @@ Usage: orbit task list [OPTIONS]
 
 Options:
       --root <ROOT>
-          Override the Orbit root directory (highest precedence)
+          Orbit data directory to use (overrides every other source)
 
       --status <STATUS>
           Filter by one or more statuses (comma-separated). Opt-in: with no `--status`, tasks of every lifecycle status are listed under a status-aware rule (non-terminal tasks first, then terminal tasks)
@@ -24,7 +24,7 @@ Options:
           Deprecated no-op: task listing is status-neutral by default, so `--all` is no longer required to see every lifecycle status. Accepted for backward compatibility and ignored
 
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --limit <LIMIT>
           Maximum number of tasks to return (default 50). Must be at least 1. Under the default status-aware rule, non-terminal tasks are listed first (newest first), followed by terminal tasks (newest first)
