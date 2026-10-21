@@ -26,7 +26,8 @@ impl Candidates {
     /// The `paths` whose content differs between commits `from` and `to`; a
     /// path present in only one of them counts as changed. A path given as
     /// `path:line` is read as `path`. `None` when either commit is not a
-    /// commit name or the repository cannot read it.
+    /// commit name, the repository cannot read it, or a cited path resolves
+    /// in neither tree.
     pub(super) fn changed(
         &self,
         from: &str,
@@ -47,13 +48,19 @@ impl Candidates {
                 .ok()
                 .map(|entry| entry.id())
         };
-        Some(
-            paths
-                .iter()
-                .filter(|path| entry(&before, path) != entry(&after, path))
-                .cloned()
-                .collect(),
-        )
+        let mut changed = BTreeSet::new();
+        for path in paths {
+            let before_entry = entry(&before, path);
+            let after_entry = entry(&after, path);
+            match (before_entry, after_entry) {
+                (None, None) => return None,
+                (before_entry, after_entry) if before_entry != after_entry => {
+                    changed.insert(path.clone());
+                }
+                _ => {}
+            }
+        }
+        Some(changed)
     }
 }
 

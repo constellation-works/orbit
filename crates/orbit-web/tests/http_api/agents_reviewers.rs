@@ -218,6 +218,54 @@ fn reviewers(facts: &AgentFacts, window: &str) -> Value {
     )
 }
 
+#[test]
+fn reviewer_scorecard_does_not_charge_unresolvable_line_range_as_false_reject() {
+    isolated(
+        "agents_reviewers::reviewer_scorecard_does_not_charge_unresolvable_line_range_as_false_reject",
+        || {
+            let fixture = Fixture::new();
+            let repo = fixture.work.parent().unwrap().to_path_buf();
+            git(&repo, &["init", "-q"]);
+            let rejected = commit(&repo, &[("src/a.rs", "before fix")]);
+            let fixed = commit(&repo, &[("src/a.rs", "after fix")]);
+
+            let now = Utc::now();
+            let cited_range = task(&fixture, "line-range cited reject");
+            settle(
+                &fixture,
+                &cited_range,
+                "rv-range-reject",
+                now - Duration::minutes(2),
+                "reject",
+                "vega",
+                &["- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20"],
+                &rejected,
+            );
+            settle(
+                &fixture,
+                &cited_range,
+                "rv-range-accept",
+                now - Duration::minutes(1),
+                "accept",
+                "lyra",
+                &[],
+                &fixed,
+            );
+
+            let server = fixture.counted_task_server();
+            let scorecard = json_ok(server.get(&format!(
+                "/api/agents/reviewers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(scorecard["status"], "ok", "{scorecard}");
+            assert_eq!(
+                row(&scorecard, "vega")["counts"]["false_rejects"],
+                0,
+                "a line-range path absent from both trees leaves the reject unjudged: {scorecard}"
+            );
+        },
+    );
+}
+
 fn row<'a>(payload: &'a Value, crew: &str) -> &'a Value {
     payload["rows"]
         .as_array()
