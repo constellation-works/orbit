@@ -1368,7 +1368,7 @@ function buildDrainReadiness(drain, workspace) {
   const head = el("div", { class: "readiness-drain-head" }, [
     dot,
     el("strong", { text: view.poolLabel }),
-    ...(badge ? [el("span", { class: "readiness-drain-reason", text: `· ${badge.text}` })] : []),
+    ...(badge && view.pool !== "locks" ? [el("span", { class: "readiness-drain-reason", text: `· ${badge.text}` })] : []),
   ]);
   const wrap = el("div", { class: "readiness-drain" }, [head]);
   wrap.dataset.pool = view.pool;
@@ -1380,14 +1380,18 @@ function buildDrainReadiness(drain, workspace) {
     wrap.appendChild(el("div", { class: "readiness-fix", text: view.title }));
     return wrap;
   }
-  const blockers = badge.holders.map(id => readinessTaskLink(id, workspace));
-  for (const runId of badge.runIds) {
-    const run = el("a", { class: "mono", text: runId });
-    run.href = runHref(runId, workspace ? { workspace } : {});
-    blockers.push(run);
+  if (badge.holders.length) {
+    wrap.appendChild(line("Held by", badge.holders.map(id => readinessTaskLink(id, workspace))));
+  } else if (view.pool === "locks" && !badge.runIds.length) {
+    wrap.appendChild(line("Held by", [el("span", { text: "Lock holder unavailable" })]));
   }
-  if (blockers.length) wrap.appendChild(line("Waits on", blockers));
-  else if (view.pool === "locks") wrap.appendChild(el("div", { class: "readiness-message", text: "Lock holder unavailable" }));
+  if (badge.runIds.length) {
+    wrap.appendChild(line("Live run", badge.runIds.map(runId => {
+      const run = el("a", { class: "mono", text: runId });
+      run.href = runHref(runId, workspace ? { workspace } : {});
+      return run;
+    })));
+  }
   if (badge.dependencies.length > 0) {
     wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
       el("span", { class: "readiness-dependency" }, [
@@ -2988,8 +2992,13 @@ function buildTaskDetail(task, context, drain = null) {
   const commentActions = buildActionsRow(task, detail, context, { includeLifecycle: false });
   const overview = el("div", { class: "task-overview-content" }, [
     el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]),
-    ...(lifecycleActions ? [lifecycleActions] : []),
+    buildTaskTimestamps(task, context),
   ]);
+  // Keep the wrapper when Reject replaces the action row with its form.
+  // It belongs to the detail scroll viewport, outside the tab panels.
+  const actionFooter = lifecycleActions
+    ? el("div", { class: "task-action-footer", role: "region", "aria-label": "Task actions" }, [lifecycleActions])
+    : null;
   const commentsContent = el("div", { class: "comments-tab-content" }, [
     comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
     commentActions,
@@ -3032,6 +3041,7 @@ function buildTaskDetail(task, context, drain = null) {
   detail.appendChild(attentionSlot);
   detail.appendChild(progressSlot);
   for (const section of sections) detail.appendChild(section);
+  if (actionFooter) detail.appendChild(actionFooter);
   delivery.appendChild(buildDeliveryPanel(task.id, {
     onTaskChanged: () => refreshTasks(context),
     onClaims: paintDelivery,
@@ -3040,8 +3050,6 @@ function buildTaskDetail(task, context, drain = null) {
     pullRequest,
   }));
   renderTaskRuns(runs, task, context);
-  const stamps = buildTaskTimestamps(task, context);
-  if (stamps) detail.appendChild(stamps);
   // Activated once the panels exist: the Runs tab reads its runs then.
   detail.activateTab(activeDetailTab);
 
@@ -3054,7 +3062,7 @@ function buildTaskDetail(task, context, drain = null) {
 // the delivery card gathers the pull request, the run, the hands that carried
 // the task and its relations to other tasks. The pane head carries only the
 // id and title, so nothing here is repeated there, and the timestamps close
-// the detail.
+// the Overview.
 function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
@@ -3193,9 +3201,9 @@ function buildDeliveryCard(task, drain, context) {
   return rows.length ? el("div", { class: "task-delivery-card" }, rows) : null;
 }
 
-// When the task was filed and last changed, closing the detail.
+// When the task was filed and last changed, closing Overview above its actions.
 function buildTaskTimestamps(task, context) {
-  const facts = el("div", { class: "property-list task-meta-facts task-stamps" });
+  const facts = el("div", { class: "property-list task-meta-facts task-stamps", role: "group", "aria-label": "Task timestamps" });
   const fact = (label, value) => el("div", { class: "property-row fact" }, [el("span", { class: "label", text: label }), value]);
   if (task.created_at) facts.appendChild(fact("Created", absTimeNode(context, task.created_at, { class: "value" })));
   if (task.updated_at) facts.appendChild(fact("Updated", absTimeNode(context, task.updated_at, { class: "value" })));
@@ -3311,6 +3319,8 @@ function buildDetailTabs(task, detail, tabs, context) {
       button.classList.toggle("active", on);
       panels.get(key).hidden = !on;
     }
+    const footer = detail.querySelector(".task-action-footer");
+    if (footer) footer.hidden = next !== "overview";
     if (focus) buttons.get(next).focus();
     if (next === "runs") loadTaskRuns(task, context, runsNode);
   };
