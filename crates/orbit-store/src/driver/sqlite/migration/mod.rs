@@ -13,6 +13,7 @@ mod executor_census;
 mod feature;
 mod feature_ledgers;
 mod friction;
+mod handoff_settlement;
 mod host_registry;
 mod introspect;
 mod invocation;
@@ -40,6 +41,7 @@ use executor_census::apply_executor_census;
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};
+use handoff_settlement::apply_handoff_settlement_sidecars;
 use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
 };

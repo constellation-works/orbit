@@ -5,6 +5,9 @@ use crate::contracts::{ClaimInspection, TaskCoordinationRow};
 
 pub(in super::super) const CLAIM: &str = "distributed-execution-claim-v1";
 pub(in super::super) const STATE: &str = "distributed-claim-lifecycle-v1";
+/// Immutable attribution, separate from the closed settlement vocabulary older
+/// lifecycle readers understand. Published in the handoff's commit transaction.
+pub(super) const HANDOFF_SETTLEMENT: &str = "distributed-handoff-settlement-v1";
 pub(super) const RECEIPT: &str = "distributed-claim-mutation-v1";
 /// A friction mutation's recorded friction, keyed by its receipt id.
 pub(super) const FRICTION: &str = "distributed-claim-friction-v1";

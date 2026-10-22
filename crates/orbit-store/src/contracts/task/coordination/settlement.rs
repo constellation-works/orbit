@@ -463,7 +463,9 @@ pub struct ClaimInspection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserved_candidate: Option<PreservedClaimCandidate>,
     /// [ORB-14439] The settlement the claim's leaf sent: its failure, its
-    /// release or its typed handoff.
+    /// release or its typed handoff. Handoff attribution is projected from
+    /// a separate immutable coordination row; lifecycle storage retains the
+    /// fail/release vocabulary older readers support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ClaimSettlementRecord>,
     /// Mid-run steering's watermark for the claim's bound leaf run, recorded

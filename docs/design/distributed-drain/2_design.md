@@ -1149,6 +1149,16 @@ the probe reports the first refusal admission would raise by running the same or
   scorecards read them. They are not part of the mutation's identity, and nothing that validates
   or decides a settlement reads them. An owner that predates them ignores the evidence fields and
   warns on the call fields; a follower that predates them leaves the record without a model.
+  Handoff settlements are stored separately as immutable
+  `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
+  into inspection results. The lifecycle row keeps its released `fail` / `release`
+  vocabulary, so older readers remain compatible and lifecycle rewrites preserve
+  attribution. v57 is `ReadCompatible`: new older-client opens are read-only, and
+  database triggers explicitly refuse inline handoff writes even from an already-open
+  intermediate development writer, rolling back its transaction before publication.
+  Store v57 atomically relocates inline handoff records from pre-repair development
+  builds without rewriting authority, receipts or bundle recovery intents;
+  see [state compatibility](../state-compatibility/2_design.md#10-handoff-settlement-attribution-and-older-lifecycle-readers).
 - Their governed-operation rows allow `agent` or `operator` — an identification floor, not an
   operator gate ([ORB-12582]). Cross-attempt receipt inspection requires `operator`, resolved by
   `runtime::authorization::resolved_caller_capabilities`, not read off the session.

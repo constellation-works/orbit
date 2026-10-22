@@ -56,6 +56,28 @@ records retain their existing representations.
 
 ## Prerequisites and safety
 
+When upgrading a development build that wrote inline handoff settlements, stop its
+handoff writers and replace them with the repaired build before resuming settlement.
+The new binary's normal store open applies v57 (`handoff_settlement_sidecars`): it
+moves attribution into a separate immutable row and restores lifecycle readability
+for v0.30.0 clients. Already-running v0.30.0 clients can keep performing safe audited
+operations; their handoffs predate attribution and
+do not write the incompatible value. The database rejects inline handoff writes
+from an already-running intermediate development client, with a diagnostic to
+restart on the upgraded binary, and rolls back its deciding transaction. New
+older-client opens are read-only under v57's `ReadCompatible` classification;
+their audit appends and mutations are refused. Restart them on the repaired binary
+to resume normal operation. Upgrade admission observes the v57 writer floor.
+
+The move and ledger stamp are one transaction. An interrupted upgrade can be
+retried; a reported attribution conflict refuses the open without partial repair.
+Preserve both records and investigate their provenance before restoring consistent
+evidence and retrying. Do not delete receipts, clear settlement evidence, relabel a
+handoff as a release, or bypass a claim's authority checks to make the store open.
+New inspection results retain handoff crew/model attribution, while the lifecycle
+row itself contains only failure/release settlements. No release metadata or
+layout-version change is involved.
+
 - **One control plane per repository.** Two independently initialized owners of
   the same repo mint overlapping work. Collapse to one owner before any replica
   pull is even a future option.
