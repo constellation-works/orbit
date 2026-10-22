@@ -159,7 +159,7 @@ prove that a particular task or run succeeded.
 
 | Rail | Shows |
 |---|---|
-| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, **Start a window**, the locks held and a live log; an open task takes its place. |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
@@ -216,9 +216,11 @@ owner. The status list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has three tabs. **Drain** shows the auto-drain card and the
-files tasks currently lock, and **Start a window** composes a new window (see
-[auto-drain](#auto-drain)). There the card states a host throttle as its own amber note and draws each
+The right dock has two tabs. **Drain** shows the auto-drain card, a simple
+**Start a window** card (window length, parallel tasks, admission control and
+what happens after a task ships; see [auto-drain](#auto-drain)) and the files
+tasks currently lock. Every other `orbit run auto` option is on the Drain
+page's **Start a window** tab. There the card states a host throttle as its own amber note and draws each
 forecast peak as a bar against its threshold. **Log** is a
 live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
 **warn**. Opening a task replaces the dock with the task's detail; below

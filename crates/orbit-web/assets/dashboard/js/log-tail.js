@@ -50,8 +50,8 @@ let logVisibilityWired = false;
 
 // Overview, Start a window and Log share one dock. It sits on the Drain page and, while Tasks
 // shows, beside the task list (placeDock). The Drain route selects its view;
-// on Tasks the view is the last one chosen. Agent and wrapping preferences
-// stay local to this browser.
+// on Tasks the view is the last one chosen that Tasks offers. Agent and
+// wrapping preferences stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
 const DOCK_MODES = ["drain", "start", "log"];
 
@@ -137,10 +137,12 @@ export function fitLogPanelToViewport() {
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
-  const mode = logPanelPrefs.dockMode;
+  const modes = dockModes();
+  const mode = shownDockMode();
   dock.dataset.mode = mode;
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
+    btn.hidden = !modes.includes(btn.dataset.mode);
     btn.classList.toggle("on", on);
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
@@ -150,8 +152,34 @@ function applyDockMode() {
 // One dock, two homes: the Tasks page's right column and the Drain page. It
 // moves to whichever of the two is shown, so its cards keep one renderer and
 // one set of element ids. On Tasks its first view is named Drain, since the
-// page around it is not.
-const DOCK_HOMES = { tasks: { slot: "tasks-dock", label: "Drain" }, drain: { slot: "drain-main", label: "Overview" } };
+// page around it is not. Start a window is the Drain page's own view: Tasks
+// starts a window from the simple card in its first view.
+const DOCK_HOMES = {
+  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "log"] },
+  drain: { slot: "drain-main", label: "Overview", modes: DOCK_MODES },
+};
+const dockHomeListeners = new Set();
+
+// The dock starts on the Drain page until the router first places it.
+export function dockHome() {
+  return $("side-dock")?.dataset.home || "drain";
+}
+
+function dockModes() {
+  return DOCK_HOMES[dockHome()]?.modes || DOCK_MODES;
+}
+
+// A remembered view this home does not offer (Start a window, chosen on
+// Drain) opens the first view instead of an empty pane.
+function shownDockMode() {
+  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
+}
+
+// Each home renders its own Start form (operations.js), so a move repaints it.
+export function onDockHomeChange(listener) {
+  dockHomeListeners.add(listener);
+  return () => dockHomeListeners.delete(listener);
+}
 
 export function placeDock(tab) {
   const dock = $("side-dock");
@@ -164,6 +192,8 @@ export function placeDock(tab) {
   const label = button && button.querySelector(".dock-seg-label");
   if (label) label.textContent = home.label;
   if (button && button.dataset.drainLabel) button.setAttribute("aria-label", `${home.label}: ${button.dataset.drainLabel}`);
+  applyDockMode();
+  for (const listener of dockHomeListeners) listener(tab);
 }
 
 // On the Drain page a view is a route; on Tasks choosing one only switches it.
@@ -191,11 +221,12 @@ function wireDockModeToggle() {
   toggle.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const idx = DOCK_MODES.indexOf(logPanelPrefs.dockMode);
+    const modes = dockModes();
+    const idx = modes.indexOf(shownDockMode());
     const next = event.key === "Home" ? 0
-      : event.key === "End" ? DOCK_MODES.length - 1
+      : event.key === "End" ? modes.length - 1
         : event.key === "ArrowLeft" ? idx - 1 : idx + 1;
-    const mode = DOCK_MODES[(next + DOCK_MODES.length) % DOCK_MODES.length];
+    const mode = modes[(next + modes.length) % modes.length];
     chooseDockMode(mode);
     const btn = toggle.querySelector(`.dock-seg[data-mode="${mode}"]`);
     if (btn) btn.focus();

@@ -217,9 +217,10 @@
               <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
           </div>
-          <!-- A Start's result and its no-retry warning sit above every view, so
-               the receipt stays in sight when Start opens Overview, on Drain and
-               in the Tasks dock alike. -->
+          <!-- A Start's result and its no-retry warning. On Drain it sits above
+               every view, so the receipt stays in sight when Start opens
+               Overview; in the Tasks dock operations.js moves it under the
+               dock's Start card. -->
           <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
 
           <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
@@ -255,6 +256,15 @@
                 <section class="panel drain-fleet-card" id="drain-fleet-panel" aria-labelledby="drain-fleet-title" hidden>
                   <header><h2 class="drain-title" id="drain-fleet-title">Fleet drains</h2></header>
                   <div class="body" id="drain-fleet-body"></div>
+                </section>
+                <!-- The Tasks dock's simple Start card; the Drain page starts a
+                     window from its own Start a window view. -->
+                <section class="panel drain-start-card" id="auto-drain-quick-start" aria-labelledby="auto-drain-quick-start-title" hidden>
+                  <header>
+                    <h2 class="drain-title" id="auto-drain-quick-start-title">Start a window</h2>
+                    <span class="drain-start-sub" id="auto-drain-quick-start-sub"></span>
+                  </header>
+                  <div class="body" id="auto-drain-quick-start-body"></div>
                 </section>
                 <section class="panel" id="locks-panel" aria-labelledby="locks-title">
                   <header><h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span></header>

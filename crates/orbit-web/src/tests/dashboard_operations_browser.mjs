@@ -43,6 +43,7 @@ globalThis.dockReview = {
     loseAutoResponse = kind === 'lost';
   },
   posts: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').length,
+  lastBody: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').at(-1)?.body,
   hold: () => { delayPost = true; releasePost = null; },
   held: () => releasePost !== null,
   release: () => { delayPost = false; const resolve = releasePost; releasePost = null; resolve?.(); },
@@ -204,15 +205,32 @@ try {
     await fullWidthView(`Analytics › Reliability › Tools at ${width}px`, ['#analytics-subtabs .subtab[data-subtab="reliability"]', '#reliability-views .subtab[data-view="tools"]'], 'analytics-tools-main', 'audit-summary-panel');
   }
 
-  // ORB-16962: a Start from the Tasks dock keeps its result above the dock's
-  // views, on Tasks and again on Drain. The router places the shipped dock, as
+  // ORB-16962: a Start from the Tasks dock keeps its result beside the Start
+  // card, on Tasks and again on Drain. The router places the shipped dock, as
   // app.js does, and the harness holds, refuses or loses the window's POST.
+  // ORB-17503: the Tasks dock keeps the simple Start card in its first view and
+  // offers no Start a window view; a browser that last chose that view on
+  // Drain opens the first view. The composer stays on #drain/start.
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.click('.tab[data-tab="tasks"]');
   await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
-  const dockStart = page.locator('#tasks-dock #auto-drain-start button.drain-start');
+  await page.click('.tab[data-tab="tasks"]');
+  const dockStart = page.locator('#tasks-dock #auto-drain-quick-start button.drain-start');
   const dockStatus = page.locator('#tasks-dock #auto-drain-operation-feedback');
   await dockStart.waitFor({ state: 'visible' });
+  const tasksDock = await page.evaluate(() => ({
+    mode: document.getElementById('side-dock').dataset.mode,
+    tabs: [...document.querySelectorAll('#dock-mode-toggle .dock-seg')].filter(tab => tab.getClientRects().length > 0).map(tab => tab.dataset.mode).join(' '),
+    composer: document.getElementById('dock-pane-start').getClientRects().length + document.getElementById('auto-drain-start-body').childElementCount,
+    column: document.getElementById('auto-drain-quick-start').closest('.dock-pane')?.id,
+    durations: document.querySelectorAll('#auto-drain-quick-start .drain-durations .drain-duration[aria-pressed]').length,
+    fields: ['auto-drain-concurrency', 'auto-drain-mode', 'auto-drain-complete', 'auto-drain-approve', 'auto-drain-auto-fix', 'auto-drain-review']
+      .filter(id => !document.getElementById('auto-drain-quick-start-body').contains(document.getElementById(id))),
+    feedback: document.getElementById('auto-drain-quick-start').nextElementSibling?.id,
+  }));
+  if (tasksDock.mode !== 'drain' || tasksDock.tabs !== 'drain log' || tasksDock.composer !== 0 || tasksDock.column !== 'dock-pane-drain'
+    || tasksDock.durations !== 6 || tasksDock.fields.length || tasksDock.feedback !== 'auto-drain-operation-feedback') {
+    throw new Error(`The Tasks dock must keep the simple Start card and no Start a window view: ${JSON.stringify(tasksDock)}`);
+  }
   await page.evaluate(() => globalThis.dockReview.next('success'));
   const postsBeforeSuccess = await page.evaluate(() => globalThis.dockReview.posts());
   await page.evaluate(() => globalThis.dockReview.hold());
@@ -228,12 +246,15 @@ try {
   if (await page.evaluate(() => globalThis.dockReview.posts()) !== postsBeforeSuccess + 1) {
     throw new Error('A Start from Tasks must send exactly one POST');
   }
-  // A started window opens the dock's first view, with the receipt above it.
+  // The simple card posts only the fields it offers.
+  const dockBody = await page.evaluate(() => globalThis.dockReview.lastBody());
+  if (Object.keys(dockBody).sort().join(' ') !== 'approve_proposed auto_fix complete for_duration' || dockBody.for_duration !== '1h') {
+    throw new Error(`The Tasks dock Start card must post its own fields: ${JSON.stringify(dockBody)}`);
+  }
   if (await page.locator('#side-dock').getAttribute('data-mode') !== 'drain' || await page.evaluate(() => location.hash.startsWith('#drain'))) {
-    throw new Error('A Start from Tasks shows the Drain view in place');
+    throw new Error('A Start from Tasks stays on the Tasks dock\'s first view');
   }
   await page.screenshot({ path: path.join(evidence, 'tasks-dock-feedback-success-dark-1440.png') });
-  await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
   // An HTTP refusal and a lost response each name their remedy beside Start,
   // send one POST and keep the operator on Tasks.
   for (const [kind, expected] of [
@@ -257,6 +278,9 @@ try {
   await page.waitForFunction(() => location.hash.startsWith('#drain'));
   const drainStatus = page.locator('#drain-main #auto-drain-operation-feedback.error');
   await drainStatus.waitFor({ state: 'visible' });
+  if (await page.locator('#drain-main #auto-drain-quick-start').isVisible() || !(await page.locator('#drain-main #dock-tab-start').isVisible())) {
+    throw new Error('Drain offers Start a window as its own view, not the Tasks dock card');
+  }
   const drainText = await drainStatus.textContent();
   if (!drainText.includes('Submission outcome unknown') || !drainText.includes('not retried')) {
     throw new Error(`Drain lost the unknown-outcome remedy: ${drainText}`);
@@ -509,7 +533,8 @@ try {
     if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
     // The main column (status, how it started, pull claims, waits) comes
     // before the side column (fleet, locks) in reading and tab order.
-    if (result.panels.join(' ') !== 'auto-drain-panel drain-started-panel drain-pull-panel drain-waits-panel drain-fleet-panel locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
+    // The Tasks dock's Start card stays empty and hidden on Drain.
+    if (result.panels.join(' ') !== 'auto-drain-panel drain-started-panel drain-pull-panel drain-waits-panel drain-fleet-panel auto-drain-quick-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
     if (result.scroll || result.clipped || result.overflowing.length || result.pageScroll) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${JSON.stringify(result)}`);
     if (!result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.waitForTimeout(350);
