@@ -8,7 +8,7 @@ import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, ren
 import { cpuLoadMultiple } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
-import { AUTO_DRAIN_APPROVE_RULE, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
+import { AUTO_DRAIN_APPROVE_RULE, drainCheckout, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
 import { hideDrainStarted, renderDrainStarted } from './drain-started.js';
 
 const $ = (id) => document.getElementById(id);
@@ -2241,7 +2241,7 @@ function autoDrainReviewControl(payload, reasons) {
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
   const reasons = autoDrainReasons(payload);
-  return Boolean(reasons.submit)
+  return Boolean(reasons.submit || drainCheckout(payload).localRefusal)
     || pendingOperations.has("auto-drain:start")
     || !autoDrainConcurrencyValid()
     || (autoDrainComplete && Boolean(reasons.complete))
@@ -2257,7 +2257,7 @@ function autoDrainStartButton(payload, form) {
   const button = el("button", {
     class: "operation-button drain-start primary",
     text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainDuration} window`,
-    title: reasons.submit || "Submit orbit.workflow.auto with this duration and concurrency",
+    title: reasons.submit || drainCheckout(payload).localRefusal || "Submit orbit.workflow.auto with this duration and concurrency",
   });
   button.type = "button";
   button.dataset.drainFocus = "start";
@@ -3406,7 +3406,12 @@ function autoDrainStartFoot(payload, form) {
       el("span", { text: `Starts now, but nothing is admitted until the ${throttleNames(resources)} throttle clears.` }),
     ])
     : null;
-  return el("div", { class: "drain-start-foot" }, [summary, held, autoDrainStartButton(payload, form)]);
+  const localRefusal = drainCheckout(payload).localRefusal;
+  const pullRoute = localRefusal
+    ? el("a", { text: "Pull from the owner on Drain" })
+    : null;
+  if (pullRoute) pullRoute.href = "#drain/start";
+  return el("div", { class: "drain-start-foot" }, [summary, held, drainFieldRefusal(localRefusal), pullRoute, autoDrainStartButton(payload, form)]);
 }
 
 // A panel poll paints the snapshot it already has. Opening the fleet card

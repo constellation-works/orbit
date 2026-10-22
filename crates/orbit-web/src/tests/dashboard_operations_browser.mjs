@@ -37,7 +37,24 @@ globalThis.review = {
 // The Start-card switches for the Tasks dock check: each window POST succeeds,
 // is refused with HTTP 500, or loses its response, and can be held in flight.
 const dockHarness = `
+let legacyCheckout = false;
+const dockFetch = globalThis.fetch;
+globalThis.fetch = async (...args) => {
+  const result = await dockFetch(...args);
+  if (legacyCheckout && String(args[0]).includes('/api/workflows/auto/readiness')) {
+    const payload = await result.json();
+    delete payload.start_options;
+    return response(payload);
+  }
+  return result;
+};
 globalThis.dockReview = {
+  checkout: async (replica, legacy = false) => {
+    replicaWorkspace = replica;
+    legacyCheckout = legacy;
+    await fetchAndRenderOperations();
+  },
+  localRefusal: () => LOCAL_REFUSAL,
   next: (kind) => {
     responseError = kind === 'refusal' ? 'fixture submission refused' : null;
     loseAutoResponse = kind === 'lost';
@@ -231,6 +248,52 @@ try {
     || tasksDock.durations !== 6 || tasksDock.fields.length || tasksDock.feedback !== 'auto-drain-operation-feedback') {
     throw new Error(`The Tasks dock must keep the simple Start card and no Start a window view: ${JSON.stringify(tasksDock)}`);
   }
+  // A replica can only start a pull drain. Tasks keeps its local Start
+  // visible but refused, with a working route to the pull composer.
+  await page.evaluate(() => globalThis.dockReview.checkout(true));
+  const replicaPosts = await page.evaluate(() => globalThis.dockReview.posts());
+  await dockStart.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'tasks-replica-start-dark-1440.png') });
+  if (!await dockStart.isDisabled()) throw new Error('Replica Tasks must disable its local-only Start');
+  const refusal = page.locator('#auto-drain-quick-start .drain-field-hint.warn').filter({ hasText: await page.evaluate(() => globalThis.dockReview.localRefusal()) });
+  if (!await refusal.isVisible()) throw new Error('Replica Tasks must display the runtime checkout refusal');
+  // Native disabled clicks and a dispatched event must both avoid submission.
+  await dockStart.evaluate(button => { button.click(); button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+  if (await page.evaluate(() => globalThis.dockReview.posts()) !== replicaPosts) throw new Error('Refused replica Tasks Start sent a POST');
+  await page.evaluate(() => globalThis.dockReview.checkout(true, true));
+  if (!await dockStart.isDisabled() || !await page.locator('#auto-drain-quick-start .drain-start-foot .drain-field-hint.warn').isVisible()) {
+    throw new Error('Older replica readiness must keep Start disabled with a visible checkout explanation');
+  }
+  await dockStart.evaluate(button => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  if (await page.evaluate(() => globalThis.dockReview.posts()) !== replicaPosts) throw new Error('Legacy replica Tasks Start sent a POST');
+  await page.evaluate(() => globalThis.dockReview.checkout(true));
+  const pullRoute = page.locator('#auto-drain-quick-start a[href="#drain/start"]');
+  await pullRoute.click();
+  await page.waitForFunction(() => location.hash === '#drain/start');
+  const pullStart = page.locator('#auto-drain-start-body button.drain-start');
+  await pullStart.waitFor({ state: 'visible' });
+  if (await pullStart.isDisabled() || !(await pullStart.textContent()).includes('pulling')) throw new Error('The Tasks remedy must open a supported pull start');
+  await pullStart.click();
+  await page.waitForFunction(before => globalThis.dockReview.posts() === before + 1, replicaPosts);
+  const pullBody = await page.evaluate(() => globalThis.dockReview.lastBody());
+  if (pullBody.pull !== 'ws-one' || pullBody.host !== 'server' || ['complete', 'approve_proposed', 'auto_fix'].some(key => Object.hasOwn(pullBody, key))) {
+    throw new Error(`The Drain remedy must preserve the supported pull request: ${JSON.stringify(pullBody)}`);
+  }
+  await page.click('.tab[data-tab="tasks"]');
+  await page.setViewportSize({ width: 375, height: 812 });
+  if (await dockStart.isVisible()) throw new Error('The Tasks dock must give way to the list at phone width');
+  await assertNoOverflow('replica Tasks at 375px');
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-replica-start-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => globalThis.dockReview.checkout(false));
+  if (await dockStart.isDisabled()) throw new Error('Owner Tasks Start must remain enabled after a replica');
+  await dockStart.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'tasks-owner-start-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-owner-start-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => globalThis.dockReview.next('success'));
   const postsBeforeSuccess = await page.evaluate(() => globalThis.dockReview.posts());
   await page.evaluate(() => globalThis.dockReview.hold());
