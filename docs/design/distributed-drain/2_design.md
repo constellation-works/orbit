@@ -1463,7 +1463,7 @@ Acceptance criteria, not reported as passing.
   landing and per-host compiler caches.
 - **Placement is first-fit; capacity is not tracked at slot granularity.** Admission takes the
   first eligible task in the owner's order for the requesting executor. Under
-  `machine.auto_concurrency = "enforce"`, the request also filters out task classes its host
+  `machine.auto_concurrency.mode = "enforce"`, the request also filters out task classes its host
   load forecast cannot support. The census puts work only that executor can run first, but it
   does not report remaining slots: a fungible task can wait while the only other executor that
   could run it is saturated. `workflow.admission_affinity = "priority"` is the escape hatch,
