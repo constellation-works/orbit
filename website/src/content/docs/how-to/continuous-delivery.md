@@ -204,8 +204,8 @@ end with some tasks still in the backlog.
 
 ## 4. Start a bounded window
 
-- **Dashboard:** in the **Drain** card, pick a **Window length** (`15m` to
-  `8h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+- **Dashboard:** on **Drain → Start**, pick a **Window length** (one pass, or
+  `30m` to `12h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
   complete them (off stops at review). Optionally turn on **Approve qualifying
   proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
   window's blocked PRs. Click **Start … window** and
@@ -224,6 +224,12 @@ end with some tasks still in the backlog.
 The window length bounds only when new work may start; a task in flight when
 it expires still finishes. **Parallel tasks** (`--concurrency`, default 5) is
 not a batch size: the drain refills each free slot from the whole backlog.
+
+`--auto-concurrency shadow|enforce` selects forecast-based admission for this
+window: `shadow` records what the forecast would admit, while `enforce` uses
+measured CPU and memory profiles to fit new work within host capacity. The
+concurrency ceiling still applies. Omit the flag to use the host's configured
+mode.
 
 **Mark shipped tasks done** (`--complete`) authorizes this window to move every task it
 ships from `review` to `done`, including tasks admitted later in the window. It
@@ -273,7 +279,7 @@ A task's submitted run is not its status; check the task itself.
 
 `--allow-crew` limits one drain to the crews you name, for example when a
 provider is down, rate-limited, or out of budget. Ask your agent or use the
-CLI; the dashboard's **Start** has no crew option.
+CLI, or toggle **Allowed crews** on **Drain → Start**.
 
 ```bash
 orbit run auto --for 4h --allow-crew opus,sonnet
@@ -287,9 +293,10 @@ orbit run readiness --allow-crew opus,sonnet
 - **Enforced throughout.** Every activity in the run is checked against the
   crew that actually resolved, including a recovery crew drawn from a
   complexity pool. The check
-  compares effective provider and model, not crew name: an alias of a
-  permitted crew runs, and a crew that resolves to an excluded provider or
-  model is refused. The allowlist gates the crew that normal precedence picks;
+  permits the named crews and aliases with the same effective provider,
+  model, and provider account. A crew with its own `env` has a separate
+  account and must be explicitly allowed even when its provider and model
+  match. The allowlist gates the crew that normal precedence picks;
   it never picks one.
 - **Skips, never remaps.** A task whose crew is excluded stays in `backlog`,
   and readiness reports it as `crew_not_allowed`, also without
@@ -373,13 +380,17 @@ review, or dependency problem first; do not rerun blindly.
 
 1. **Find the failure.** In **Runs**, filter to **Failed** and open the run;
    it opens on the failed step and its error. From the CLI,
+   `orbit run history --failures` groups failures by task and root cause;
    `orbit run show "$AUTO_RUN_ID"` lists the window's failed children, and
    `orbit run show` or `orbit run logs` on a child gives the detail.
 2. **Check recovery steps.** A failure the agent declares itself goes through
    step recovery before the task is sent to `blocked`, so check those steps
    before deciding what a blocked task needs.
-3. **Retry deliberately.** A task a failed run left `blocked` stays there;
-   nothing re-queues it for you. Once the cause is fixed, either:
+3. **Retry deliberately.** A task blocked by its own failure stays blocked.
+   Missing-launcher and transient-infrastructure blocks can instead be
+   rechecked with `orbit task recheck-blocked --confirm` after their cause
+   clears; transient recovery requires an authenticated published candidate
+   and is bounded. Otherwise, once the cause is fixed, either:
    - click **Resume** on the failed run in **Runs** (`orbit job resume
      <run-id>`) to continue from its first unsuccessful step; or
    - move the task back to `backlog` with its status dropdown in **Tasks**
