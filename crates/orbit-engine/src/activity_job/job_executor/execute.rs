@@ -115,6 +115,23 @@ pub fn execute_job_with_resume(
     let mut final_recovery = FinalRecoveryBudget::from_resume(resume);
     // After a final-recovery `resume`, every step from the resume point runs
     // again, whatever the seeding checkpoint recorded.
+    let replay_from = resume
+        .filter(|state| {
+            crate::executor::automation::vcs::PUBLISHED_REPLAY_STEPS
+                .iter()
+                .all(|(id, _)| {
+                    state.pipeline.get(*id).is_some_and(|output| {
+                        state.step_outputs.iter().any(|(index, recorded)| {
+                            recorded == output
+                                && state.step_states.get(index) == Some(&JobRunState::Success)
+                        })
+                    })
+                })
+        })
+        .and_then(|state| state.final_recovery.as_ref())
+        .filter(|checkpoint| checkpoint.repair_commit.is_none())
+        .and_then(|checkpoint| checkpoint.resume_context.as_ref())
+        .and_then(|context| job.steps.iter().position(|step| step.id == context.step_id));
     let mut rerunning = false;
     let mut resume_context = resume
         .and_then(|state| state.final_recovery.as_ref())
@@ -130,6 +147,12 @@ pub fn execute_job_with_resume(
     let mut index = 0;
     while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
+        if replay_from == Some(index) {
+            // Retained host history is provenance, never permission to skip a
+            // replay after an interruption. Drop it from template context.
+            forget_step_outputs_from(&ctx, job, index);
+            rerunning = true;
+        }
         let refreshes_preparation = preparation_refresh
             .as_ref()
             .is_some_and(|refresh| refresh.step_index == step_index);

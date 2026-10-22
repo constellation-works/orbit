@@ -1564,6 +1564,32 @@ the engine and deterministic host applier admit and apply it. The owner's blocke
 delivery run. Higher-level shipment parents, including workspace auto, still fail when a required
 child run fails.
 
+A final-recovery resume into implementation can encounter a candidate the host
+already committed, rebased, pushed and published. The host retains the successful
+`commit`, `prepare_branch`, `sync_base`, `push` and `pr_open` checkpoints as
+history provenance when they authenticate that exact checkout, run, task,
+branch and candidate. It drops validation, review and compound phase checkpoints.
+These retained successes do not skip replay: an interrupted replay runs again
+from its admitted phase, and all delivery actions and gates run afterward.
+
+At the commit boundary, the applied same-run recovery receipt plus the retained
+host chain authorize continuation of that exact published candidate. The chain
+links the original host commit to preparation, the rebase's before/after heads
+and pinned base, and the published branch. An unchanged candidate returns
+`already_committed` without staging or a new commit. File edits go through the
+existing host recovery-commit guards and become a new candidate for validation
+and review. This replay's successful commit checkpoint records
+`final_recovery_replay` and `candidate_branch` with its `commit_sha`, so
+interruption between this boundary and preparation retains an exact host
+candidate. The original pre-rebase commit cannot use that shortcut; it requires
+the complete synchronization/publication chain. Delivery observation recognizes
+that bound `already_committed` receipt's exact SHA while continuing to refuse a
+bare SHA on a legacy `already_committed` output. Unknown commits,
+branch moves and stale evidence still reach the immutable setup-checkpoint
+refusal; no provider history is adopted or rewritten. The existing final-recovery
+repair-commit receipt and generic-resume/source-repair rules remain separate.
+
+
 ---
 
 ## 9. Filesystem Policy and `fsProfile`

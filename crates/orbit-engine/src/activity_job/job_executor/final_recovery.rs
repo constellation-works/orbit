@@ -199,6 +199,7 @@ pub(super) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision,
             resume_step_index: None,
+            preserved_steps: Vec::new(),
             repair_commit: None,
             resume_context: None,
             workspace_path: worktree.workspace_path.into(),
@@ -280,6 +281,7 @@ pub(super) fn attempt_final_recovery(
                     .into(),
             },
             resume_step_index: None,
+            preserved_steps: Vec::new(),
             repair_commit: None,
             resume_context: None,
             workspace_path: worktree.workspace_path.into(),
@@ -314,6 +316,7 @@ pub(super) fn attempt_final_recovery(
                         rationale: rationale.clone(),
                     },
                     resume_step_index: Some(step_index as u32),
+                    preserved_steps: Vec::new(),
                     repair_commit: None,
                     resume_context: Some(FinalRecoveryResume {
                         step_id: step.id.clone(),
@@ -355,6 +358,7 @@ pub(super) fn attempt_final_recovery(
                 human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
             },
             resume_step_index: None,
+            preserved_steps: Vec::new(),
             repair_commit: None,
             resume_context: None,
             workspace_path: worktree.workspace_path.into(),
@@ -477,11 +481,17 @@ pub(super) fn attempt_final_recovery(
         }
         _ => None,
     };
+    let preserved_steps = if resume_index.is_some() && repair_commit.is_none() {
+        preserved_publication_steps(job, ctx, &task_id, &worktree)
+    } else {
+        Vec::new()
+    };
     let application = FinalRecoveryApplication {
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
         resume_step_index: resume_index.map(|index| index as u32),
+        preserved_steps,
         repair_commit,
         resume_context,
         workspace_path: worktree.workspace_path.into(),
@@ -523,6 +533,7 @@ fn settle_absorbed(
             ),
         },
         resume_step_index: None,
+        preserved_steps: Vec::new(),
         repair_commit: None,
         resume_context: None,
         workspace_path: worktree.workspace_path.into(),
@@ -879,4 +890,48 @@ fn emit_final_recovery_event(
             detail: detail.map(redacted_recovery_diagnostic),
         },
     );
+}
+
+/// Keep only a complete, exact host publication chain. Incomplete or foreign
+/// history gets no continuation and still meets the immutable setup guard.
+fn preserved_publication_steps(
+    job: &JobV2,
+    ctx: &ExecCtx<'_>,
+    task: &str,
+    worktree: &RunWorktree,
+) -> Vec<u32> {
+    use crate::executor::automation::vcs::{PUBLISHED_REPLAY_STEPS, published_candidate_matches};
+    let Some(state) = ctx.host.read_run_state(&ctx.run_id).ok().flatten() else {
+        return Vec::new();
+    };
+    let root = std::path::Path::new(&worktree.workspace_path);
+    let Some(pin) = &worktree.base_sha else {
+        return Vec::new();
+    };
+    let Ok(head) = git_output(root, &["rev-parse", "--verify", "HEAD^{commit}"]) else {
+        return Vec::new();
+    };
+    if !published_candidate_matches(&state, &ctx.run_id, task, root, pin, &head).unwrap_or(false) {
+        return Vec::new();
+    }
+    PUBLISHED_REPLAY_STEPS
+        .into_iter()
+        .map(|(id, action)| {
+            let (index, step) = job
+                .steps
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step.id == id)?;
+            if !matches!(&step.body, JobV2StepBody::Target(target)
+            if matches!(&target.spec, ActivityV2Spec::Deterministic(spec) if spec.action == action))
+                || state.step_output(index as u32) != state.pipeline.get(id)
+                || state.step_states.get(&(index as u32))
+                    != Some(&orbit_types::workflow::JobRunState::Success)
+            {
+                return None;
+            }
+            Some(index as u32)
+        })
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }

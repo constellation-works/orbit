@@ -326,8 +326,12 @@ fn record_decision(
                 checkpoint.resume_context = application.resume_context.clone();
             }
             if let Some(from) = application.resume_step_index {
-                state.step_states.retain(|index, _| *index < from);
-                state.step_outputs.retain(|index, _| *index < from);
+                // Keep host history evidence available to the replay's exact
+                // candidate check. Validation and review never belong here.
+                let keep =
+                    |index: &u32| *index < from || application.preserved_steps.contains(index);
+                state.step_states.retain(|index, _| keep(index));
+                state.step_outputs.retain(|index, _| keep(index));
                 state.compound_outputs.retain(|index, _| *index < from);
             }
             state.updated_at = Utc::now();

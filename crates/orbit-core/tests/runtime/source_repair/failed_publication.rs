@@ -56,6 +56,7 @@ fn infra_escalate(
                 human_action: "wait for the condition to clear".into(),
             },
             resume_step_index: None,
+            preserved_steps: Vec::new(),
             repair_commit: None,
             resume_context: None,
             workspace_path: checkout.to_path_buf(),
