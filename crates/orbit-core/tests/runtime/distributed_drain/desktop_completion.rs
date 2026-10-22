@@ -189,6 +189,31 @@ fn owner_config(commands: &[&str], review_crew: &str, crews: &[&str]) -> String 
     config
 }
 
+/// Owner configuration using the canonical review-crew pool setting.
+fn owner_config_with_review_pool(
+    commands: &[&str],
+    review_pool: &[&str],
+    crews: &[&str],
+    disabled_crew: Option<&str>,
+) -> String {
+    let mut config = format!(
+        "[workflow]\ndefault_crew = \"{}\"\nrequired_validation_commands = {}\n\n\
+         [workflow.purpose_crews]\nreview = {}\n",
+        crews[0],
+        serde_json::to_string(commands).unwrap(),
+        serde_json::to_string(review_pool).unwrap()
+    );
+    for crew in crews {
+        config.push_str(&format!(
+            "\n[crews.{crew}]\nprovider = \"codex\"\nmodel = \"fixture-{crew}\"\n"
+        ));
+        if disabled_crew == Some(*crew) {
+            config.push_str("enabled = false\n");
+        }
+    }
+    config
+}
+
 impl Delivery {
     fn handed_off(commands: &[&str]) -> Self {
         Self::landed(commands, Landing::Merge, None)
@@ -1589,6 +1614,59 @@ fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
     );
 }
 
+/// A canonical review pool refusal can be repaired through the operator tool.
+fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
+    let required = "test -f src/f0.rs";
+    let delivery = Delivery::handed_off(&[required]);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+
+    let unavailable = delivery.reconfigured(&owner_config_with_review_pool(
+        &[required],
+        &["gone"],
+        &["sol", "gone"],
+        Some("gone"),
+    ));
+    let refused = delivery
+        .reconcile_on(&unavailable, json!({"action": "inspect"}))
+        .expect("operator can inspect an unavailable review crew");
+    assert_eq!(refused["eligible"], false, "{refused:#}");
+    assert!(
+        refused["refusal"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty()),
+        "the unresolved configured crew must produce an observable refusal: {refused:#}"
+    );
+
+    let repaired = delivery.reconfigured(&owner_config_with_review_pool(
+        &[required],
+        &["sol"],
+        &["sol"],
+        None,
+    ));
+    let retry = delivery
+        .reconcile_on(
+            &repaired,
+            json!({"action": "submit", "request_key": "canonical-review-retry"}),
+        )
+        .expect("operator can retry after repairing the canonical review pool");
+    assert_eq!(
+        retry["record"]["contract"]["review_crew"], "sol",
+        "{retry:#}"
+    );
+    let reconciliation = retry["reconciliation_id"].as_str().unwrap();
+    delivery.execute_on(&repaired, retry["run_id"].as_str().unwrap());
+    let settled = delivery
+        .reconcile_on(
+            &repaired,
+            json!({"action": "status", "reconciliation_id": reconciliation}),
+        )
+        .unwrap()["reconciliations"][0]
+        .clone();
+    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+}
+
 /// The validation commands and review crew are frozen when the operator
 /// submits. A configuration edited before the run starts, or before a
 /// resubmission, neither drops a requirement nor changes the reviewer; a
@@ -2166,6 +2244,7 @@ crate::scenario_table!(
 
 crate::scenario_table!(
     a_reconciliation_runs_under_the_contract_frozen_at_submission_scenarios,
+    a_canonical_review_pool_refusal_can_be_repaired_and_retried,
     a_reconciliation_runs_under_the_contract_frozen_at_submission,
     an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract,
     a_reconciliation_refuses_a_changed_head_and_forged_runs,
