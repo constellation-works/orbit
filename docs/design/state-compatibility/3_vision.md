@@ -2,7 +2,7 @@
 title: State Compatibility — Vision
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_validated: 2026-10-22
 status: Draft
 feature: state-compatibility
 doc_role: vision
