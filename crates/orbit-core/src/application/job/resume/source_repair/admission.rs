@@ -488,11 +488,6 @@ impl OrbitRuntime {
                     fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone(),
                 )
                 .map_err(|error| refuse(error.to_string()))?;
-                if self.workflow_required_validation_commands().is_empty() {
-                    return Err(refuse(
-                        "source repair requires current required validation commands",
-                    ));
-                }
                 let record = SourceRepairAdmission {
                     request_key: key.into(),
                     binding: binding.clone(),

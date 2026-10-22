@@ -79,7 +79,12 @@ pub(super) fn publish_and_stop(
     let synced = f.action("git_rebase", rebase_input);
     checkpoint(f, id, "sync_base", synced);
     let validated = f.action("candidate_validate", input.clone());
-    assert_eq!(validated["decision"], "passed");
+    let expected = if f.runtime.workflow_required_validation_commands().is_empty() {
+        "skipped_no_required_commands"
+    } else {
+        "passed"
+    };
+    assert_eq!(validated["decision"], expected);
     let pushed = f.action("git_push", input.clone());
     checkpoint(f, id, "push", pushed);
     let head = git(&checkout, &["rev-parse", "HEAD"]);

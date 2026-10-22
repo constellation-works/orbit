@@ -811,7 +811,25 @@ binding and policy digest with `action: "submit"`, a new `request_key`, a
 `diagnosis` describing the bounded implementation work, and `unmet_acceptance`
 identifying the criterion and evidence (for example, the measured Check
 duration and hosted run/job on this candidate). Both text fields accept
-1–32768 bytes. This is an explicit operator decision about the current task
+1–32768 bytes. For example, the submit payload is:
+
+```json
+{
+  "id": "<successful-publishing-run>",
+  "source_repair": {
+    "action": "submit",
+    "task_id": "<task>",
+    "request_key": "bounded-rework-1",
+    "binding": "<exact binding object from inspect>",
+    "policy_digest": "<current digest from inspect>",
+    "diagnosis": "Repair the remaining bounded source behavior on this PR.",
+    "unmet_acceptance": "Criterion and observed evidence on the published head."
+  }
+}
+```
+
+Replace the `binding` placeholder with the returned JSON object, preserving all
+fields. This is an explicit operator decision about the current task
 meaning; evidence text is retained as operator testimony, not independently
 certified by the recovery endpoint. Scope, publication, authority or policy
 drift requires another inspection. Policy covers the current resolved delivery
@@ -833,8 +851,14 @@ a stopped attempt, and never restarts it.
 
 The continuation adopts the authenticated branch and original PR and requires
 fresh implementation. It inherits no validation, review or completion
-checkpoints. Native validation and configured review run on the new candidate;
-hosted checks and ordinary review remain required for acceptance. Previous green
+checkpoints. The current `workflow.required_validation_commands` list is captured
+with the review policy and applied to the new candidate. An explicitly empty
+list is supported, including workspaces that rely on hosted required PR checks:
+native validation records `skipped_no_required_commands` with no command receipts,
+not a passing check. A nonempty list must run successfully and retain fresh
+candidate-bound evidence. Changing the policy invalidates the admission; an
+empty list does not waive configured review or hosted required checks. Hosted
+checks and ordinary review remain required for acceptance. Previous green
 correctness checks do not establish rework acceptance. Completion stays at
 `review`, automatic repair is disabled, and this authorization grants no merge.
 The original successful execution, performance observations, receipts and

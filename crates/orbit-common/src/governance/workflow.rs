@@ -227,7 +227,7 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
     verb: WorkflowVerb::RunResume,
     cli_path: &[],
     tool_name: "orbit.workflow.run.resume",
-    tool_description: "Resume a terminal resumable workflow run as a new linked run. Requires operator capability; agent sessions are refused.",
+    tool_description: "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -237,7 +237,7 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "source_repair",
             ParamType::Object,
-            "Explicit operator recovery of a cancelled owner-local published candidate. Inspect: {action: inspect, task_id}. Submit: {action: submit, task_id, request_key, binding, diagnosis}. Uses fresh policy and review; grants no completion or auto-fix authority.",
+            "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review and policy_digest. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful-publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Supply the exact binding object. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR; grants no completion, merge or auto-fix authority.",
         ),
     ]],
     at_least_one_of: &[],

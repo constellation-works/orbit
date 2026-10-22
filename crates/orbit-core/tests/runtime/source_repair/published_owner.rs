@@ -501,10 +501,112 @@ fn successful_publication_requires_fresh_same_pr_implementation() {
     f.assert_original();
 }
 
+fn successful_publication_with_no_local_commands_stays_review_only() {
+    let mut f = Fixture::with_policy("before-landing");
+    let config = f.repo.join(".orbit/config.toml");
+    let configured = std::fs::read_to_string(&config).unwrap().replace(
+        "required_validation_commands = [\"true\"]",
+        "required_validation_commands = []",
+    );
+    std::fs::write(&config, configured).unwrap();
+    f.runtime = orbit_core::OrbitRuntime::from_roots(
+        &f._root.path().join("global"),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_fixture".into(),
+        machine_name: None,
+    }));
+    assert!(f.runtime.workflow_required_validation_commands().is_empty());
+    let original_checkout = publication_inner(&mut f, false, false, true);
+    let original_run = serde_json::to_value(&f.source).unwrap();
+    let original_state = serde_json::to_value(&f.state).unwrap();
+    let original_head = f.head.clone();
+    let request = rework_request(&f);
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request.clone())
+        .expect("an explicitly empty local-command policy must admit review-only source repair");
+    let id = admitted["run_id"].as_str().unwrap();
+    f.wait(id);
+    let run = f.runtime.show_job_run_observed(id).unwrap();
+    let input = run.input.as_ref().unwrap();
+    assert_eq!(input["completion"], "review");
+    assert_eq!(input["auto_fix"], false);
+    assert_eq!(input["review"]["required_validation_commands"], json!([]));
+    assert_eq!(input["review"]["timing"], "before-landing");
+    assert_eq!(input["__source_repair"]["review"], input["review"]);
+    assert!(
+        f.runtime
+            .read_run_state(id)
+            .unwrap()
+            .unwrap()
+            .step_states
+            .is_empty(),
+        "source validation and review receipts cannot be inherited"
+    );
+    let repaired = super::generations::publish_and_stop(&f, id, 1, false);
+    assert_ne!(repaired, original_head);
+    let state = f.runtime.read_run_state(id).unwrap().unwrap();
+    assert_eq!(state.pipeline["resume_candidate"]["implement"], true);
+    assert_eq!(
+        state.pipeline["resume_candidate"]["prior_pull_request"],
+        "17"
+    );
+    assert_eq!(
+        state.pipeline["resume_candidate"]["reused_branch"],
+        f.branch
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Review
+    );
+    assert!(
+        f.runtime
+            .get_task_artifact(&f.task, &format!("validation/{id}/0.json"))
+            .unwrap()
+            .is_none(),
+        "no local-command evidence is fabricated when policy configures no commands"
+    );
+    let calls = std::fs::read_to_string(f._root.path().join("gh-calls")).unwrap();
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("pr create "))
+            .count(),
+        1
+    );
+    assert!(!calls.lines().any(|line| line.starts_with("pr merge ")));
+    let replay = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request)
+        .unwrap();
+    assert_eq!(replay["run_id"], id);
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        serde_json::to_value(f.runtime.show_job_run_observed(&f.source.run_id).unwrap()).unwrap(),
+        original_run,
+        "successful source execution is immutable"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap()).unwrap(),
+        original_state,
+        "source checkpoints remain immutable"
+    );
+    assert_eq!(
+        git(&original_checkout, &["rev-parse", "HEAD"]),
+        original_head
+    );
+    f.assert_original();
+}
+
 fn successful_rework_refuses_changed_authority_scope_and_publication() {
     for case in [
         "evidence",
+        "missing_evidence",
         "policy",
+        "missing_policy",
         "scope",
         "live",
         "foreign",
@@ -523,6 +625,15 @@ fn successful_rework_refuses_changed_authority_scope_and_publication() {
         let mut request = rework_request(&f);
         match case {
             "evidence" => request["source_repair"]["unmet_acceptance"] = json!("  "),
+            "missing_evidence" | "missing_policy" => {
+                request["source_repair"].as_object_mut().unwrap().remove(
+                    if case == "missing_evidence" {
+                        "unmet_acceptance"
+                    } else {
+                        "policy_digest"
+                    },
+                );
+            }
             "policy" => request["source_repair"]["policy_digest"] = json!("obsolete"),
             "source" => request["source_repair"]["binding"]["source_digest"] = json!("forged"),
             "scope" => {
@@ -763,6 +874,7 @@ fn successful_rework_binds_current_policy_before_submission_and_source_effects()
 
 crate::scenario_table!(
     successful_source_rework_scenarios,
+    successful_publication_with_no_local_commands_stays_review_only,
     successful_publication_requires_fresh_same_pr_implementation,
     successful_rework_refuses_changed_authority_scope_and_publication,
     successful_rework_reconciles_unknown_spawn_reply,
