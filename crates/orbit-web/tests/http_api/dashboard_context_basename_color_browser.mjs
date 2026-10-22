@@ -85,10 +85,7 @@ try {
       await page.evaluate(id => { location.hash = `#tasks?open=${id}`; }, id);
       await page.locator(`#detail-${id}`).waitFor();
     }
-    // Context files fold closed until opened for the task.
-    const toggle = page.locator(`#detail-${id} .context-files-block .field-toggle`);
-    await toggle.waitFor();
-    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await page.locator(`#detail-${id} [role="tab"][data-tab="context_files"]`).click();
     await page.locator(`#detail-${id} .file-list`).waitFor();
   };
   const refresh = async () => {

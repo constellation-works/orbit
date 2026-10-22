@@ -199,8 +199,7 @@
 .detail-tab:hover { color: var(--fg); }
 .detail-tab.active { color: var(--fg-strong); font-weight: 500; border-bottom-color: var(--accent); }
 .detail-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* A phone-width sheet fits all five tabs; the strip still scrolls if counts
-   grow past that. */
+/* Narrow panes scroll the tab strip as labels and counts outgrow the sheet. */
 @container task-pane (max-width: 440px) {
   .task-detail-pane .row-detail { padding: 14px 16px 16px; }
   .detail-tabs { gap: 12px; margin: 2px -16px 0; padding: 0 16px; }
@@ -826,13 +825,6 @@
 }
 .detail-disclosures > .field-block.collapsible.collapsed > h4::after { margin: 0 2px; }
 .detail-disclosures > .field-block > :not(h4) { padding: 2px 14px 16px 34px; }
-.detail-disclosures > .context-files-block > :not(h4) {
-  padding: 0;
-}
-.detail-disclosures > .context-files-block .field-editor:has(.field-editor-input) {
-  padding: 10px 14px 14px;
-  border-top: 1px solid var(--hair);
-}
 
 /* ORB-12235: an editable field block shows its value with an `edit`
    affordance, and swaps in a textarea with save/cancel while editing. The

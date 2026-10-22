@@ -85,10 +85,7 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?host=fixture-host&workspace=ws_fixture&window=24h#tasks`);
   const open = async id => {
     if (!await page.locator(`#detail-${id}`).count()) await page.locator(`[data-key="task-${id}"] .title`).click();
-    // Context files fold closed until opened for the task.
-    const toggle = page.locator(`#detail-${id} .context-files-block .field-toggle`);
-    await toggle.waitFor();
-    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await page.locator(`#detail-${id} [role="tab"][data-tab="context_files"]`).click();
     await page.locator(`#detail-${id} .file-list`).waitFor();
   };
   const refresh = async () => {
@@ -190,6 +187,7 @@ try {
   assert.equal(await highlights('CTX-4').count(), 0, 'review details retain normal hue');
   results.push({ scenario: 'active-active, self exclusion, other viewed status', passed: true, red });
   await open('CTX-1');
+  await page.locator('#detail-CTX-1 [data-tab="overview"]').click();
   await page.getByRole('button', { name: 'Edit description for CTX-1', exact: true }).click();
   const draft = page.getByRole('textbox', { name: 'Edit description for CTX-1', exact: true });
   await draft.fill('Unsaved description');
@@ -226,6 +224,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   results.push({ scenario: 'viewed/contender context and status refresh, unknown data, failure/recovery, preserved editor', passed: true });
   await page.locator('#detail-CTX-1 .field-editor .cancel').click();
+  await page.locator('#detail-CTX-1 [data-tab="context_files"]').click();
   await page.getByRole('button', { name: 'Edit context files for CTX-1', exact: true }).click();
   assert.equal(await page.getByRole('textbox', { name: 'Edit context files for CTX-1', exact: true }).inputValue(), selectors.join('\n'), 'editing contains selectors alone');
   await refresh();

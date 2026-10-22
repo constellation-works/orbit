@@ -2726,8 +2726,6 @@ const LONG_DESCRIPTION_LINES = 12;
 const expandedDescriptions = new Set();
 // Tasks whose acceptance criteria the operator expanded; a rebuild keeps them open.
 const expandedCriteria = new Set();
-// Tasks whose context files the operator opened; a rebuild keeps them open.
-const openContextFiles = new Set();
 
 function isLongDescription(text) {
   const value = String(text || "");
@@ -2980,23 +2978,8 @@ function buildTaskDetail(task, context, drain = null) {
     addField(rightCol, "External refs", buildExternalRefs(otherRefs));
   }
 
-  // A long selector list would push everything under it down the column, so
-  // it folds like Plan, closed until the operator opens it for this task.
-  if (showsEditor("context_files")) {
-    const actions = actionSlot();
-    const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
-    const fold = el("div", { class: "detail-disclosures" });
-    addField(fold, "Context files", editor("context_files", actions), true, !openContextFiles.has(task.id), {
-      actions,
-      count,
-      class: "context-files-block",
-      onToggle: (open) => (open ? openContextFiles.add(task.id) : openContextFiles.delete(task.id)),
-    });
-    rightCol.appendChild(fold);
-  }
-
-  // The overview leads; history, runs, artifacts and the thread each have a
-  // tab of their own, so the pane shows one subject at a time.
+  // The overview leads; context, history, runs, artifacts and the thread each
+  // have a tab of their own, so the pane shows one subject at a time.
   const history = buildTaskHistory(task, context);
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
@@ -3013,11 +2996,18 @@ function buildTaskDetail(task, context, drain = null) {
   ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
-  // the task, so an ordinary single-host detail keeps its five tabs; the last
-  // read for the task decides whether it shows before the panel's own read.
+  // the task. The last read decides whether it shows before the panel's own read.
   const delivery = el("div", { class: "delivery-tab" });
   const sections = buildDetailTabs(task, detail, [
     { name: "overview", label: "Overview", content: overview },
+    {
+      name: "context_files",
+      label: "Context files",
+      count: Array.isArray(task.context_files) ? task.context_files.length : 0,
+      showZeroCount: true,
+      available: showsEditor("context_files"),
+      content: showsEditor("context_files") ? el("div", { class: "field-block" }, [editor("context_files")]) : null,
+    },
     { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
     { name: "history", label: "History", count: history.count, content: history.node },
     { name: "runs", label: "Runs", count: taskRunCount(task), content: runs },
@@ -3290,12 +3280,12 @@ function buildTaskHistory(task, context) {
   return { count: meaningful.length, node: wrap };
 }
 
-const DETAIL_TAB_NAMES = ["overview", "delivery", "history", "runs", "artifacts", "comments"];
+const DETAIL_TAB_NAMES = ["overview", "context_files", "delivery", "history", "runs", "artifacts", "comments"];
 
 // The detail's tab strip and its panels. Every panel is built with the detail
 // and switching only toggles which one shows, so a draft in one tab survives
 // a visit to another. Arrow keys move between tabs (automatic activation).
-// A tab marked `available: false` (Delivery without a claim) is left out of
+// A tab marked `available: false` (such as Delivery without a claim) is left out of
 // the strip until `detail.setTabAvailable` adds it.
 function buildDetailTabs(task, detail, tabs, context) {
   const base = `detail-${task.id}`;
@@ -3333,7 +3323,7 @@ function buildDetailTabs(task, detail, tabs, context) {
       "aria-controls": `${base}-panel-${tab.name}`,
     }, [
       el("span", { class: "detail-tab-label", text: tab.label }),
-      el("span", { class: "detail-tab-count", text: tab.count ? String(tab.count) : "" }),
+      el("span", { class: "detail-tab-count", text: tab.count || tab.showZeroCount ? String(tab.count) : "" }),
     ]);
     button.dataset.tab = tab.name;
     button.addEventListener("click", (event) => {
@@ -4225,6 +4215,8 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   }
   refreshDraftCrewControl(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
+    const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
+    if (count) count.textContent = String(readinessTask.context_files.length);
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
       ul.contentionTask = readinessTask;
