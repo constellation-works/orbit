@@ -287,7 +287,8 @@ export function drainCommandParts(settings) {
 
 // The command as a copyable block, with Copy beside it.
 export function drainCommandBlock(parts, { id = null, note = "" } = {}) {
-  const command = el("pre", { class: "drain-command mono", text: parts.join(" \\\n    ") });
+  const text = parts.join(" ");
+  const command = el("pre", { class: "drain-command mono", text, title: text });
   if (id) command.id = id;
   command.tabIndex = 0;
   command.setAttribute("aria-label", "Equivalent orbit run auto command");
@@ -295,11 +296,15 @@ export function drainCommandBlock(parts, { id = null, note = "" } = {}) {
   copy.type = "button";
   copy.dataset.drainFocus = id ? `${id}-copy` : "command-copy";
   copy.addEventListener("click", async () => {
-    const copied = await copyText(parts.join(" "));
+    const copied = await copyText(text);
     copy.textContent = copied ? "Copied" : "Copy failed";
     setTimeout(() => { copy.textContent = "Copy command"; }, 1500);
   });
-  return el("div", { class: "drain-command-block" }, [command, el("div", { class: "drain-command-actions" }, [note ? el("span", { class: "drain-field-hint", text: note }) : null, copy])]);
+  const row = el("div", { class: "drain-command-row" }, [command, copy]);
+  return el("div", { class: "drain-command-block" }, [
+    row,
+    note ? el("span", { class: "drain-field-hint", text: note }) : null,
+  ]);
 }
 
 // A recorded run's settings, for "Start a window like this". Pull runs keep

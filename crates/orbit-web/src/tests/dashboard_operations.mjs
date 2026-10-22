@@ -510,13 +510,13 @@ typeConcurrency('2');
 // flag, and the command it shows is the one Start submits. A claim token is
 // sent and never shown: not in the command, the confirm dialog or the receipt.
 const startCommand = () => startNode('auto-drain-command')?.textContent || '';
-const commandParts = () => startCommand().split(' \\\n    ');
+const commandParts = () => startCommand().split(/ (?=--(?!host\b))/);
 const startIssues = () => [...(startNode('auto-drain-issues')?.children || [])].map(node => node.textContent);
 const startFlags = [...startBody.querySelectorAll('.drain-flag')].map(node => node.textContent).join(' | ');
 for (const flag of ['--workspace ws-one', '--for', '--concurrency', '--auto-concurrency', '--complete', '--approve-proposed', '--auto-fix', '--review', '--allow-crew', '--<tier>-complexity-crews', '--strict-worker-containment', '--claim-token']) {
   assert(startFlags.includes(flag), `the composer names ${flag}: ${startFlags}`);
 }
-assert(startCommand() === 'orbit run auto \\\n    --workspace ws-one \\\n    --for 2h \\\n    --concurrency 2', `the live command mirrors the choices: ${startCommand()}`);
+assert(startCommand() === 'orbit run auto --workspace ws-one --for 2h --concurrency 2', `the live command mirrors the choices: ${startCommand()}`);
 assert(![...startBody.querySelectorAll('[data-crew]')].some(chip => chip.dataset.crew === 'retired'), 'a disabled crew is not offered');
 const tierButton = (tier, label) => [...startBody.querySelectorAll(`[data-tier="${tier}"] button`)].find(node => node.textContent === label);
 startBody.querySelector('[data-crew="luna"]').click();
@@ -622,7 +622,7 @@ for (const [label, value] of [
 ]) assert(cells[label] === value, `${label} reads ${value}: ${cells[label]}`);
 assert(cells.Window.startsWith('4h · admits until'), `the window shows its length and close: ${cells.Window}`);
 const startedCommand = get('drain-started-command').textContent;
-assert(startedCommand === 'orbit run auto \\\n    --workspace ws-one \\\n    --for 4h \\\n    --concurrency 3 \\\n    --auto-concurrency enforce \\\n    --allow-crew opus,sol \\\n    --hard-complexity-crews opus:3,sol:1 \\\n    --xhard-complexity-crews \\\n    --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
+assert(startedCommand === 'orbit run auto --workspace ws-one --for 4h --concurrency 3 --auto-concurrency enforce --allow-crew opus,sol --hard-complexity-crews opus:3,sol:1 --xhard-complexity-crews --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
 get('drain-start-like').click();
 assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
 // Cloning must not extend a recorded window to the composer's default merely
@@ -713,7 +713,7 @@ assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N)
 
 typeConcurrency('2');
 drainCapacityOverride = {};
-assert(get('drain-started-command').textContent === 'orbit run auto \\\n    --pull ws-one --host server \\\n    --for 8h \\\n    --concurrency 3 \\\n    --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
+assert(get('drain-started-command').textContent === 'orbit run auto --pull ws-one --host server --for 8h --concurrency 3 --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
 // Capacity comes from the allocator's workspace reading, independently of
 // this drain's running-leaf table or whether settlement has a refusal yet.
 runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
