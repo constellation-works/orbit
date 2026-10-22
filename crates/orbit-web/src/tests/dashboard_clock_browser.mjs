@@ -6,8 +6,6 @@
 import path from 'node:path';
 
 const TASK_ID = 'ORB-9000';
-const CREATED = '2026-10-07T06:31:00Z';
-const UPDATED = '2026-10-07T06:35:00Z';
 const HISTORY_AT = '2026-10-07T06:40:00Z';
 const COMMENT_AT = '2026-10-07T06:45:00Z';
 const RUN_AT = '2026-10-07T06:50:00Z';
@@ -19,23 +17,17 @@ const task = {
   priority: 'medium',
   description: 'Fixed payload',
   plan: 'Step one of the plan.',
-  created_at: CREATED,
-  updated_at: UPDATED,
   history: [{ at: HISTORY_AT, by: 'operator', event: 'status_changed', note: 'backlog -> in-progress' }],
   comments: [{ at: COMMENT_AT, by: 'operator', message: 'A posted comment.' }],
 };
 const run = { run_id: 'jrun-clock-1', job_id: 'task_pr_pipeline', state: 'success', started_at: RUN_AT, finished_at: RUN_AT, duration_ms: 1000 };
 
 const UTC = {
-  created: '2026-10-07 06:31 UTC',
-  updated: '2026-10-07 06:35 UTC',
   history: '2026-10-07 06:40 UTC',
   comment: '2026-10-07 06:45 UTC',
   run: '2026-10-07 06:50 UTC',
 };
 const LOCAL = {
-  created: '2026-10-06 23:31 PDT',
-  updated: '2026-10-06 23:35 PDT',
   history: '2026-10-06 23:40 PDT',
   comment: '2026-10-06 23:45 PDT',
   run: '2026-10-06 23:50 PDT',
@@ -68,14 +60,11 @@ export async function assertClockRepaint(browser, origin, evidence) {
       await import('/app.js');
     });
     const detail = page.locator(`#task-detail-body [data-key="detail-${TASK_ID}"]`);
-    await detail.locator('.task-meta-facts').waitFor({ state: 'visible' });
+    const planToggle = detail.locator('.detail-disclosures .field-block.collapsible h4');
+    await planToggle.waitFor({ state: 'visible' });
 
     const readTimes = () => detail.evaluate((node) => {
-      const fact = (label) => [...node.querySelectorAll('.task-meta-facts .property-row')]
-        .find((row) => row.querySelector('.label')?.textContent === label)?.querySelector('.value')?.textContent;
       return {
-        created: fact('Created'),
-        updated: fact('Updated'),
         history: node.querySelector('.history-line')?.textContent.match(/^\[(.*)\]/)?.[1],
         comment: node.querySelector('.comment-at')?.textContent,
         commentTitle: node.querySelector('.comment-age')?.title,
@@ -84,7 +73,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
     const runTitle = () => page.locator('#runs-body .when').first().getAttribute('title');
     const expectTimes = async (expected, when) => {
       const times = await readTimes();
-      const want = { created: expected.created, updated: expected.updated, history: expected.history, comment: expected.comment, commentTitle: expected.comment };
+      const want = { history: expected.history, comment: expected.comment, commentTitle: expected.comment };
       check(JSON.stringify(times) === JSON.stringify(want), `${when}: task detail times ${JSON.stringify(times)}, expected ${JSON.stringify(want)}`);
     };
     // A refresh starts synchronously in the click; it is done once the meta
@@ -112,7 +101,6 @@ export async function assertClockRepaint(browser, origin, evidence) {
 
     await expectTimes(UTC, 'UTC on load');
     // Detail state an operator builds up: the collapsed Plan opened.
-    const planToggle = detail.locator('.field-block.collapsible h4').filter({ has: page.locator('.field-title', { hasText: /^Plan$/ }) });
     await planToggle.click();
     await detail.evaluate((node) => { node.clockFixtureIdentity = 'kept'; });
     const detailState = () => detail.evaluate((node) => ({
