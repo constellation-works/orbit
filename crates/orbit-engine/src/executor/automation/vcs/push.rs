@@ -188,10 +188,22 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     // on exactly that head, whatever else the run observed. The read is
     // lenient: a run checkpointed before the step named the field has none,
     // and adopted no branch.
-    let adopted_head = input
-        .get("candidate_resume")
-        .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
-        .or(repair_lease);
+    // A same-run final replay also republishes an authenticated candidate.
+    // A repeated no-op sync must not erase its exact published-head lease.
+    // This run's own publication supersedes an earlier candidate_resume lease.
+    let adopted_head = super::commit::final_recovery_publication_lease(
+        host,
+        input,
+        workspace_path,
+        &branch,
+        &local_sha,
+    )?
+    .or_else(|| {
+        input
+            .get("candidate_resume")
+            .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
+    })
+    .or(repair_lease);
     if let Some(adopted) = &adopted_head
         && remote_sha.as_deref() != Some(adopted.as_str())
         && remote_sha.as_deref() != Some(local_sha.as_str())

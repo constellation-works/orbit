@@ -38,4 +38,5 @@ pub(super) use tagged_no_diff::DECISION as NO_DIFF_EXPECTED_SKIP;
 #[cfg(test)]
 mod tests;
 
+pub(super) use published_replay::final_recovery_publication_lease;
 pub(crate) use published_replay::{PUBLISHED_REPLAY_STEPS, published_candidate_matches};

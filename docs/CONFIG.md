@@ -1269,6 +1269,17 @@ passed unchanged, including any literal template tokens in its text. Later
 phases do not inherit it. Run-show recovery attempts include the resume
 rationale in their detail.
 
+When the resumed phase revisits a published candidate, Orbit authenticates
+the exact host commit, branch, preparation and synchronization checkpoints.
+An interruption after a replay rebase can continue before the new head is
+pushed: the old push and PR outputs still describe the previous publication.
+The setup pin remains immutable, and ancestry alone cannot authorize a changed
+HEAD. Missing or inconsistent provenance refuses the candidate. Resuming the
+phase reruns candidate validation, configured review and handoff evidence;
+the existing pull request is reused. Republication is leased to the exact
+previously published head, including when the repeated sync has no rebase
+left to perform. A changed or deleted remote branch refuses that push.
+
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
 The bound has no configuration key. What final recovery escalates waits in

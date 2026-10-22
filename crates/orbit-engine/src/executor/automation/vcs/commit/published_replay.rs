@@ -6,7 +6,7 @@ use super::checkpoint::pinned_object_id;
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::super::git::git_output;
 use super::checkpoint::head_descends_from_pin;
@@ -29,7 +29,7 @@ fn checkpoint<'a>(state: &'a PipelineState, id: &str) -> Option<&'a Value> {
     })
 }
 
-/// Authenticate the exact published HEAD from successful host outputs. Neither
+/// Authenticate a published HEAD or its exact host replay continuation. Neither
 /// ancestry alone nor observing the current HEAD creates this authority. The
 /// run's final-recovery receipt and task ownership are checked by the caller.
 pub(crate) fn published_candidate_matches(
@@ -80,15 +80,19 @@ pub(crate) fn published_candidate_matches(
     // A replay that has crossed its host commit boundary already records the
     // exact current branch and candidate, including a file repair. This also
     // survives interruption before preparation/synchronization rerun.
-    if committed == head
-        && commit.get("final_recovery_replay").and_then(Value::as_bool) == Some(true)
-        && text(commit, "candidate_branch").as_deref() == Some(&branch)
-    {
-        return head_descends_from_pin(workspace, pin, head);
+    let replay = commit.get("final_recovery_replay").and_then(Value::as_bool) == Some(true);
+    if replay {
+        if text(commit, "candidate_branch").as_deref() != Some(&branch) {
+            return Ok(false);
+        }
+        if committed == head {
+            return head_descends_from_pin(workspace, pin, head);
+        }
     }
-    let [Some(_), Some(prepared), Some(sync), Some(push), Some(pr)] =
-        PUBLISHED_REPLAY_STEPS.map(|(id, _)| checkpoint(state, id))
-    else {
+    let (Some(prepared), Some(sync)) = (
+        checkpoint(state, "prepare_branch"),
+        checkpoint(state, "sync_base"),
+    ) else {
         return Ok(false);
     };
     let Some(base) = text(sync, "base_sha") else {
@@ -99,20 +103,33 @@ pub(crate) fn published_candidate_matches(
     };
     if text(prepared, "head").as_deref() != Some(&branch)
         || text(sync, "head").as_deref() != Some(&branch)
-        || text(push, "branch").as_deref() != Some(&branch)
-        || text(pr, "head").as_deref() != Some(&branch)
         || text(prepared, "base").as_deref() != Some(&base_branch)
-        || text(pr, "base").as_deref() != Some(&base_branch)
         || text(prepared, "base_sha").as_deref() != Some(&base)
-        || text(pr, "base_sha").as_deref() != Some(&base)
         || text(prepared, "head_sha").as_deref() != Some(&committed)
         || text(sync, "head_sha_before").as_deref() != Some(&committed)
         || text(sync, "head_sha").as_deref() != Some(head)
-        || text(push, "local_sha").as_deref() != Some(head)
-        || text(pr, "pr_number").is_none_or(|number| number.is_empty())
         || sync.get("rewritten").and_then(Value::as_bool) != Some(committed != head)
         || !head_descends_from_pin(workspace, pin, &committed)?
         || !head_descends_from_pin(workspace, &base, head)?
+    {
+        return Ok(false);
+    }
+    // Once an authenticated replay crosses the host commit boundary, its
+    // preparation and rebase receipts authenticate the next exact HEAD. Push
+    // and PR checkpoints may still belong to the preceding publication when
+    // interrupted here. They convey no authority over this new candidate.
+    if replay {
+        return Ok(true);
+    }
+    let (Some(push), Some(pr)) = (checkpoint(state, "push"), checkpoint(state, "pr_open")) else {
+        return Ok(false);
+    };
+    if text(push, "branch").as_deref() != Some(&branch)
+        || text(pr, "head").as_deref() != Some(&branch)
+        || text(pr, "base").as_deref() != Some(&base_branch)
+        || text(pr, "base_sha").as_deref() != Some(&base)
+        || text(push, "local_sha").as_deref() != Some(head)
+        || text(pr, "pr_number").is_none_or(|number| number.is_empty())
     {
         return Ok(false);
     }
@@ -162,4 +179,54 @@ pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
         published_candidate_matches(&state, owner, task, workspace, &pin, &head)?
             .then_some((pin, head)),
     )
+}
+
+/// A replay may rerun synchronization after an interrupted rebase and find
+/// nothing left to rewrite. Keep publication leased to the preceding host
+/// push, rather than treating that no-op as authority to overwrite a remote.
+pub(in crate::executor::automation::vcs) fn final_recovery_publication_lease<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    input: &Value,
+    workspace: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(owner) = input_string_field(input, "job_run_id") else {
+        return Ok(None);
+    };
+    let Some(state) = host.read_run_state(&owner)? else {
+        return Ok(None);
+    };
+    let (Some(worktree), Some(commit), Some(push), Some(pr)) = (
+        checkpoint(&state, "worktree"),
+        checkpoint(&state, "commit"),
+        checkpoint(&state, "push"),
+        checkpoint(&state, "pr_open"),
+    ) else {
+        return Ok(None);
+    };
+    if commit["final_recovery_replay"] != true
+        || commit["candidate_branch"] != branch
+        || push["branch"] != branch
+        || pr["head"] != branch
+        || pr["pr_number"].as_str().is_none_or(str::is_empty)
+    {
+        return Ok(None);
+    }
+    let (Some(task), Some(pin), Some(lease)) = (
+        commit["task_id"].as_str(),
+        worktree["base_sha"].as_str(),
+        push["local_sha"].as_str(),
+    ) else {
+        return Ok(None);
+    };
+    let mut authentication = input.clone();
+    authentication["base_sha"] = json!(pin);
+    let authenticated =
+        final_recovery_published_candidate(host, &authentication, &owner, task, workspace)?;
+    Ok(authenticated
+        .filter(|(_, candidate)| candidate == head)
+        .map(|_| lease.to_string()))
 }
