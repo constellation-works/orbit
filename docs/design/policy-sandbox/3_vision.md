@@ -8,7 +8,7 @@ status: Draft
 feature: policy-sandbox
 doc_role: vision
 tags: ["policy-sandbox"]
-last_validated: 2026-10-18
+last_validated: 2026-10-21
 ---
 
 # Policy & Sandboxing — Vision

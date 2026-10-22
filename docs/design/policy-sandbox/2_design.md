@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 last_updated: 2026-10-18
-last_validated: 2026-10-18
+last_validated: 2026-10-21
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -95,7 +95,7 @@ What remains:
 - Historical audit/import fixtures that name retired `fs.*` tools. Those strings stay parseable; a removed tool name is not a deserialization error.
 - `ctx.fs_profile` / `ctx.policy_engine`, which the CLI sandbox compiler still uses to compile OS write confinement.
 
-**Scope.** Agent dispatch spawns Claude Code, Codex CLI, Gemini, or another harness via `cli_runner.rs`, emits `tool_allowlist.harness_delegated`, and trusts that harness for tool allowlists — the engine-driven loop that enforced allowlists in-process was retired in [ORB-10801]. For task-backed dispatch, [ORB-11069] composes the effective allowlist as the deduplicated union of the activity baseline and exact `task.required_tools` before launch. Those requirements are normalized and fixed when the task is created; existing-task updates cannot change that authority. This composition changes only allowlist membership: caller role, registered host capability, tool-specific policy, filesystem policy, subprocess allowlists, and external authentication still run and may deny the tool independently. On macOS, executors declaring `sandbox: macos-sandbox-exec` also get the OS-level wrapper in §7, so `fsProfile:` can still narrow CLI filesystem writes.
+**Scope.** Agent dispatch spawns Claude Code, Codex CLI, Gemini, or another harness via the `cli_runner/` module (`crates/orbit-engine/src/activity_job/cli_runner/`), emits `tool_allowlist.harness_delegated`, and trusts that harness for tool allowlists — the engine-driven loop that enforced allowlists in-process was retired in [ORB-10801]. For task-backed dispatch, [ORB-11069] composes the effective allowlist as the deduplicated union of the activity baseline and exact `task.required_tools` before launch. Those requirements are normalized and fixed when the task is created; existing-task updates cannot change that authority. This composition changes only allowlist membership: caller role, registered host capability, tool-specific policy, filesystem policy, subprocess allowlists, and external authentication still run and may deny the tool independently. On macOS, executors declaring `sandbox: macos-sandbox-exec` also get the OS-level wrapper in §7, so `fsProfile:` can still narrow CLI filesystem writes.
 
 On Linux, shipped agent executors declare `linux-bwrap`. The wrapper enforces writes from the resolved `modify` policy but deliberately records reads as `read_delegated`; this is not general read-allowlist parity. The one fixed read boundary is the well-known credential locations, which are masked as on macOS (§7.1).
 
@@ -239,7 +239,7 @@ extension, so this check does not enforce PTY ownership or isolation. Normal
 OS access checks still apply. The added allocation and ioctl permissions
 target PTY devices; Linux Bubblewrap has no equivalent SBPL operation gate.
 
-The ADR lifecycle tools are retired: the tool host refuses any ADR action ("ADR lifecycle tools have been retired"), `agent_implement` exposes none of them, and the sandbox adds no writable `.orbit/adrs` mount. Decisions are edited in `docs/design/**/4_decisions.md` like any other document.
+The ADR tool family is retired: the public tool registry no longer registers `orbit.adr.*` (pinned by `crates/orbit-tools/tests/tools/public_tool_surface.rs`), registered-but-unexposed stores such as ADRs stay denied until their tools join an activity allowlist, and the sandbox adds no writable `.orbit/adrs` mount. Decisions are edited in `docs/design/**/4_decisions.md` like any other document.
 
 Negated `read` / `modify` rules become explicit SBPL denies in resolved order. Explicit host-policy exceptions and host-owned runtime roots appear after the enclosing deny, preserving last-match-wins without opening unrelated siblings. Simple path and `/**` subtree denials compile to `subpath`; non-subpath globs such as `**/*.env` compile to `regex`.
 
@@ -485,10 +485,10 @@ Non-Unix builds can only kill and reap the direct child; process-group semantics
 
 ## 9. Test surfaces
 
-Risk-weighted regression tests sit beside the implementations they guard
-([T20260509-7]):
+Risk-weighted regression tests live in each crate's integration test tree,
+not beside the implementations they guard ([T20260509-7]):
 
-- `crates/orbit-policy/src/engine.rs#tests` — `PolicyEngine::check` boundary
+- `crates/orbit-policy/tests/policy/engine.rs` — `PolicyEngine::check` boundary
   semantics: positive read-rule matches return `allowed=true` with the rule
   recorded in `matched_rule`; modify paths outside any positive rule resolve
   to `allowed=false`; ordinary global `denyRead` / `denyModify` rules override
@@ -500,6 +500,7 @@ Risk-weighted regression tests sit beside the implementations they guard
   modify checks ([T20260509-27]). The same surface proves host modify
   exceptions intersect profile authority, workspace exceptions cannot exceed
   the host surface, and later workspace denies still win ([ORB-10560]).
+  The traversal cases live in `crates/orbit-policy/tests/policy/admission.rs`.
 - `crates/orbit-exec/src/linux_landlock/tests/` and
   `crates/orbit-exec/tests/sandbox/linux_landlock.rs` — grant compilation decides the
   workspace and host tables without applying a ruleset, while the integration
@@ -534,8 +535,8 @@ Risk-weighted regression tests sit beside the implementations they guard
   synthetic Keychain material stays unreadable; platform-neutral fixtures pin
   explicit-variable precedence, missing-path errors, and the exact provider /
   backend environment boundary ([ORB-11406]).
-- `crates/orbit-store/src/file/policy_def_store/` — policy resource
-  name tests reject traversal-shaped names such as `../x` before path
+- `crates/orbit-store/tests/store/file_store/policy.rs` — policy resource
+  name tests (over `crates/orbit-store/src/driver/file/policy_def_store/`) reject traversal-shaped names such as `../x` before path
   construction and assert no file is written outside the policy store
   ([T20260509-28]).
 
