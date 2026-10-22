@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.31.0 — 2026-10-22
+
+### Breaking Changes
+
+- **Executor census migration**: opening a workspace applies SQLite v55 (`executor_census`). The migration is additive at runtime but changes persisted storage; upgrade hosts together. Rust callers must replace `automatic_dispatch_cmp_for_host` and `AdmissionOrdering.owner_os` with the affinity/census inputs. ([ORB-17304])
+- **Crew accounts migration**: opening a workspace applies SQLite v56 (`provider_crew_accounts`). Environment-backed crews now have separate account identities → explicitly allow those crews when an allow-list previously relied on their provider's default account. ([ORB-17288])
+- **Handoff storage compatibility**: SQLite v57 moves handoff settlements into a sidecar and guards stale inline writers. Older binaries reopened afterward are read-only; already-running intermediate writers reject handoffs → upgrade and restart Orbit clients, including long-lived MCP servers, to resume writes. Rust settlement constructors and exhaustive matches also need updates. ([ORB-17530])
+- **Workspace source credentials**: fresh workspace registration rejects Git origins containing embedded credentials; discovery redacts legacy values without rewriting registrations → use credential-free origins and a credential helper. ([ORB-17222])
+- **External-merge Rust API**: `ClaimMutation` adds `SettleExternalMerge`; downstream exhaustive matches must handle the new variant. ([ORB-17078])
+
+### Highlights
+
+- **Crew-specific provider accounts**: environment-backed crews have separate usage limits, holds, auth exclusions and budget targets. Crews without an environment retain the provider's default account. ([ORB-17288])
+- **Scarcity-aware task admission**: distributed and owner-local drains use a live executor census to prioritize work that fewer eligible hosts can run, with a workspace setting for affinity reach. ([ORB-17304])
+- **Drain controls**: the dashboard composer covers local and pull drains, auto-run options, recorded settings and pull claim stages. ([ORB-17302])
+- **Task detail navigation**: context files have a dedicated tab beside History, Runs, Artifacts and Comments, with the existing editor and keyboard navigation. ([ORB-17508])
+
 ## 0.30.0 — 2026-10-20
 
 ### Breaking Changes

@@ -144,11 +144,14 @@ make build
 make release-check
 ./scripts/smoke-plugin-install.sh
 ./scripts/smoke-npm-install.sh --dry-run-version-assertion
+./scripts/smoke-npm-install.sh --local-package-check
+./scripts/smoke-npm-install.sh --local-binary-check target/debug/orbit
 ```
 
 - `make build` must be clean. `cargo update --workspace` should re-lock only Orbit crates. Investigate any third-party movement.
 - `make release-check` ([what it checks](docs/runbooks/release.md#what-make-release-check-enforces)) fails on any local version drift. Before npm and the GitHub Release exist, drift against the previous remote version is expected.
 - If this cycle changed a CLI the npm smoke drives (`orbit init`, `workspace init`, `mcp serve`), update `scripts/smoke-npm-install.sh` in the release commit. The tag-triggered smoke runs the tag's copy of the script, so a later fix can't turn it green.
+- Before publication, the local package check packs and inspects the candidate without lifecycle scripts; the local binary check exercises isolated init, credential-origin rejection, explicit `ORBIT_ROOT` discovery and agent authority refusals against `make build`'s output. Neither proves the published download/signature chain. Run the default smoke after npm publication for that proof.
 - If `install.sh` changed, test it locally. The release smoke fetches it from the tag.
 - If this cycle changed `desktop/` or the desktop jobs, prove the Linux desktop legs before tagging: Actions → `Desktop App` → **Run workflow** on the branch you will tag. Its `Release bundle` jobs run `build-desktop`'s Linux legs (`ubuntu-22.04` x86_64 and `ubuntu-22.04-arm` arm64, the same `cargo tauri build --ci --target … -- --locked` command) and check for exactly one `.deb` and one `.AppImage` each. They upload unsigned workflow artifacts and publish nothing.
 
