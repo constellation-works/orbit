@@ -46,7 +46,9 @@ Its **Start a window** view (`#drain/start`) composes any `orbit run auto`
 start, local or pull, and its Log view is `#drain/log`. The same dock, with the
 Auto-drain status card, a simple Start a window card, Locks held and the Log
 view, sits beside the task list on Tasks and gives way to the task pane when a
-task opens; the composer stays on Drain.
+task opens; the composer stays on Drain. On a replica checkout, the simple
+local Start stays disabled with the runtime checkout refusal and a link to
+`#drain/start` to pull from the owner.
 The Drain page shows the fleet drains, including in **All workspaces** mode,
 grouped under one heading per host: one line per workspace with its drain
 phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most

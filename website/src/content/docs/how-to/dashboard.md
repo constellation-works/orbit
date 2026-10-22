@@ -220,7 +220,9 @@ The right dock has two tabs. **Drain** shows the auto-drain card, a simple
 **Start a window** card (window length, parallel tasks, admission control and
 what happens after a task ships; see [auto-drain](#auto-drain)) and the files
 tasks currently lock. Every other `orbit run auto` option is on the Drain
-page's **Start a window** tab. There the card states a host throttle as its own amber note and draws each
+page's **Start a window** tab. On a replica checkout, the Tasks card disables
+Start, shows why local draining is refused, and links to the Drain composer
+to pull from the owner. There the card states a host throttle as its own amber note and draws each
 forecast peak as a bar against its threshold. **Log** is a
 live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
 **warn**. Opening a task replaces the dock with the task's detail; below
