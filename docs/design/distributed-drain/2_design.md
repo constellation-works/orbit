@@ -2,7 +2,7 @@
 title: Distributed Drain — Design
 owner: claude
 last_updated: 2026-10-21
-last_validated: 2026-10-18
+last_validated: 2026-10-21
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -1461,11 +1461,13 @@ Acceptance criteria, not reported as passing.
   demoted host's drains and coordination routines must be quiesced before replica pull.
 - **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial
   landing and per-host compiler caches.
-- **Placement is first-fit and capacity-blind.** Admission takes the first eligible task in the
-  owner's order for the requesting executor. The census puts work only that executor can run
-  first, but it tracks liveness, not free slots: a fungible task can wait while the only other
-  executor that could run it is saturated. `workflow.admission_affinity = "priority"` is the
-  escape hatch, bounding that wait to one priority.
+- **Placement is first-fit; capacity is not tracked at slot granularity.** Admission takes the
+  first eligible task in the owner's order for the requesting executor. Under
+  `machine.auto_concurrency = "enforce"`, the request also filters out task classes its host
+  load forecast cannot support. The census puts work only that executor can run first, but it
+  does not report remaining slots: a fungible task can wait while the only other executor that
+  could run it is saturated. `workflow.admission_affinity = "priority"` is the escape hatch,
+  bounding that wait to one priority.
 - **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References
