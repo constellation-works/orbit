@@ -8,8 +8,8 @@ tags: [plugins, security, sandbox, supply-chain, install]
 paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
-last_updated: 2026-10-04
-last_validated: 2026-10-18
+last_updated: 2026-10-22
+last_validated: 2026-10-22
 ---
 
 # Threat model: install-time spec.build for source-built plugins
@@ -170,8 +170,10 @@ loopback, and a pid namespace whose teardown kills every descendant (§4, leftov
   offline `build` phase and later processes run. A build-only manifest (vendored or otherwise
   offline dependencies) still runs on macOS under `(deny network*)`. A source that needs a
   network fetch builds on Linux, or ships as a prebuilt archive.
-- Orbit fetches the plugin source itself, before either phase, with the existing hardened
-  `git clone` (scope §3). The build never sees `.git` or the source URL's credentials.
+- Orbit fetches the plugin source itself before either build phase. It initializes a fresh
+  repository, fetches the requested commit with `git fetch --depth 1 --no-tags`, then checks
+  out `FETCH_HEAD` detached and verifies that `HEAD` is the requested commit (§6). The build
+  never sees `.git` or the source URL's credentials.
 - Private registries are not supported. No registry credential, `.netrc`, `.npmrc` auth line or
   `CARGO_REGISTRIES_*` token is ever made available (§3.5), so a dependency that needs one fails.
 
