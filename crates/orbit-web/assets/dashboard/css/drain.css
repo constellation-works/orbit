@@ -302,7 +302,8 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 
 /* Start a window. */
 .drain-start-sub { color: var(--fg-mute); font: 400 12.5px var(--font-sans); font-variant-numeric: tabular-nums; }
-#auto-drain-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; container: drain-compose / inline-size; }
+#auto-drain-start-body, #auto-drain-quick-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; }
+#auto-drain-start-body { container: drain-compose / inline-size; }
 .drain-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .drain-field-label { color: var(--fg-soft); font: 400 13px var(--font-sans); }
 /* The label line: its help is an info hint whose bubble spans the line. */
@@ -525,9 +526,21 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-settlements ul { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--fg-mute); font-size: 12.5px; }
 .drain-settlements li.warn { color: var(--warn-fg); }
 
-/* A Start's result sits under the Start card (index.html), as a panel of its own,
-   so it shows on Drain and in the Tasks dock alike. */
-#side-dock > .operation-feedback:not(:empty) { min-height: 0; margin-top: 12px; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
+/* The Tasks dock's simple Start card: six window lengths in one row, and a
+   footer that ends the card rather than sticking to the pane. */
+#auto-drain-quick-start .drain-durations {
+  display: grid; gap: 3px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+#auto-drain-quick-start .drain-start-foot { position: static; }
+#auto-drain-quick-start .drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: 14px; }
+
+/* A Start's result, as a panel of its own: above every view on Drain, and
+   under the Tasks dock's Start card (operations.js places it). */
+#side-dock > .operation-feedback:not(:empty) { margin-top: 12px; }
+#side-dock > .operation-feedback:not(:empty),
+.drain-col-side > .operation-feedback:not(:empty) { min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
