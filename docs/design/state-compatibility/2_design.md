@@ -296,6 +296,44 @@ and a breaking one refuses, naming it. Upgrade admission keeps reporting the
 frozen feature versions and breaking floors in `CompatibilityIdentity`,
 because those older binaries still compare them.
 
+## 10 Handoff settlement attribution and older lifecycle readers
+
+Store v57, `handoff_settlement_sidecars`, restores the closed `fail` / `release`
+settlement vocabulary in `distributed-claim-lifecycle-v1`. A typed handoff writes
+its complete settlement record as `distributed-handoff-settlement-v1`, keyed by
+the same workspace and claim, in the transaction that records handoff authority,
+the lifecycle transition and the mutation receipt. New inspection and targeted
+claim reads project that immutable row into `ClaimInspection.settlement`; failure
+and release storage and scorecard classification stay unchanged. Older lifecycle
+writers never touch this row, so their later revocation or landing writes cannot
+discard handoff attribution. No unknown enum value is accepted or reclassified.
+
+The migration moves already-written inline `handoff` settlements, preserving
+every field, including unknown extensions, and their journal identity and creation
+time. Both the move and the version/compatibility stamp commit atomically. A
+conflicting existing attribution row refuses the upgrade and rolls it back;
+matching duplicate evidence is retained. Retry resumes from the old version.
+Execution claims, accepted handoffs, authorizations, mutation/admission receipts,
+and their input identity remain byte-for-byte unchanged. Journal recovery intents
+contain bundle events/envelopes/evidence rather than claim lifecycle snapshots;
+they need no rewrite, and replay cannot restore the incompatible inline value.
+
+v57 is `ReadCompatible`. Two database triggers reject INSERT or UPDATE of an
+inline `handoff` settlement with an explicit restart diagnostic. They protect
+already-open intermediate development writers as well as new connections, before
+the deciding transaction can publish any authority or receipt change. The separate
+row family alone would not prevent such a writer from recreating incompatible
+state after the one-time repair. The triggers do not reinterpret or drop evidence.
+
+New opens by an older binary therefore follow the existing enforced read-only
+contract, including refusal of audit appends; upgrade/restart that client to resume
+writes. An already-open v0.30.0 process can continue safe audited operations across
+the migration and new handoffs: its handoffs legitimately omit attribution and
+never write the guarded value. An already-open intermediate inline-handoff writer
+receives the pre-mutation refusal and must restart on the repaired binary. Upgrade
+admission also sees the v57 writer floor and uses the existing generation handover.
+There is no new layout version, and no shipped migration is changed.
+
 ## Task References
 
 - [ORB-10003] versioned schema ledger; [ORB-10012] layout registry and

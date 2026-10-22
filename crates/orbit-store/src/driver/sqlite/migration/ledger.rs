@@ -576,12 +576,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_provider_crew_accounts,
     },
+    // Restore older lifecycle readers without reinterpreting a handoff as
+    // fail/release. Only attribution moves to a row family they never touch;
+    // authority, receipts and bundle recovery intents keep their bytes.
+    // A write guard also fences already-open pre-repair handoff writers;
+    // that restriction makes the migration read-compatible, not additive.
+    Migration {
+        version: 57,
+        name: "handoff_settlement_sidecars",
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_handoff_settlement_sidecars,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 56;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 57;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

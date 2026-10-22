@@ -715,9 +715,10 @@ pub(super) fn error_code(response: Response, status: u16, code: &str) -> Value {
 }
 
 /// Restore the pre-retention-analytics store shape so the public open path
-/// must backfill existing rows, rewinding the later executor census and crew
-/// account readings with it. The fixture records invocations with the
-/// current binary before the upgrade, so `invocations.account` stays.
+/// must backfill existing rows, rewinding the later executor census, crew
+/// account readings and handoff write guards with it. The fixture records
+/// invocations with the current binary before the upgrade, so
+/// `invocations.account` stays.
 /// Fixture-only; every caller runs in a child.
 pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
     fixture
@@ -727,7 +728,10 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DROP TABLE provider_account_limit_observations;
+                    "DROP TRIGGER handoff_settlement_insert_guard;
+             DROP TRIGGER handoff_settlement_update_guard;
+             DELETE FROM schema_meta WHERE key = 'migration.v0057';
+             DROP TABLE provider_account_limit_observations;
              DELETE FROM schema_meta WHERE key = 'migration.v0056';
              DROP TABLE executor_census;
              DELETE FROM schema_meta WHERE key = 'migration.v0055';

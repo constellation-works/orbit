@@ -431,6 +431,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0056".to_string(),
                 "provider_crew_accounts".to_string(),
             ),
+            (
+                "migration.v0057".to_string(),
+                "handoff_settlement_sidecars".to_string(),
+            ),
         ]
     );
 }

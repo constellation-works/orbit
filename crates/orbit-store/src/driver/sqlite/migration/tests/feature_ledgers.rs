@@ -142,7 +142,10 @@ fn absorption_writes_what_each_feature_open_wrote() {
 #[test]
 fn a_binary_without_absorption_keeps_writing_and_decides_features_from_their_records() {
     let conn = Connection::open_in_memory().expect("fixture");
-    ledger::run_migrations(&conn, ledger::MIGRATIONS).expect("migrate");
+    // This guarantee belongs to additive v49; a later read-compatible or
+    // breaking store migration must still fence a v48 writer.
+    ledger::run_migrations(&conn, &ledger::MIGRATIONS[..before_absorption().len() + 1])
+        .expect("migrate to v49");
     let rows = feature_rows(&conn);
 
     let open = ledger::run_migrations(&conn, before_absorption())

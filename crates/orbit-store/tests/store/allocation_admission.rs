@@ -32,6 +32,8 @@ mod claim_reads;
 mod claim_retention;
 #[path = "allocation_admission/dependencies.rs"]
 mod dependencies;
+#[path = "allocation_admission/handoff_compatibility.rs"]
+mod handoff_compatibility;
 #[path = "allocation_admission/known_red.rs"]
 mod known_red;
 #[path = "allocation_admission/mutation_receipts.rs"]

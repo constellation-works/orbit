@@ -8,8 +8,8 @@ use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
 use super::super::TaskCommitBoundary;
 use super::super::landing::LandingStop;
 use super::codec::{
-    CLAIM, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT, RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS,
-    STATE,
+    CLAIM, HANDOFF_SETTLEMENT, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT, RELEASE_BUDGET,
+    RELEASE_BUDGET_WINDOW_HOURS, STATE,
 };
 use super::releases::release_budget_comment;
 use super::{ClaimAuthority, MutationReceipt, decode, decode_state, encode, invalid, row};
@@ -519,12 +519,19 @@ impl TaskCommitBoundary {
                     evidence.summary = Some(handoff.execution_summary.clone());
                     // Attribution only: the record keeps the crew and model
                     // the follower reported beside the handoff.
-                    state.settlement = Some(ClaimSettlementRecord::of(
-                        ClaimSettlementKind::Handoff,
-                        &evidence,
-                        &auth.attribution,
-                        Utc::now().to_rfc3339(),
-                    ));
+                    // Older lifecycle readers have a closed fail/release enum.
+                    // Keep handoff attribution in its own immutable row, in the
+                    // same commit as authority, lifecycle and mutation receipt.
+                    params.rows.push(row(
+                        HANDOFF_SETTLEMENT,
+                        &claim.claim_id,
+                        &ClaimSettlementRecord::of(
+                            ClaimSettlementKind::Handoff,
+                            &evidence,
+                            &auth.attribution,
+                            Utc::now().to_rfc3339(),
+                        ),
+                    )?);
                     state.claim.phase = ExecutionClaimPhase::HandedOff;
                     params.status = Some(TaskStatus::Review);
                     release = true;

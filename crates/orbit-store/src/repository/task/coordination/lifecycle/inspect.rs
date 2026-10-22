@@ -2,7 +2,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 
 use super::super::{Section, TaskCommitBoundary};
-use super::codec::{CLAIM, STATE};
+use super::codec::{CLAIM, HANDOFF_SETTLEMENT, STATE};
 use super::{decode, decode_state, invalid};
 use crate::contracts::*;
 
@@ -42,7 +42,17 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| {
             self.store
                 .task_coordination_row(&self.workspace_id, CLAIM, claim_id)?
-                .map(|row| self.claim_state(decode(&row.payload_json)?))
+                .map(|row| {
+                    let mut state = self.claim_state(decode(&row.payload_json)?)?;
+                    if let Some(attribution) = self.store.task_coordination_row(
+                        &self.workspace_id,
+                        HANDOFF_SETTLEMENT,
+                        claim_id,
+                    )? {
+                        attach_handoff_settlement(&mut state, &attribution.payload_json)?;
+                    }
+                    Ok(state)
+                })
                 .transpose()
         })
     }
@@ -50,12 +60,23 @@ impl TaskCommitBoundary {
     /// Caller holds the boundary and has already settled or excluded a
     /// pending commit.
     pub(in super::super) fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        // Read the immutable sidecars once, rather than one query per claim.
+        let attribution: std::collections::BTreeMap<_, _> = self
+            .store
+            .task_coordination_rows(&self.workspace_id, HANDOFF_SETTLEMENT)?
+            .into_iter()
+            .map(|row| (row.row_id, row.payload_json))
+            .collect();
         self.store
             .task_coordination_rows_with_related_payload(&self.workspace_id, CLAIM, STATE)?
             .into_iter()
             .map(|(row, state)| {
                 let claim = decode(&row.payload_json)?;
-                claim_state_from_payload(claim, state.as_deref())
+                let mut state = claim_state_from_payload(claim, state.as_deref())?;
+                if let Some(payload) = attribution.get(&state.claim.claim_id) {
+                    attach_handoff_settlement(&mut state, payload)?;
+                }
+                Ok(state)
             })
             .collect()
     }
@@ -69,6 +90,22 @@ impl TaskCommitBoundary {
             existing.as_ref().map(|row| row.payload_json.as_str()),
         )
     }
+}
+
+/// Projection only: mutations keep reading/writing the compatible lifecycle
+/// row, and neither old nor new lifecycle rewrites can discard attribution.
+fn attach_handoff_settlement(state: &mut ClaimInspection, payload: &str) -> Result<(), OrbitError> {
+    let settlement: ClaimSettlementRecord = decode(payload)?;
+    if settlement.kind != ClaimSettlementKind::Handoff
+        || state
+            .settlement
+            .as_ref()
+            .is_some_and(|existing| existing != &settlement)
+    {
+        return Err(invalid("inconsistent handoff settlement attribution"));
+    }
+    state.settlement = Some(settlement);
+    Ok(())
 }
 
 /// Both the batched inspection and a single-claim read reconstruct legacy
