@@ -123,8 +123,9 @@ globalThis.fetch = async (input, options = {}) => {
     if (task && options.method === 'PATCH') {
       const body = JSON.parse(options.body);
       globalThis.panelFixture.patches.push({ id: task.id, body });
-      task.crew = body.crew;
+      if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
+      if (body.context_files) task.context_files = body.context_files;
     }
     return task ? json(full(task)) : json({ error: 'not found' }, 404);
   }
@@ -371,11 +372,33 @@ try {
     assert.ok(refreshed.marked && refreshed.scrollTop === selected.scrollTop, `A refresh must keep the list's rows and scroll: ${JSON.stringify({ selected, refreshed })}`);
     assert.equal(await openParam(page), 'PANEL-8', 'A refresh keeps the selection');
 
-    // The five tabs reuse the detail renderers; Runs is read only when shown.
+    // The six tabs reuse the detail renderers; Runs is read only when shown.
     const tabs = page.locator('#task-detail-body [role="tab"]');
-    assert.deepEqual((await tabs.allInnerTexts()).map(text => text.replace(/\s*\d+$/, '').trim()), ['Overview', 'History', 'Runs', 'Artifacts', 'Comments']);
+    assert.deepEqual((await tabs.allInnerTexts()).map(text => text.replace(/\s*\d+$/, '').trim()), ['Overview', 'Context files', 'History', 'Runs', 'Artifacts', 'Comments']);
     assert.ok(await page.locator('#task-detail-body .acceptance-list, #task-detail-body .ac-list, #task-detail-body li', { hasText: 'The list keeps its scroll position' }).first().isVisible(), 'Overview shows the acceptance criteria');
     assert.equal(await page.evaluate(() => globalThis.panelFixture.reads.filter(read => read.startsWith('/api/job-runs?task_id=PANEL-8')).length), 0, 'Runs are not read until their tab opens');
+    const contextTab = page.locator('#task-detail-body [data-tab="context_files"]');
+    assert.equal(await contextTab.locator('.detail-tab-count').innerText(), '0', 'Empty editable context stays available with a zero count');
+    assert.equal(await page.locator('#task-detail-body .detail-side .file-list').count(), 0, 'Context selectors leave the Overview side column');
+    await contextTab.click();
+    const contextPanel = page.locator('#' + await contextTab.getAttribute('aria-controls'));
+    assert.equal(await contextPanel.getAttribute('aria-labelledby'), await contextTab.getAttribute('id'));
+    await contextPanel.getByRole('button', { name: 'Edit context files for PANEL-8', exact: true }).click();
+    await contextPanel.getByRole('textbox', { name: 'Edit context files for PANEL-8', exact: true }).fill('file:src/main.rs\n dir:docs');
+    await contextPanel.getByRole('button', { name: 'save', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('#detail-PANEL-8-tab-context_files .detail-tab-count')?.textContent === '2');
+    assert.equal(await contextTab.getAttribute('aria-selected'), 'true', 'Saving keeps Context files selected');
+    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['file:src/main.rs', 'dir:docs']);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches.at(-1).body), { context_files: ['file:src/main.rs', 'dir:docs'] }, 'Save patches only selectors');
+    await capture(page, 'context-files-dark-1440.png');
+    await contextTab.focus();
+    await page.keyboard.press('ArrowRight');
+    assert.match(await page.locator('#task-detail-body [aria-selected="true"]').innerText(), /^History/, 'ArrowRight advances from Context files');
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await contextTab.getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('End');
+    assert.match(await page.locator('#task-detail-body [aria-selected="true"]').innerText(), /^Comments/, 'End reaches the last tab');
+
     await page.locator('#task-detail-body').getByRole('tab', { name: /^Runs/ }).click();
     await page.locator('#task-detail-body .task-run').nth(1).waitFor({ state: 'visible' });
     assert.ok((await page.locator('#task-detail-body .task-run-error').innerText()).includes('make ci-fast failed'), 'A failed run shows its error');
@@ -925,10 +948,28 @@ try {
     assert.equal(await page.evaluate(() => document.getElementById('tasks-body').closest('[inert]') !== null), true, 'The list behind the sheet is inert');
     assert.equal(await page.locator('#task-detail-body .task-pane-close').isVisible(), false, 'The sheet closes with Back, not a corner button');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The sheet does not overflow the phone width');
-    assert.equal(await page.evaluate(() => {
-      const strip = document.querySelector('#task-detail-body .detail-tabs');
-      return strip.scrollWidth <= strip.clientWidth;
-    }), true, 'All five tabs fit the phone sheet');
+    const strip = page.locator('#task-detail-body .detail-tabs');
+    assert.equal(await strip.evaluate(node => getComputedStyle(node).overflowX), 'auto', 'The phone tab strip scrolls within the sheet');
+    await sheet.getByRole('tab', { name: /^Overview/ }).focus();
+    await page.keyboard.press('End');
+    const commentsTab = sheet.getByRole('tab', { name: /^Comments/ });
+    assert.equal(await commentsTab.getAttribute('aria-selected'), 'true', 'Keyboard reaches the last tab on a narrow sheet');
+    assert.equal(await commentsTab.evaluate(node => {
+      const bounds = node.getBoundingClientRect();
+      const strip = node.closest('.detail-tabs').getBoundingClientRect();
+      return bounds.left >= strip.left && bounds.right <= strip.right;
+    }), true, 'Keyboard focus scrolls the last tab into view');
+    await page.keyboard.press('Home');
+    await page.keyboard.press('ArrowRight');
+    const contextTab = sheet.getByRole('tab', { name: /^Context files/ });
+    assert.equal(await contextTab.getAttribute('aria-selected'), 'true', 'Keyboard reaches Context files on the phone');
+    await sheet.getByRole('button', { name: 'Edit context files for PANEL-5', exact: true }).click();
+    await sheet.getByRole('textbox', { name: 'Edit context files for PANEL-5', exact: true }).fill('file:src/main.rs');
+    await sheet.getByRole('button', { name: 'save', exact: true }).click();
+    await sheet.locator('.context-selector').waitFor({ state: 'visible' });
+    assert.equal(await contextTab.getAttribute('aria-selected'), 'true');
+    await capture(page, 'context-files-dark-375.png');
+    await sheet.getByRole('tab', { name: /^Overview/ }).click();
     await capture(page, 'tasks-sheet-dark-375.png');
     await sheet.getByRole('button', { name: 'Back', exact: true }).click();
     await pane(page).waitFor({ state: 'hidden' });

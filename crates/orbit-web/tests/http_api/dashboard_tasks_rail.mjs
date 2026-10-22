@@ -422,6 +422,20 @@ assert.ok(
   contextDraftDetail.querySelector('.file-list .field-empty').textContent.includes('no context files'),
   'the empty context state is visible before refresh',
 );
+const contextTabOf = detail => detail.querySelector('.detail-tabs').children.find(button => button.dataset.tab === 'context_files');
+assert.equal(contextTabOf(contextDraftDetail).querySelector('.detail-tab-count').textContent, '0');
+common.setWorkspace(null);
+renderTasks(currentTasks, contextDraftContext);
+clickTitle(rowFor('ORB-37').querySelector('button.title'));
+assert.equal(contextTabOf(paneBody.querySelector('#detail-ORB-37')), undefined, 'An empty unqualified aggregate task hides Context files');
+contextDraftTask.context_files = ['file:src/shared.rs'];
+renderTasks(currentTasks, contextDraftContext);
+assert.ok(contextTabOf(paneBody.querySelector('#detail-ORB-37')), 'A populated read-only aggregate task still shows Context files');
+common.setWorkspace('ws_orbit');
+contextDraftTask.context_files = [];
+renderTasks(currentTasks, contextDraftContext);
+clickTitle(rowFor('ORB-37').querySelector('button.title'));
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 const descriptionEdit = contextDraftDetail
   .querySelectorAll('.field-edit')
   .find(button => button.getAttribute('aria-label') === 'Edit description for ORB-37');
@@ -442,6 +456,7 @@ taskRuntime.setTaskLocks({
 });
 renderTasks(currentTasks, contextDraftContext);
 contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+assert.equal(contextTabOf(contextDraftDetail).querySelector('.detail-tab-count').textContent, '1', 'The tab count refreshes alongside selectors while another editor holds a draft');
 const refreshedSelector = contextDraftDetail.querySelector('.context-selector');
 assert.ok(
   refreshedSelector && refreshedSelector.textContent.includes('file:src/') && refreshedSelector.textContent.includes('shared.rs'),
@@ -1173,8 +1188,12 @@ assert.deepEqual(selectedRows(), ['task-ORB-8'], 'a refresh keeps the selection'
 // Tabs: Overview first; the chosen tab carries over to the next selection.
 const tab = name => paneBody.querySelector(`.detail-tabs`).children.find(button => button.dataset.tab === name);
 const shownPanel = () => paneBody.querySelectorAll('.detail-tabpanel').filter(panel => !panel.hidden).map(panel => panel.dataset.tabPanel);
-assert.deepEqual(paneBody.querySelector('.detail-tabs').children.map(button => button.dataset.tab), ['overview', 'history', 'runs', 'artifacts', 'comments']);
+assert.deepEqual(paneBody.querySelector('.detail-tabs').children.map(button => button.dataset.tab), ['overview', 'context_files', 'history', 'runs', 'artifacts', 'comments']);
 assert.deepEqual(shownPanel(), ['overview']);
+assert.equal(tab('context_files').querySelector('.detail-tab-count').textContent, '0');
+tab('context_files').dispatch('click');
+assert.deepEqual(shownPanel(), ['context_files']);
+assert.ok(paneBody.querySelector('#' + tab('context_files').getAttribute('aria-controls')).querySelector('.field-edit'), 'Context files exposes the existing editor');
 tab('history').dispatch('click');
 assert.deepEqual(shownPanel(), ['history'], 'a tab shows its own panel only');
 assert.equal(tab('history').getAttribute('aria-selected'), 'true');
