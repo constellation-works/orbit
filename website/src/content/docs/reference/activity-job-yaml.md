@@ -7,6 +7,10 @@ sidebar:
 
 ## Activity envelope
 
+The examples illustrate schema shapes. `example_action` is a placeholder for
+a registered action; `assess_a` and `assess_b` stand for catalog activities
+you define. Replace those names before executing a job.
+
 ```yaml
 schemaVersion: 2
 kind: Activity
@@ -56,13 +60,19 @@ set, a covered requirement refuses the run before launch. `final_recovery`,
 `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
 `review_reconciliation_review`, `task_pilot` and `agent_invoke` drop that
 requirement from the requested list and record a note; it stays out of the
-callable set.
+callable set. The shipped `agent_explore` and `verify_finding` activities use
+the same non-implementer rule.
 
 An `agent_loop` activity that declares neither list still loads, with a
 deprecation warning. Declare `tools` or `tool_disallow_list`.
 
 Being on the allowlist never replaces runtime role, capability, policy,
 filesystem, subprocess, or authentication checks.
+
+Optional `steering_instruction` and `explore_instruction` fields add guidance
+only when mid-run steering or read-only exploration is enabled and available.
+See [Agent execution](../../concepts/agents/#runtime-path)
+for the corresponding workspace settings.
 
 ### Retired agent fields
 
@@ -100,7 +110,7 @@ Reference an activity:
   target: activity:agent_assess_diff
 ```
 
-Inline a full activity spec:
+Inline a type-specific activity spec:
 
 ```yaml
 - id: run_action

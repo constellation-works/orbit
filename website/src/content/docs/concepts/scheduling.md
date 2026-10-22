@@ -5,30 +5,22 @@ sidebar:
   order: 4
 ---
 
-Tasks describe work and jobs run it; scheduling decides *when*. Every
-scheduled fire, whether it ships a backlog or files a weekly chore, follows the
-same path:
+Tasks describe work and jobs run it; scheduling decides *when*. Each clock
+tick checks two independent kinds of scheduled work: routines dispatch jobs,
+and auto-tasks file recurring chores as ordinary tasks.
 
-<ol class="orbit-pipeline" aria-label="How a scheduled fire flows through Orbit">
+<ol class="orbit-pipeline" aria-label="What a scheduler tick checks">
   <li>
     <span class="orbit-pipeline-step">Scheduler clock</span>
     <span class="orbit-pipeline-note">The OS wakes <code>orbit clock tick</code></span>
   </li>
   <li>
     <span class="orbit-pipeline-step">Routine</span>
-    <span class="orbit-pipeline-note">Due on this host</span>
-  </li>
-  <li>
-    <span class="orbit-pipeline-step">Job run</span>
-    <span class="orbit-pipeline-note">Ordinary run, ordinary history</span>
+    <span class="orbit-pipeline-note">Dispatches a due job run</span>
   </li>
   <li>
     <span class="orbit-pipeline-step">Auto-task</span>
-    <span class="orbit-pipeline-note">Due templates are minted</span>
-  </li>
-  <li>
-    <span class="orbit-pipeline-step">Task</span>
-    <span class="orbit-pipeline-note">Normal lifecycle</span>
+    <span class="orbit-pipeline-note">Mints a due task into the normal lifecycle</span>
   </li>
 </ol>
 
@@ -41,10 +33,12 @@ routine or auto-task you asked for. Everything ships disabled until then.
 ## The host scheduler clock
 
 `orbit clock tick` is the scheduler: one pass that fires whatever is due,
-records it, and exits. The operating system runs it once a minute, through a
+records it, and exits. The operating system runs it once a minute by default, through a
 launchd agent on macOS or a systemd user timer on Linux. There is no resident
-daemon, so a stuck pass costs one minute, and nothing is scheduled unless the
-clock runs.
+daemon. `orbit clock set --cadence-seconds 300` changes the cadence; whole minutes from
+1 to 60 are supported. A tick has a five-minute dispatch budget; overlapping
+ticks skip while its sweep lock is held. Nothing is scheduled unless the clock
+runs.
 
 The clock belongs to the machine, not the repository. Pausing it stops
 scheduled ticks without changing any routine. If the Orbit binary moves, the
@@ -124,9 +118,11 @@ that is due. A new chore is a new definition, never new code.
 ## What scheduling never does
 
 Scheduling changes when work starts, not what it may do. Nothing scheduled
-completes a task out of `review`: that takes
+completes a task out of `review` by default: that takes
 [`--complete`](../../getting-started/workflows/#completing-work-with---complete)
-on a run you start yourself. Nothing scheduled approves a `proposed` task into
+on a run you start yourself, or the owner's explicit
+`workflow.distributed_completion = "done"` policy for distributed handoffs.
+Nothing scheduled approves a `proposed` task into
 the backlog either, with one exception you opt into: once you enable the CI
 failure sweep routine, it promotes the repair tasks it files after its pilot
 validates them.

@@ -119,6 +119,11 @@ any open status → blocked | archived
    (`orbit task update`, the dashboard, or `orbit.task.update`) accepts it
    afterwards.
 
+Criteria the task pilot identifies as requiring a deployed build can remain
+owed after delivery. The task stays in `review`, even with `--complete`, until
+an operator records every outstanding measurement as met. A successful run or
+an execution summary cannot replace that evidence.
+
 A refused transition is an `invalid_input` error that names both statuses and
 the missing precondition.
 
@@ -154,7 +159,11 @@ disabled.
 | Before-landing | After Orbit opens the pull request, while hosted CI runs. | The reviewer can fix the PR head; Orbit validates and pushes the fix onto the open PR. | Set `review.timing = "before_landing"` with `orbit config set review.timing before_landing`. | Merge waits for an approved, settled head. Any other outcome leaves the PR open and the task in `review`. |
 | After-landing | In batches after deliveries land. | The review task records confirmed findings as follow-up bug tasks; it does not change an already-landed delivery. | Run `orbit auto-task toggle delivery-code-review on`. | It does not block a delivery from landing. A batch remains owed until it has valid review evidence. |
 
-The dashboard's Config tab shows all three switches and their source. For the
+On a fresh workspace, the first `orbit config set` needs
+`--seed-from-global` to create its config with your current security settings,
+for example `orbit config set --seed-from-global review.timing before_pr`.
+
+The dashboard's Settings page shows all three switches and their source. For the
 same effective state, use `orbit config show` or `orbit doctor`; the first two
 reviews show their time limit, and after-landing shows when its next batch is
 due. After-landing review is independent of the choice between before-PR and
