@@ -54,14 +54,8 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
       await visibleFooter();
       if (part === 0.5) await capture(page, `presentation-pane-scrolled-dark-${width}.png`);
     }
-    const stamps = detail.getByRole('group', { name: 'Task timestamps' });
-    assert.equal(await detail.locator('.task-overview-content > .task-stamps').count(), 1, 'The metadata group closes Overview');
-    assert.equal(await footer.locator('.task-stamps').count(), 0, 'Timestamps consume no sticky footer space');
-    assert.deepEqual(await stamps.locator('.value').allTextContents(), ['2026-10-18 10:00 UTC', '2026-10-18 12:00 UTC']);
-    const stampRows = await stamps.locator('.property-row').evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().top));
-    assert.equal(stampRows[0] === stampRows[1], width === 1440, 'Metadata uses one row when space permits and wraps on the phone');
-    assert.ok((await stamps.boundingBox()).y + (await stamps.boundingBox()).height <= (await footer.boundingBox()).y, 'Last Overview content can scroll completely above the footer');
-    await capture(page, `presentation-timestamps-dark-${width}.png`);
+    assert.equal(await detail.getByRole('group', { name: 'Task timestamps' }).count(), 0, 'Task details omit the timestamp footer');
+    await capture(page, `presentation-overview-end-dark-${width}.png`);
     // A field editor is content in the scroll viewport, outside the footer.
     await detail.getByRole('button', { name: 'Edit description for PANEL-6', exact: true }).click();
     const editor = detail.getByRole('textbox', { name: 'Edit description for PANEL-6', exact: true });
@@ -125,7 +119,6 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
       }
       await detail.getByRole('tab', { name: /^Comments/ }).click();
       assert.equal(await footer.isVisible(), false, 'The footer is absent outside Overview');
-      assert.equal(await stamps.isVisible(), false, 'Overview timestamps do not leak into other tabs');
       await detail.getByRole('tab', { name: /^Overview/ }).click();
       // Confirmation cancellation must never send a request.
       page.removeAllListeners('dialog');
@@ -155,5 +148,5 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     assert.deepEqual(errors, []);
     await context.close();
   }
-  results.taskPresentation = { lockHolders: true, unknownAndLiveRun: true, dependenciesAndNavigation: true, panePageSheetScrolling: true, drainEntry: true, timestamps: true, rejectAndArchive: true };
+  results.taskPresentation = { lockHolders: true, unknownAndLiveRun: true, dependenciesAndNavigation: true, panePageSheetScrolling: true, drainEntry: true, timestampFooterRemoved: true, rejectAndArchive: true };
 }

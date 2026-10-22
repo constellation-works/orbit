@@ -60,6 +60,7 @@
     padding-left: 24px;
   }
 }
+.split-layout.detail-overview:not(:has(> .detail-side)) { grid-template-columns: minmax(0, 1fr); }
 
 /* What needs the operator, above the tabs: a stopped landing, an uncertain
    merge, invalidated authority. Empty slots take no room. */
@@ -579,25 +580,6 @@
   transform: rotate(45deg);
 }
 
-/* Created and updated close Overview, outside the sticky actions. */
-.task-stamps {
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  margin-top: 20px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hair);
-}
-.task-stamps .property-row { display: inline-flex; gap: 6px; }
-.task-stamps .property-row .label,
-.task-stamps .property-row.fact .label { font-size: 12px; line-height: 20px; }
-.task-stamps .property-row.fact .value {
-  padding: 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-dim);
-}
-
 .property-row {
   position: relative;
   --hint-left: 126px;
@@ -826,7 +808,7 @@
   margin: 0 2px 2px 2px;
 }
 .detail-disclosures > .field-block.collapsible.collapsed > h4::after { margin: 0 2px; }
-.detail-disclosures > .field-block > :not(h4) { padding: 2px 14px 16px 34px; }
+.detail-disclosures > .field-block > :not(h4) { padding: 2px 14px 14px; }
 
 /* ORB-12235: an editable field block shows its value with an `edit`
    affordance, and swaps in a textarea with save/cancel while editing. The
@@ -868,6 +850,22 @@
 .field-edit:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Context files has no section-header action slot: give its edit action a button. */
+.context-files-block .field-edit {
+  align-self: flex-start;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-control);
+  color: var(--fg-soft);
+  font-weight: 500;
+}
+.context-files-block .field-edit:hover:not(:disabled) {
+  border-color: var(--fg-mute);
+  color: var(--fg-strong);
+  text-decoration: none;
 }
 .field-editor-input {
   width: 100%;
@@ -997,7 +995,7 @@ input.field-editor-input {
   border-radius: var(--radius-panel);
 }
 .detail-disclosures > .field-block > .task-markdown-panel {
-  margin: 0 14px 14px 34px;
+  margin: 0 14px 14px;
   padding: 16px;
 }
 .task-markdown-panel .markdown-body {
@@ -1039,20 +1037,20 @@ input.field-editor-input {
 }
 .description-toggle,
 .ac-toggle {
-  margin-top: 12px;
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--bg-control);
-  color: var(--fg-soft);
+  margin-top: 8px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 .description-toggle:hover,
-.ac-toggle:hover { border-color: var(--fg-mute); color: var(--fg-strong); }
+.ac-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
 .description-toggle:focus-visible,
 .ac-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .task-detail[data-editing*="description"] .description-toggle,

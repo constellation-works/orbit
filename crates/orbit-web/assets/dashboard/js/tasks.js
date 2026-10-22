@@ -2991,8 +2991,7 @@ function buildTaskDetail(task, context, drain = null) {
   const lifecycleActions = buildActionsRow(task, detail, context, { includeComment: false });
   const commentActions = buildActionsRow(task, detail, context, { includeLifecycle: false });
   const overview = el("div", { class: "task-overview-content" }, [
-    el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]),
-    buildTaskTimestamps(task, context),
+    el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol.children.length ? rightCol : null]),
   ]);
   // Keep the wrapper when Reject replaces the action row with its form.
   // It belongs to the detail scroll viewport, outside the tab panels.
@@ -3015,7 +3014,7 @@ function buildTaskDetail(task, context, drain = null) {
       count: Array.isArray(task.context_files) ? task.context_files.length : 0,
       showZeroCount: true,
       available: showsEditor("context_files"),
-      content: showsEditor("context_files") ? el("div", { class: "field-block" }, [editor("context_files")]) : null,
+      content: showsEditor("context_files") ? el("div", { class: "field-block context-files-block" }, [editor("context_files")]) : null,
     },
     { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
     { name: "history", label: "History", count: history.count, content: history.node },
@@ -3199,15 +3198,6 @@ function buildDeliveryCard(task, drain, context) {
     rows.push(row("location", "Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
   }
   return rows.length ? el("div", { class: "task-delivery-card" }, rows) : null;
-}
-
-// When the task was filed and last changed, closing Overview above its actions.
-function buildTaskTimestamps(task, context) {
-  const facts = el("div", { class: "property-list task-meta-facts task-stamps", role: "group", "aria-label": "Task timestamps" });
-  const fact = (label, value) => el("div", { class: "property-row fact" }, [el("span", { class: "label", text: label }), value]);
-  if (task.created_at) facts.appendChild(fact("Created", absTimeNode(context, task.created_at, { class: "value" })));
-  if (task.updated_at) facts.appendChild(fact("Updated", absTimeNode(context, task.updated_at, { class: "value" })));
-  return facts.children.length ? facts : null;
 }
 
 // Where the task may run, as a word or two: "any", or the operating systems
