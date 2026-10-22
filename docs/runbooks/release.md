@@ -115,6 +115,15 @@ an empty date remains optional.
    (`orbit init`, `workspace init`, or `mcp serve`), land the script
    update on the same commit as the tag.
 
+   Before publishing, run `scripts/smoke-npm-install.sh --local-package-check`
+   to pack and inspect the local npm payload without lifecycle scripts, then
+   `scripts/smoke-npm-install.sh --local-binary-check target/debug/orbit`
+   against `make build`'s candidate. The functional smoke uses fake source
+   credentials and isolated host/workspace roots to check credential rejection,
+   explicit `ORBIT_ROOT` MCP discovery and fail-closed agent authority. These
+   modes do not fetch the unpublished version or prove its install/signature
+   chain; the default smoke still provides that proof after npm publication.
+
 6. **Commit and merge the release preparation to `agent-main`.** Keep the
    Cargo, npm, and `server.json` version bumps, lockfile refresh, and any smoke
    update together.
