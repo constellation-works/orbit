@@ -200,6 +200,72 @@ pub(super) fn public_resume_retains_commit_producer_and_reads_current_landing() 
         original.landing.status,
         orbit_types::workflow::LandingObservationStatus::NotReached
     );
+    // A metadata replay reuses an exact host candidate. Its public delivery
+    // observation must retain that SHA without claiming a new commit.
+    let replay = json!({"phase":"commit", "decision":"already_committed", "committed":false,
+        "task_id":fixture.task, "job_run_id":source.run_id,
+        "base_sha":"a".repeat(40), "commit_sha":"b".repeat(40),
+        "final_recovery_replay":true, "candidate_branch":"orbit/replay"});
+    for case in [
+        "host-replay",
+        "bare-sha",
+        "missing-branch",
+        "missing-run",
+        "missing-head",
+        "missing-base",
+    ] {
+        let mut output = replay.clone();
+        match case {
+            "bare-sha" => {
+                output
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("final_recovery_replay");
+            }
+            "missing-branch" => {
+                output.as_object_mut().unwrap().remove("candidate_branch");
+            }
+            "missing-run" => {
+                output.as_object_mut().unwrap().remove("job_run_id");
+            }
+            "missing-head" => {
+                output.as_object_mut().unwrap().remove("commit_sha");
+            }
+            "missing-base" => {
+                output.as_object_mut().unwrap().remove("base_sha");
+            }
+            _ => {}
+        }
+        let mut replayed = original_state.clone();
+        replayed.record_step(1, JobRunState::Success, Some(output.clone()), None);
+        replayed.record_pipeline_output("commit", output);
+        fixture
+            .runtime
+            .write_run_state(&source.run_id, &replayed)
+            .unwrap();
+        let observed = fixture
+            .runtime
+            .observe_task_delivery(&fixture.task, Some(&source.run_id))
+            .unwrap();
+        if case == "host-replay" {
+            assert_eq!(
+                observed.commit.status,
+                CommitObservationStatus::AlreadyCommitted,
+                "{observed:?}"
+            );
+            assert_eq!(observed.commit.head_sha, Some("b".repeat(40)));
+        } else {
+            assert_eq!(
+                observed.commit.status,
+                CommitObservationStatus::Unavailable,
+                "{case}: {observed:?}"
+            );
+        }
+    }
+    fixture
+        .runtime
+        .write_run_state(&source.run_id, &original_state)
+        .unwrap();
     let mut resumed = fixture.resume(&source);
     fixture.land(&mut resumed);
     fixture.use_audit_records(&resumed, "complete_pr");

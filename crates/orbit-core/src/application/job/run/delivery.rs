@@ -727,7 +727,27 @@ fn parse_commit_output(
     }
     let base_sha = optional_sha(object.get("base_sha"))?;
     let head_sha = optional_sha(object.get("commit_sha"))?;
-    if (status == CommitObservationStatus::Committed) != head_sha.is_some() {
+    let replay = object.get("final_recovery_replay").and_then(Value::as_bool) == Some(true);
+    if replay
+        && (object.get("job_run_id").and_then(Value::as_str) != Some(run_id)
+            || object
+                .get("candidate_branch")
+                .and_then(Value::as_str)
+                .is_none_or(|branch| branch.trim().is_empty())
+            || base_sha.is_none()
+            || !matches!(
+                status,
+                CommitObservationStatus::Committed | CommitObservationStatus::AlreadyCommitted
+            ))
+    {
+        return Err(DeliveryEvidenceGap::OutputMalformed);
+    }
+    // A host replay receipt pins the existing candidate without claiming to
+    // have created it. Legacy already-committed outputs still carry no SHA;
+    // a bare SHA without the replay binding remains malformed.
+    let pins_head = status == CommitObservationStatus::Committed
+        || (replay && status == CommitObservationStatus::AlreadyCommitted);
+    if pins_head != head_sha.is_some() {
         return Err(DeliveryEvidenceGap::OutputMalformed);
     }
     Ok((status, base_sha, head_sha))

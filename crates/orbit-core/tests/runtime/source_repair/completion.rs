@@ -772,6 +772,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
             rationale: "authenticated observation retry".into(),
         },
         resume_step_index: Some(10),
+        preserved_steps: Vec::new(),
         repair_commit: None,
         resume_context: None,
         workspace_path: f.repo.clone(),

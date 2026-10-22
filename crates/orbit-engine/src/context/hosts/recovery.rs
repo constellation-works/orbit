@@ -131,6 +131,10 @@ pub struct FinalRecoveryApplication {
     /// Top-level index a `resume` reruns from. Durable step checkpoints at and
     /// after it are stale once the run goes back there.
     pub resume_step_index: Option<u32>,
+    /// Successful host history checkpoints retained as provenance. These are
+    /// engine-selected indices, never activity response fields; replay still
+    /// reruns their actions and all validation/review after the resume point.
+    pub preserved_steps: Vec<u32>,
     /// Engine-observed HEAD advance during this recovery dispatch. Never read
     /// from the recovery activity's response.
     pub repair_commit: Option<orbit_types::workflow::FinalRecoveryRepairCommit>,

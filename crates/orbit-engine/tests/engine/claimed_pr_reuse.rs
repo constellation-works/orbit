@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 
 use super::git_fixture;
 
+mod final_recovery;
+
 const CHILD_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_CHILD";
 const SANDBOX_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_SANDBOX";
 const BASE: &str = "main";

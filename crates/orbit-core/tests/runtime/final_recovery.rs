@@ -178,6 +178,7 @@ impl Fixture {
                 failed_step_id: "implement".to_string(),
                 decision,
                 resume_step_index,
+                preserved_steps: Vec::new(),
                 repair_commit: None,
                 resume_context: None,
                 workspace_path: self.repo.clone(),
@@ -295,78 +296,112 @@ fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
 }
 
 fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
-    let fixture = fixture("[\"sol\"]");
-    let task = fixture.task();
-    let run = fixture.running_run(&task);
-    let started = fixture.status(&task);
+    for preserve_history in [false, true] {
+        let fixture = fixture("[\"sol\"]");
+        let task = fixture.task();
+        let run = fixture.running_run(&task);
+        let started = fixture.status(&task);
 
-    assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
-    let checkpoint = fixture
-        .state(&run)
-        .final_recovery
-        .expect("admission recorded");
-    assert_eq!(checkpoint.task_id, task);
-    assert_eq!(checkpoint.failed_step_id, "implement");
-    assert_eq!(checkpoint.base_ref.as_deref(), Some("main"));
-    assert!(
-        checkpoint.observed.is_some(),
-        "a local task's revision is observed"
-    );
-    assert!(
-        matches!(
+        assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
+        let checkpoint = fixture
+            .state(&run)
+            .final_recovery
+            .expect("admission recorded");
+        assert_eq!(checkpoint.task_id, task);
+        assert_eq!(checkpoint.failed_step_id, "implement");
+        assert_eq!(checkpoint.base_ref.as_deref(), Some("main"));
+        assert!(
+            checkpoint.observed.is_some(),
+            "a local task's revision is observed"
+        );
+        assert!(
+            matches!(
+                fixture.admit(&run, &task),
+                FinalRecoveryAdmission::Skipped { .. }
+            ),
+            "a second admission for the same run is refused"
+        );
+
+        if preserve_history {
+            // Host history remains provenance while validation and compound
+            // outputs from the replayed phase must be regenerated.
+            let mut state = fixture.state(&run);
+            state.record_step(
+                3,
+                JobRunState::Success,
+                Some(json!({"validation": "old"})),
+                None,
+            );
+            state.record_compound_outputs(
+                1,
+                std::collections::BTreeMap::from([("nested".into(), json!({"old": true}))]),
+            );
+            fixture.jobs.write_run_state(&run, &state).unwrap();
+        }
+        let resume = FinalRecoveryDecision::Resume {
+            step_id: "implement".to_string(),
+            rationale: "finished the implementation".to_string(),
+        };
+        let context = orbit_types::workflow::FinalRecoveryResume {
+            step_id: "implement".to_string(),
+            failed_step_id: "implement".to_string(),
+            rationale: "finished the implementation".to_string(),
+            refusal: "missing probe.command".to_string(),
+            refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
+        };
+        assert_eq!(
+            RuntimeHost::apply_final_recovery(
+                &fixture.runtime,
+                &run,
+                &FinalRecoveryApplication {
+                    task_id: task.clone(),
+                    failed_step_id: "implement".to_string(),
+                    decision: resume.clone(),
+                    resume_step_index: Some(1),
+                    preserved_steps: if preserve_history { vec![2] } else { vec![] },
+                    repair_commit: None,
+                    resume_context: Some(context.clone()),
+                    workspace_path: fixture.repo.clone(),
+                    completion_done: false,
+                    infrastructure: None,
+                }
+            )
+            .unwrap(),
+            FinalRecoveryApplied::Resume
+        );
+        let state = fixture.state(&run);
+        assert_eq!(
+            state.step_states.keys().copied().collect::<Vec<_>>(),
+            if preserve_history {
+                vec![0, 2]
+            } else {
+                vec![0]
+            },
+            "only host-selected history survives the resume point"
+        );
+        assert_eq!(
+            state.step_outputs.keys().copied().collect::<Vec<_>>(),
+            if preserve_history {
+                vec![0, 2]
+            } else {
+                vec![0]
+            }
+        );
+        assert!(
+            state.compound_outputs.is_empty(),
+            "nested and validation evidence must be regenerated"
+        );
+        let recorded = state.final_recovery.expect("decision recorded");
+        assert_eq!(recorded.decision, Some(resume));
+        assert_eq!(recorded.resume_context, Some(context));
+        assert_eq!(fixture.status(&task), started, "resume writes no task");
+
+        // A run resumed from this state inherits the record, so it is refused.
+        assert!(matches!(
             fixture.admit(&run, &task),
             FinalRecoveryAdmission::Skipped { .. }
-        ),
-        "a second admission for the same run is refused"
-    );
-
-    let resume = FinalRecoveryDecision::Resume {
-        step_id: "implement".to_string(),
-        rationale: "finished the implementation".to_string(),
-    };
-    let context = orbit_types::workflow::FinalRecoveryResume {
-        step_id: "implement".to_string(),
-        failed_step_id: "implement".to_string(),
-        rationale: "finished the implementation".to_string(),
-        refusal: "missing probe.command".to_string(),
-        refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
-    };
-    assert_eq!(
-        RuntimeHost::apply_final_recovery(
-            &fixture.runtime,
-            &run,
-            &FinalRecoveryApplication {
-                task_id: task.clone(),
-                failed_step_id: "implement".to_string(),
-                decision: resume.clone(),
-                resume_step_index: Some(1),
-                repair_commit: None,
-                resume_context: Some(context.clone()),
-                workspace_path: fixture.repo.clone(),
-                completion_done: false,
-                infrastructure: None,
-            }
-        )
-        .unwrap(),
-        FinalRecoveryApplied::Resume
-    );
-    let state = fixture.state(&run);
-    assert_eq!(
-        state.step_states.keys().copied().collect::<Vec<_>>(),
-        [0],
-        "steps from the resume point lose their checkpoints"
-    );
-    assert_eq!(state.step_outputs.keys().copied().collect::<Vec<_>>(), [0]);
-    let recorded = state.final_recovery.expect("decision recorded");
-    assert_eq!(recorded.decision, Some(resume));
-    assert_eq!(recorded.resume_context, Some(context));
-    assert_eq!(fixture.status(&task), started, "resume writes no task");
-
-    // A run resumed from this state inherits the record, so it is refused.
-    assert!(matches!(
-        fixture.admit(&run, &task),
-        FinalRecoveryAdmission::Skipped { .. }
-    ));
+        ));
+    }
 }
 
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {

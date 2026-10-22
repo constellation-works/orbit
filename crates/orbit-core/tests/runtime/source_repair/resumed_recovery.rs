@@ -161,6 +161,7 @@ fn resumed_fixture() -> Resumed {
             rationale: "inventory repaired".into(),
         },
         resume_step_index: Some(1),
+        preserved_steps: Vec::new(),
         repair_commit: Some(FinalRecoveryRepairCommit {
             // Same spelling production `observe_repair_commit` stores. The
             // fixture root comes from `bulk_root`, so this still matches the

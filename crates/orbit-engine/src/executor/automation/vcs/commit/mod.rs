@@ -9,6 +9,7 @@ mod git_ops;
 mod implementer;
 mod message;
 mod no_diff;
+mod published_replay;
 mod recovery;
 mod repair;
 mod scope;
@@ -36,3 +37,5 @@ pub(super) use tagged_no_diff::DECISION as NO_DIFF_EXPECTED_SKIP;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use published_replay::{PUBLISHED_REPLAY_STEPS, published_candidate_matches};
