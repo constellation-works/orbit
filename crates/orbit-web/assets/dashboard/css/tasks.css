@@ -877,7 +877,16 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   overflow: hidden;
 }
 .task-detail-pane[hidden] { display: none; }
-.task-detail-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.task-detail-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.task-detail-body > .task-pane-head { flex: none; }
+/* A short task fills the space below its head too; a pinned task has one
+   extra wrapper for the outside-the-list note. Long details still scroll. */
+.task-detail-body > .pinned-task-wrap { display: flex; flex-direction: column; flex: 1 0 auto; }
+.task-detail-pane .task-detail { display: flex; flex-direction: column; flex: 1 0 auto; }
+/* Leave room for keyboard/scrollIntoView targets above the sticky actions.
+   A resized Reject composer scrolls within its bounded footer. */
+.task-detail-body:has(.task-action-footer:not([hidden])) { scroll-padding-bottom: 100px; }
+.task-detail-body:has(.task-action-footer:not([hidden]) .reject-form) { scroll-padding-bottom: 50dvh; }
 .task-pane-head {
   position: sticky;
   top: 0;

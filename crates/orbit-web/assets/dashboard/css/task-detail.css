@@ -579,12 +579,14 @@
   transform: rotate(45deg);
 }
 
-/* Created and updated close the detail on one quiet line. */
+/* Created and updated close Overview, outside the sticky actions. */
 .task-stamps {
   flex-direction: row;
   flex-wrap: wrap;
   gap: 4px 20px;
-  margin-top: -4px;
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
 }
 .task-stamps .property-row { display: inline-flex; gap: 6px; }
 .task-stamps .property-row .label,
@@ -1413,6 +1415,27 @@ input.field-editor-input {
 .task-detail-pane .row-detail .actions {
   padding-top: 16px;
   border-top: 1px solid var(--hair);
+}
+
+/* A flow item reserves space at the end, while bottom stickiness keeps the
+   controls at the detail viewport's edge even above a long Overview. */
+.task-action-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: auto -20px -20px;
+  flex-shrink: 0;
+  padding: 12px 20px max(16px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hair);
+  background: var(--bg-elev);
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.task-action-footer[hidden] { display: none; }
+.task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
+.task-action-footer .reject-form { animation: none; }
+@container task-pane (max-width: 440px) {
+  .task-action-footer { margin: auto -16px -16px; padding-inline: 16px; }
 }
 
 .reject-form,

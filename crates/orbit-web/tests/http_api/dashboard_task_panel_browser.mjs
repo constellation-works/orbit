@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { checkTaskPresentation } from './dashboard_task_presentation_browser.mjs';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -44,7 +45,7 @@ const sampleCriteria = [
 ];
 const full = task => ({
   ...task, projection: undefined,
-  description: '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
+  description: task.description || '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
   acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
   created_by: 'operator', created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
@@ -56,7 +57,7 @@ globalThis.panelFixture = {
   tasks, reads: [], writes: [], patches: [], sampleCriteria,
   holdCommentPost: false, releaseCommentPost: null, failCommentPost: false,
   ships: [], holdShipPost: false, releaseShipPost: null,
-  deliveryClaim: false,
+  deliveryClaim: false, readiness: [], lifecycle: [],
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -68,7 +69,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/tasks') return json({ items: globalThis.panelFixture.tasks, total: globalThis.panelFixture.tasks.length, limit: 50, truncated: false });
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
-  if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: [] });
+  if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
   if (api === '/api/distributed/claims') {
     const taskId = url.searchParams.get('task');
     const claims = globalThis.panelFixture.deliveryClaim && ['PANEL-1', 'PANEL-3'].includes(taskId) ? [{
@@ -115,6 +116,11 @@ globalThis.fetch = async (input, options = {}) => {
     const prior = task.comments || (task.id === 'PANEL-2' ? [] : sampleComments);
     task.comments = [...prior, { at: '2026-10-20T12:00:00Z', by: 'human', message: JSON.parse(options.body).message }];
     task.comment_count = task.comments.length;
+    return json({ ok: true });
+  }
+  const lifecycle = api.match(/^\\/api\\/tasks\\/([^/]+)\\/(reject|archive)$/);
+  if (lifecycle && options.method === 'POST') {
+    globalThis.panelFixture.lifecycle.push({ path: api, body: options.body ? JSON.parse(options.body) : null });
     return json({ ok: true });
   }
   const detail = api.match(/^\\/api\\/tasks\\/([^/]+)$/);
@@ -186,6 +192,7 @@ const waitShown = async (page, id) => {
 };
 
 try {
+  await checkTaskPresentation({ openPage, row, waitShown, capture, results });
   // Task lifecycle controls follow the active Overview panel; Comment follows
   // the thread in Comments, and neither appears in the other task panels.
   for (const width of [1440, 375]) {
@@ -198,7 +205,7 @@ try {
       await detail.locator(`[role="tab"][data-tab="${name}"]`).click();
       const panel = detail.locator(`#detail-PANEL-1-panel-${name}`);
       if (name === 'overview') {
-        const actions = panel.locator('.task-action-row.lifecycle-actions:visible');
+        const actions = detail.locator('.task-action-footer .lifecycle-actions:visible');
         assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
         assert.equal(await panel.locator('.action.comment:visible').count(), 0, 'Comment is absent from Overview');
       } else if (name === 'comments') {
@@ -211,7 +218,7 @@ try {
       }
       if (['overview', 'runs', 'comments'].includes(name)) {
         if (name === 'runs') await panel.locator('.task-run').first().waitFor({ state: 'visible' });
-        if (name === 'overview') await panel.locator('.lifecycle-actions').scrollIntoViewIfNeeded();
+        if (name === 'overview') await detail.locator('.lifecycle-actions').scrollIntoViewIfNeeded();
         await capture(page, `task-detail-${name}-after-dark-${width}.png`);
       }
     }
