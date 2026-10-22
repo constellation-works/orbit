@@ -535,6 +535,24 @@
 .readiness-drain-reason { color: var(--fg-dim); }
 .readiness-gap-count { color: var(--fg-dim); font-size: 11px; }
 .task-delivery-pr { font-size: 12.5px; font-weight: 500; }
+/* A related task's id opens that task; it reads like the pull request link. */
+.task-delivery-relation {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.task-delivery-relation:hover { text-decoration: underline; }
+.task-delivery-relation:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
   --hand: var(--fg-mute);
@@ -630,45 +648,6 @@
   font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
-}
-.relation-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0 -8px;
-}
-.relation-row {
-  display: grid;
-  grid-template-columns: 128px minmax(0, 1fr) 8px;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding: 0 12px 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.relation-row::after {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid var(--fg-disabled);
-  border-top: 1.5px solid var(--fg-disabled);
-  transform: rotate(45deg);
-}
-.relation-row:hover { background: var(--bg-hover); }
-.relation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.relation-row .label { color: var(--fg-mute); font-size: 12.5px; }
-.relation-row .label::first-letter { text-transform: uppercase; }
-.relation-row .relation-target {
-  justify-self: start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font-size: 12.5px;
 }
 .relation-target {
   border: 1px solid var(--border);

@@ -1465,7 +1465,9 @@ function buildExternalRefs(refs) {
   return wrap;
 }
 
-function buildRelations(relations, context) {
+// The typed relations in RELATION_GROUPS order, one entry per related task,
+// each carrying the label that says how it relates.
+function relationTargets(relations) {
   const byType = new Map(RELATION_GROUPS.map(([key]) => [key, []]));
   for (const relation of relations) {
     const key = relationTypeKey(relation.relation_type || relation.type);
@@ -1473,24 +1475,8 @@ function buildRelations(relations, context) {
     if (!RELATION_GROUP_LABELS.has(key) || !target) continue;
     byType.get(key).push(target);
   }
-
-  // One row per related task: how it relates, then its id.
-  const wrap = el("div", { class: "relation-list" });
-  for (const [key, label] of RELATION_GROUPS) {
-    for (const target of byType.get(key) || []) {
-      const btn = el("button", { class: "relation-row", type: "button" }, [
-        el("span", { class: "label", text: label }),
-        el("span", { class: "relation-target mono", text: target }),
-      ]);
-      btn.dataset.relation = key;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openVisibleTask(target, context);
-      });
-      wrap.appendChild(btn);
-    }
-  }
-  return wrap;
+  return RELATION_GROUPS.flatMap(([key, label]) =>
+    byType.get(key).map((target) => ({ key, label, target })));
 }
 
 // ORB-11333: the settled before-PR review gate. Every value comes from the
@@ -2983,8 +2969,8 @@ function buildTaskDetail(task, context, drain = null) {
   }
   if (disclosures.children.length) leftCol.appendChild(disclosures);
 
-  // The task's state, readiness and delivery sit together above the tabs;
-  // the side column holds the graph around it.
+  // The task's state, readiness, delivery and relations sit together above
+  // the tabs; the side column holds the graph around it.
   const metaBlock = buildTaskMeta(task, context, { editor, showsEditor, drain });
 
   // The delivery card already links the pull request; the rest stay here.
@@ -2992,11 +2978,6 @@ function buildTaskDetail(task, context, drain = null) {
     !(pullRequest && ref && ref.system === GITHUB_PR_REF_SYSTEM && ref.url === pullRequest.url));
   if (otherRefs.length > 0) {
     addField(rightCol, "External refs", buildExternalRefs(otherRefs));
-  }
-
-  if (Array.isArray(task.relations) && task.relations.length > 0) {
-    const relations = buildRelations(task.relations, context);
-    if (relations.children.length > 0) addField(rightCol, "Related tasks", relations);
   }
 
   // A long selector list would push everything under it down the column, so
@@ -3080,9 +3061,10 @@ function buildTaskDetail(task, context, drain = null) {
 // The detail's head, above the tabs: what the task is and where it stands.
 // The levers an operator sets (status, complexity, crew, host, tags) share
 // one row of chips; the lifecycle strip places the status on the way to done;
-// the delivery card gathers the pull request, the run and the hands that
-// carried the task. The pane head carries only the id and title, so nothing
-// here is repeated there, and the timestamps close the detail.
+// the delivery card gathers the pull request, the run, the hands that carried
+// the task and its relations to other tasks. The pane head carries only the
+// id and title, so nothing here is repeated there, and the timestamps close
+// the detail.
 function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
@@ -3114,7 +3096,7 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const head = el("div", { class: "task-meta-block" }, [levers]);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
-  const delivery = buildDeliveryCard(task, drain);
+  const delivery = buildDeliveryCard(task, drain, context);
   if (delivery) head.appendChild(delivery);
   return head;
 }
@@ -3176,7 +3158,7 @@ function buildHandsChain(task) {
   return el("span", { class: "value task-hands" }, chain);
 }
 
-function buildDeliveryCard(task, drain) {
+function buildDeliveryCard(task, drain, context) {
   const row = (kind, label, value) =>
     el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
   const rows = [];
@@ -3198,6 +3180,18 @@ function buildDeliveryCard(task, drain) {
   if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
   const hands = buildHandsChain(task);
   if (hands) rows.push(row("hands", "Handled by", hands));
+  // One row per typed relation; its id opens the related task on click.
+  const relations = relationTargets(Array.isArray(task.relations) ? task.relations : []);
+  for (const { key, label, target } of relations) {
+    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
+    open.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openVisibleTask(target, context);
+    });
+    const relationRow = row("relation", label, el("span", { class: "value" }, [open]));
+    relationRow.dataset.relation = key;
+    rows.push(relationRow);
+  }
   const readiness = readinessOf(task);
   if (readiness || drain) rows.push(row("readiness", "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id)));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
