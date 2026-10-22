@@ -227,7 +227,7 @@ echo "--- step 2: orbit init + workspace init ---"
 # This smoke covers the npm/release install chain, not host sandbox setup.
 # Ubuntu 22.04 is outside automatic preparation support, and the runner owns
 # its packages and security policy, so skip host preparation on Linux only.
-init_host_args=()
+init_host_args=(--non-interactive --machine-name smoke-npm-install --task-prefix SMK)
 if [[ "$(uname -s)" == "Linux" ]]; then
   init_host_args+=(--skip-host-prerequisites)
 fi
@@ -237,8 +237,7 @@ fi
 # matches the documented binary-first installation flow.
 # Fresh-host non-interactive init requires machine identity (ORB-10721): a
 # machine name plus a 2-5 letter task prefix that is not ORB/ADR/L/F.
-if ! run_orbit init "${init_host_args[@]}" --non-interactive \
-     --machine-name smoke-npm-install --task-prefix SMK \
+if ! run_orbit init "${init_host_args[@]}" \
      >"$TMPDIR_ROOT/init.out" 2>"$TMPDIR_ROOT/init.err"; then
   echo "FAIL: orbit init exited non-zero" >&2
   echo "--- stdout ---" >&2
