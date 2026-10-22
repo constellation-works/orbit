@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web host forward — another registered host's dashboard API through this one"
-last_validated: 2026-10-18
+last_validated: 2026-10-22
 tags: [remote-access, host-registry]
 ---
 
