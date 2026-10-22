@@ -4989,14 +4989,12 @@ function buildPaneHead(task, pinned, context) {
   const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
+  const id = makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" });
+  const spacer = el("span", { class: "task-pane-spacer" });
   const head = el("div", { class: "task-pane-head" }, [
-    el("div", { class: "task-pane-bar" }, [
-      back,
-      makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" }),
-      el("span", { class: "task-pane-spacer" }),
-      full,
-      close,
-    ]),
+    el("div", { class: "task-pane-bar" }, page
+      ? [id, spacer, back]
+      : [back, id, spacer, full, close]),
     title,
   ]);
   head.dataset.key = key;
@@ -5009,6 +5007,7 @@ function buildPaneHead(task, pinned, context) {
 function buildTaskPagePlaceholder(context) {
   const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
   back.addEventListener("click", () => closeTaskPane(context));
+  const id = makeCopyButton(taskPageId, { class: "id mono", title: "Copy task ID" });
   const note = el("p", {
     class: taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
     text: taskPageError || `Loading ${taskPageId}…`,
@@ -5017,7 +5016,8 @@ function buildTaskPagePlaceholder(context) {
   });
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: taskPageId });
   title.tabIndex = -1;
-  const node = el("div", { class: "task-pane-head" }, [el("div", { class: "task-pane-bar" }, [back]), title, note]);
+  const bar = el("div", { class: "task-pane-bar" }, [id, el("span", { class: "task-pane-spacer" }), back]);
+  const node = el("div", { class: "task-pane-head" }, [bar, title, note]);
   node.dataset.key = `pane-page-${taskPageId}`;
   node.dataset.hash = taskPageError || "loading";
   return node;
