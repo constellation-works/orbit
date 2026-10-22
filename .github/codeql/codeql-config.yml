@@ -16,4 +16,4 @@ paths-ignore:
   - "crates/**/examples/**"
   - "**/benches/**"
   - ".orbit/**"
-  - "target/**"
+  - "**/target/**"
