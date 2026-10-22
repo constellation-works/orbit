@@ -2,7 +2,7 @@
 title: Process Supervision — Overview
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_validated: 2026-10-21
 status: Draft
 feature: process-supervision
 doc_role: overview

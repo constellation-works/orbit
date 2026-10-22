@@ -2,7 +2,7 @@
 title: Process Supervision — Design
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-18
+last_validated: 2026-10-21
 status: Draft
 feature: process-supervision
 doc_role: design
@@ -287,7 +287,7 @@ Tests that call a supervisor directly are left out.
 
 ### 4.1 Choice
 
-The survivor is **exec's supervisor**: `SupervisedChild`, `wait_cancellable`,
+The survivor is **exec's supervisor**: `SupervisedChild` (its `supervise` wait loop),
 `DrainStop`, `SignalHandlerGuard`, the stop-aware stdin writer and
 `ProcessStopCause`. It moves into a new `orbit_common::process::supervisor`
 module.
@@ -305,8 +305,8 @@ module.
   or create a dependency cycle. See
   [One supervisor, in the lowest crate that spawns](./4_decisions.md#one-supervisor-in-the-lowest-crate-that-spawns).
 - **Kept from the others:** the engine's flag fallback when no wakeup pair
-  can be created, its post-kill group-drain wait, the bounded runner's
-  `signal_owned_group` checks (own group, reused pid), its `require_eof`
+  can be created, its post-kill group-drain wait, the group-signal checks
+  (own group, reused pid) from the bounded runner, now `OwnedChild::signal_group`, its `require_eof`
   mode and its typed spawn error.
 
 ### 4.2 Shape
@@ -418,7 +418,7 @@ must pass the existing tests of the code it replaces.
 | Step | Change | Fixes on landing | Task |
 |------|--------|------------------|------|
 | 1 | Add `OwnedChild` to `orbit_common::process`; bounded runner and `SupervisedChild` hold their child through it; fold the three group-signal helpers into it | Bounded runner leak on `?` | [ORB-15826] |
-| 2 | Hold every ad-hoc child through `OwnedChild`: engine `SpawnedChild` and `spawn_with_timeout`, plugin exec `bind_pid` failure, MCP session, build phase, automation `SourceChild` | Engine and plugin leaks on failure and panic | [ORB-15827] |
+| 2 | Hold every ad-hoc child through `OwnedChild`: engine `SpawnedChild` and `spawn_with_timeout`, plugin exec `bind_pid` failure, MCP session, build phase, automation source-command child | Engine and plugin leaks on failure and panic | [ORB-15827] |
 | 3 | Move exec's supervisor into `orbit_common::process::supervisor` with the §4.2 options exec needs; `orbit-exec::supervision` becomes an adapter | Single implementation of the loop | [ORB-15828] |
 | 4 | Re-implement `run_bounded*` on the supervisor; delete bounded's loop | Bounded callers gain the drain bound and kill-on-drop | [ORB-15829] |
 | 5 | Run the engine provider runner on the supervisor (adds `on_spawn`, the periodic hook, extendable deadline, stopped reporter, flag fallback, test seams) | Engine loop and readers deleted | [ORB-15830] |
