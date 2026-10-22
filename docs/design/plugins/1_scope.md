@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-18
-last_validated: 2026-10-18
+last_updated: 2026-10-21
+last_validated: 2026-10-21
 ---
 
 # Scope: Orbit plugin standard
@@ -565,7 +565,7 @@ such as `ORBIT_OPERATOR` and `ORBIT_WORKSPACE_CLAIM_TOKEN` are excluded even if 
 manifest requests them. Orbit then sets:
 
 ```
-ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
+ORBIT_HOST_API=1  ORBIT_VERSION=…  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
 ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=descriptor-required
 ORBIT_PLUGIN_CALLBACK_FD=3
 ORBIT_TOOL_NAME=graph.recommend  ORBIT_TOOL_CWD=…  ORBIT_WORKSPACE_ROOT=…
