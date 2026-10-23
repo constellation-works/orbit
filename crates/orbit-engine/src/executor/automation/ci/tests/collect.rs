@@ -544,3 +544,150 @@ fn query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context(
         "CI notes exposed credentials for {leaked:?}"
     );
 }
+
+fn failed_job(job_id: u64) -> Value {
+    json!([{
+        "job_id": job_id,
+        "name": "check",
+        "status": "completed",
+        "conclusion": "failure",
+        "failed_steps": [{"name": "compile", "conclusion": "failure"}],
+    }])
+}
+
+/// A log that proves checkout identity without needing a follow-up read.
+fn checkout_log() -> String {
+    format!("HEAD is now at {HEAD} workflow checkout\nrun output\n")
+}
+
+fn budget_errors_for(evidence: &Value, run_id: u64) -> Vec<Value> {
+    evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable errors")
+        .iter()
+        .filter(|error| {
+            error["operation"] == json!("investigation_budget") && error["run_id"] == json!(run_id)
+        })
+        .cloned()
+        .collect()
+}
+
+fn budget_of_one() -> Value {
+    let mut input = input();
+    input["max_investigated_runs"] = json!(1);
+    input
+}
+
+#[test]
+fn over_budget_in_flight_candidate_yields_an_investigation_budget_error() {
+    const COMPLETED_RUN: u64 = 101;
+    const IN_FLIGHT_RUN: u64 = 102;
+    const JOB_ID: u64 = 9_101;
+    // The completed failure is newer, so it keeps the single investigation
+    // slot and the in-flight mixed-state candidate overflows the budget.
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![
+            run(
+                COMPLETED_RUN,
+                "ci-a",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-10-07T02:20:00Z",
+            ),
+            run(
+                IN_FLIGHT_RUN,
+                "ci-b",
+                HEAD,
+                "in_progress",
+                None,
+                "2026-10-07T02:10:00Z",
+            ),
+        ]])
+        .with_failed_jobs(COMPLETED_RUN, failed_job(JOB_ID))
+        .with_log(JOB_ID, &checkout_log());
+
+    let evidence =
+        collect(&queries, &budget_of_one(), &mut RetryableHistory::default()).expect("collect");
+
+    assert_eq!(
+        sorted_run_ids(&evidence, "current_failures"),
+        [COMPLETED_RUN]
+    );
+    assert!(
+        sorted_run_ids(&evidence, "in_flight").contains(&IN_FLIGHT_RUN),
+        "the overflowed run is still listed as in-flight"
+    );
+    // The unexpanded in-flight summary carries no failed jobs, so it cannot
+    // survive the actionable-failure filter; the budget error is what marks
+    // the gap instead of silence.
+    for key in ["current_failures", "branch_failures", "deferred"] {
+        assert!(
+            !sorted_run_ids(&evidence, key).contains(&IN_FLIGHT_RUN),
+            "{key} must not silently absorb the uninvestigated in-flight run"
+        );
+    }
+    let budget = budget_errors_for(&evidence, IN_FLIGHT_RUN);
+    assert_eq!(
+        budget.len(),
+        1,
+        "the overflowed in-flight run needs one budget error"
+    );
+    assert_eq!(budget[0]["stage"], json!("investigation"));
+    assert_eq!(budget[0]["retryable"], json!(true));
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+}
+
+#[test]
+fn over_budget_completed_failure_keeps_its_investigation_budget_error() {
+    const COMPLETED_RUN: u64 = 101;
+    const IN_FLIGHT_RUN: u64 = 102;
+    const JOB_ID: u64 = 9_102;
+    // The in-flight run is newer here, so the completed failure is the one
+    // that overflows the single investigation slot.
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![
+            run(
+                IN_FLIGHT_RUN,
+                "ci-b",
+                HEAD,
+                "in_progress",
+                None,
+                "2026-10-07T02:20:00Z",
+            ),
+            run(
+                COMPLETED_RUN,
+                "ci-a",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-10-07T02:10:00Z",
+            ),
+        ]])
+        .with_failed_jobs(IN_FLIGHT_RUN, failed_job(JOB_ID))
+        .with_log(JOB_ID, &checkout_log());
+
+    let evidence =
+        collect(&queries, &budget_of_one(), &mut RetryableHistory::default()).expect("collect");
+
+    let budget = budget_errors_for(&evidence, COMPLETED_RUN);
+    assert_eq!(
+        budget.len(),
+        1,
+        "the overflowed completed failure keeps its budget error"
+    );
+    assert_eq!(
+        budget[0]["message"],
+        json!("current failure was not investigated because max_investigated_runs was exhausted")
+    );
+    let uninvestigated = evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .find(|failure| failure["run_id"] == json!(COMPLETED_RUN))
+        .expect("the overflowed completed failure stays represented");
+    assert_eq!(uninvestigated["investigated"], json!(false));
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+}
