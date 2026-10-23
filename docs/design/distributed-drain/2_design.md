@@ -751,7 +751,13 @@ owns delivery:
   `failure_activity`, `claim_candidate_carry`, runs when the leaf fails after its commit and
   before its own push: it pushes the tip of the branch the leaf synchronized or prepared (review
   fixes included) to `refs/orbit/candidates/<task>/<run>` on `origin`, and its checkpointed output
-  says where the candidate is. The settlement names that ref (`durable_ref`), or, when the push
+  says where the candidate is. `orbit-types::workflow::CandidateCarryOutput` defines this
+  persisted contract: `CandidateCarry` names `durable`, `failed`, `published` or `none`. The
+  engine serializes it with the existing key order and optional fields; Core parses it once at
+  the failure-checkpoint boundary and shares the typed value with candidate selection. Missing
+  or unknown carry information means no carry outcome; a failed carry without a reason keeps
+  the existing default diagnostic. Stored checkpoints need no migration.
+  The settlement names that ref (`durable_ref`), or, when the push
   failed, why (`carry_failure`); either way the candidate also stays on the follower that made it.
   A leaf that pushed and then committed past its pushed head before failing (a rejected
   before-landing review's fix) has that local tip carried the same way; the settlement keeps the

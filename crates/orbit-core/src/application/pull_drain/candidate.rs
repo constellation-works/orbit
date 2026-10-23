@@ -16,14 +16,10 @@
 
 use orbit_engine::review_gate::{INTERRUPTED_REVIEW_KEY, interrupted_review_ref, review_in_flight};
 use orbit_store::contracts::{ClaimCandidateRef, ClaimFailure, InterruptedReview};
-use orbit_types::workflow::{JobRun, PipelineState};
+use orbit_types::workflow::{CandidateCarry, CandidateCarryOutput, JobRun, PipelineState};
 
 /// The claimed PR leaf's base synchronization step.
 pub(super) const SYNC_BASE_STEP: &str = "sync_base";
-
-/// The claimed PR leaf's failure hook, whose checkpointed output says where
-/// it carried an unpublished candidate.
-const CANDIDATE_CARRY_ACTIVITY: &str = "claim_candidate_carry";
 
 /// The claimed owner-local leaf definition.
 const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
@@ -88,6 +84,19 @@ pub(super) fn preserved_candidate(
     run: &JobRun,
     state: &PipelineState,
 ) -> Option<ClaimCandidateRef> {
+    let carry = state
+        .failure_activity_checkpoint
+        .as_ref()
+        .and_then(CandidateCarryOutput::from_checkpoint);
+    preserved_candidate_with_carry(run, state, carry.as_ref())
+}
+
+/// Candidate selection using the carry already parsed for failure settlement.
+pub(super) fn preserved_candidate_with_carry(
+    run: &JobRun,
+    state: &PipelineState,
+    carry: Option<&CandidateCarryOutput>,
+) -> Option<ClaimCandidateRef> {
     let text = |output: Option<&serde_json::Value>, field: &str| {
         output
             .and_then(|output| output.get(field))
@@ -123,17 +132,28 @@ pub(super) fn preserved_candidate(
         (candidate.branch, candidate.head_sha) = (text(step("worktree"), "head_ref")?, committed?);
         return Some(candidate);
     }
-    let carry = state
-        .failure_activity_checkpoint
-        .as_ref()
-        .filter(|checkpoint| checkpoint.activity_name == CANDIDATE_CARRY_ACTIVITY)
-        .map(|checkpoint| &checkpoint.output);
+    let carry_text = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let carried_tip = carry.and_then(|carry| {
+        Some((
+            carry_text(carry.branch.as_deref())?,
+            carry_text(carry.head_sha.as_deref())?,
+        ))
+    });
     // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
     // the published head from then on. [ORB-15602] Commits past it that the
     // failure hook carried to a durable ref, or kept host-local after a
     // failed carry, are the candidate instead.
-    let carried_past_push = matches!(text(carry, "carry").as_deref(), Some("durable" | "failed"))
-        && both(carry, "branch", "head_sha").is_some();
+    let carried_past_push = carry.is_some_and(|carry| {
+        matches!(
+            carry.carry,
+            CandidateCarry::Durable | CandidateCarry::Failed
+        )
+    }) && carried_tip.is_some();
     if let Some(pushed) = both(step("landing_push"), "branch", "local_sha")
         .or_else(|| both(step("push"), "branch", "local_sha"))
         .filter(|_| !carried_past_push)
@@ -142,27 +162,29 @@ pub(super) fn preserved_candidate(
         candidate.published = true;
         return Some(candidate);
     }
-    if carry
-        .and_then(|carry| carry.get("partial"))
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
+    if carry.is_some_and(|carry| carry.partial == Some(true)) {
         candidate.failed_step_id = state
             .failure_activity_checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.failed_step_id.clone());
     }
-    (candidate.branch, candidate.head_sha) = both(carry, "branch", "head_sha")
+    (candidate.branch, candidate.head_sha) = carried_tip
         .or_else(|| both(step(SYNC_BASE_STEP), "head", "head_sha"))
         .or_else(|| both(step("prepare_branch"), "head", "head_sha"))?;
-    match text(carry, "carry").as_deref() {
-        Some("durable") => candidate.durable_ref = text(carry, "durable_ref"),
-        Some("published") => candidate.published = true,
-        Some("failed") => {
-            candidate.carry_failure =
-                Some(text(carry, "reason").unwrap_or_else(|| "the push failed".to_string()));
+    if let Some(carry) = carry {
+        match carry.carry {
+            CandidateCarry::Durable => {
+                candidate.durable_ref = carry_text(carry.durable_ref.as_deref())
+            }
+            CandidateCarry::Published => candidate.published = true,
+            CandidateCarry::Failed => {
+                candidate.carry_failure = Some(
+                    carry_text(carry.reason.as_deref())
+                        .unwrap_or_else(|| "the push failed".to_string()),
+                );
+            }
+            CandidateCarry::None => {}
         }
-        _ => {}
     }
     // [ORB-15314] A repair carried to `origin` has the candidate head as its
     // parent, so its ref serves the head to any host as well.

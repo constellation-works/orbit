@@ -24,6 +24,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
+use orbit_types::workflow::{CandidateCarry, CandidateCarryOutput};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -43,6 +44,14 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    serde_json::to_value(candidate_carry(host, input)?)
+        .map_err(|error| OrbitError::Execution(error.to_string()))
+}
+
+fn candidate_carry<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+) -> Result<CandidateCarryOutput, OrbitError> {
     let run_id = required_input_string(input, "run_id")?;
     let step = |step: &str, field: &str| {
         input
@@ -103,28 +112,25 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
             Ok(Some(commit)) => head_sha = commit,
             Ok(None) => return Ok(none("the leaf left no uncommitted candidate")),
             Err(error) => {
-                return Ok(json!({
-                    "phase": "candidate_carry",
-                    "carry": "failed",
-                    "task_id": task_id,
-                    "reason": error.to_string(),
-                }));
+                return Ok(CandidateCarryOutput {
+                    task_id: Some((*task_id).into()),
+                    reason: Some(error.to_string()),
+                    ..CandidateCarryOutput::new(CandidateCarry::Failed)
+                });
             }
         }
     }
-    let mut output = json!({
-        "phase": "candidate_carry",
-        "task_id": task_id,
-        "branch": branch,
-        "head_sha": head_sha,
-    });
-    if partial {
-        output["partial"] = json!(true);
-    }
+    let mut output = CandidateCarryOutput {
+        task_id: Some((*task_id).into()),
+        branch: Some(branch.clone()),
+        head_sha: Some(head_sha.clone()),
+        partial: partial.then_some(true),
+        ..CandidateCarryOutput::new(CandidateCarry::None)
+    };
     match carry_to_durable_ref(host, workspace_path, &branch, &head_sha, task_id, run_id) {
         Ok(durable_ref) => {
-            output["carry"] = json!("durable");
-            output["durable_ref"] = json!(durable_ref);
+            output.carry = CandidateCarry::Durable;
+            output.durable_ref = Some(durable_ref);
         }
         Err(reason) => {
             tracing::warn!(
@@ -134,8 +140,8 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
                 error = %reason,
                 "claimed candidate could not be carried to a durable ref"
             );
-            output["carry"] = json!("failed");
-            output["reason"] = json!(reason);
+            output.carry = CandidateCarry::Failed;
+            output.reason = Some(reason);
         }
     }
     Ok(output)
@@ -156,14 +162,13 @@ fn carry_published<H: RuntimeHost + ?Sized>(
     published_sha: &str,
     task_id: &str,
     run_id: &str,
-) -> Value {
-    let mut output = json!({
-        "phase": "candidate_carry",
-        "carry": "published",
-        "task_id": task_id,
-        "branch": branch,
-        "head_sha": published_sha,
-    });
+) -> CandidateCarryOutput {
+    let mut output = CandidateCarryOutput {
+        task_id: Some(task_id.into()),
+        branch: Some(branch.into()),
+        head_sha: Some(published_sha.into()),
+        ..CandidateCarryOutput::new(CandidateCarry::Published)
+    };
     let Some(workspace_path) = workspace_path else {
         return output;
     };
@@ -171,12 +176,12 @@ fn carry_published<H: RuntimeHost + ?Sized>(
     else {
         return output;
     };
-    output["head_sha"] = json!(local_sha);
-    output["published_sha"] = json!(published_sha);
+    output.head_sha = Some(local_sha.clone());
+    output.published_sha = Some(published_sha.into());
     match carry_to_durable_ref(host, workspace_path, branch, &local_sha, task_id, run_id) {
         Ok(durable_ref) => {
-            output["carry"] = json!("durable");
-            output["durable_ref"] = json!(durable_ref);
+            output.carry = CandidateCarry::Durable;
+            output.durable_ref = Some(durable_ref);
         }
         Err(reason) => {
             tracing::warn!(
@@ -187,8 +192,8 @@ fn carry_published<H: RuntimeHost + ?Sized>(
                 error = %reason,
                 "commits past the claimed leaf's published head could not be carried"
             );
-            output["carry"] = json!("failed");
-            output["reason"] = json!(reason);
+            output.carry = CandidateCarry::Failed;
+            output.reason = Some(reason);
         }
     }
     output
@@ -255,10 +260,9 @@ pub(in crate::executor::automation::vcs) fn push_candidate_ref<H: RuntimeHost + 
         })
 }
 
-fn none(reason: &str) -> Value {
-    json!({
-        "phase": "candidate_carry",
-        "carry": "none",
-        "reason": reason,
-    })
+fn none(reason: &str) -> CandidateCarryOutput {
+    CandidateCarryOutput {
+        reason: Some(reason.into()),
+        ..CandidateCarryOutput::new(CandidateCarry::None)
+    }
 }

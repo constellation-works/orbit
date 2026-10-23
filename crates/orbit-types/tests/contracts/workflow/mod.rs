@@ -1,4 +1,5 @@
 mod activity_v2;
+mod candidate_carry;
 mod host_evidence;
 mod job;
 mod pipeline;
