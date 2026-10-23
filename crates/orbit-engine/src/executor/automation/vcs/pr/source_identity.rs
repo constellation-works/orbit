@@ -7,7 +7,11 @@ use orbit_common::{
     text::floor_char_boundary,
 };
 use orbit_types::{
-    task::TaskHistoryEntry,
+    task::{
+        PublicationProofValue, PublicationPushCheckpoint, PublicationPushDecision,
+        PublicationPushProof, PublicationSettlingDecision, PublicationSettlingObservation,
+        TaskDecision, TaskHistoryEntry,
+    },
     workflow::{JobRunState, SourceRepairBinding},
 };
 use serde_json::{Value, json};
@@ -98,7 +102,7 @@ struct Settling {
     rereads: u64,
     waited_seconds: u64,
     settled_heads: Vec<String>,
-    pending_push: Option<(String, Value)>,
+    pending_push: Option<(String, Option<PublicationPushProof>)>,
 }
 
 impl Settling {
@@ -108,28 +112,22 @@ impl Settling {
             if entry.by != "system" || entry.event != OBSERVED {
                 continue;
             }
-            let value: Value =
-                serde_json::from_str(entry.note.as_deref().unwrap_or("")).map_err(|_| {
-                    OrbitError::Execution("publication settling history unreadable".into())
-                })?;
-            if value["run_id"] != run {
+            let Some(observation) = PublicationSettlingObservation::from_entry(&entry, run)
+                .map_err(|error| OrbitError::Execution(error.to_string()))?
+            else {
                 continue;
-            }
-            let delay = value["settling"]["reserved_delay_seconds"]
-                .as_u64()
-                .ok_or_else(|| {
-                    OrbitError::Execution("publication settling reservation unreadable".into())
-                })?;
+            };
+            let delay = observation.reserved_delay_seconds;
             if delay > 0 {
                 budget.rereads = budget.rereads.saturating_add(1);
                 budget.waited_seconds = budget.waited_seconds.saturating_add(delay);
-                let head = value["published_head"].as_str().ok_or_else(|| {
+                let head = observation.published_head.as_text().ok_or_else(|| {
                     OrbitError::Execution("publication settling head unreadable".into())
                 })?;
-                budget.pending_push = Some((head.into(), value["successful_push"].clone()));
+                budget.pending_push = Some((head.into(), observation.successful_push));
             }
-            if value["settling"]["decision"] == "settled"
-                && let Some(head) = value["published_head"].as_str()
+            if observation.decision == PublicationSettlingDecision::Settled
+                && let Some(head) = observation.published_head.as_text()
             {
                 budget.settled_heads.push(head.into());
                 budget.pending_push = None;
@@ -158,7 +156,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         // Keep the existing ordering: compare with HEAD read after the provider.
         let published = git_output(&context.workspace_path, &["rev-parse", "HEAD"])?;
         let published_head = published.trim();
-        let push = successful_push(host, &context.batch_id, binding, published_head);
+        let push = successful_push(host, &context.batch_id, binding, published_head)?;
         let mut differences = match &read {
             Ok(pr) => mismatches(binding, pr, published_head),
             Err(_) => vec![
@@ -198,7 +196,9 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         {
             differences.push(json!({"field":"successful_push", "expected":"unchanged candidate and successful push proof", "observed":{"presence":"changed"}}));
         }
-        let previous = replacement_previous(&push, published_head);
+        let previous = push
+            .as_ref()
+            .and_then(|push| replacement_previous(push, published_head));
         let stale = read.as_ref().ok().is_some_and(|pr| {
             previous.is_some_and(|previous| pr.exact_head_sha.as_deref() == Some(previous))
         });
@@ -253,11 +253,26 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             budget.pending_push = Some((published_head.into(), push.clone()));
         }
         let settled = differences.is_empty();
+        let observation = PublicationSettlingObservation {
+            run_id: serde_json::from_value(safe_text(&context.batch_id))
+                .map_err(|error| OrbitError::Execution(error.to_string()))?,
+            published_head: serde_json::from_value(safe_text(published_head))
+                .map_err(|error| OrbitError::Execution(error.to_string()))?,
+            successful_push: push,
+            reserved_delay_seconds: delay,
+            decision: if can_wait {
+                PublicationSettlingDecision::Waiting
+            } else if settled {
+                PublicationSettlingDecision::Settled
+            } else {
+                PublicationSettlingDecision::Refused
+            },
+        };
         let finished_at = Utc::now();
         let evidence = json!({
-            "schema_version":1, "run_id":safe_text(&context.batch_id),
+            "schema_version":1, "run_id":observation.run_id,
             "admission":admission, "admission_binding_sha256":binding_hash,
-            "published_head":safe_text(published_head), "successful_push":push,
+            "published_head":observation.published_head, "successful_push":observation.successful_push,
             "remote_branch":remote,
             "read":{"operation":operations::PR_STATUS, "selector":safe_text(&binding.pull_request), "started_at":started_at, "finished_at":finished_at,
                 "outcome":if read.is_ok() { "readable" } else { "unreadable" },
@@ -268,9 +283,9 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
                     Some(if budget.settled_heads.iter().any(|head| head == published_head) { "head_regressed" } else { "budget_exhausted" })
                 } else { Some("predicate_changed_or_unproven_head") },
                 "rereads":budget.rereads, "waited_seconds":budget.waited_seconds, "reserved_delay_seconds":delay,
-                "decision":if can_wait { "waiting" } else if settled { "settled" } else { "refused" }},
+                "decision":observation.decision},
         });
-        record_observation(host, binding, finished_at, &evidence, can_wait || settled)?;
+        record_observation(host, binding, finished_at, &evidence, observation)?;
         if settled {
             return Ok(());
         }
@@ -294,13 +309,10 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
     }
 }
 
-fn replacement_previous<'a>(push: &'a Value, head: &str) -> Option<&'a str> {
-    let previous = push["remote_sha_before"].as_str()?;
-    (push["force_with_lease"] == true
-        && matches!(
-            push["decision"].as_str(),
-            Some("performed_force_with_lease" | "performed_fast_forward")
-        )
+fn replacement_previous<'a>(push: &'a PublicationPushProof, head: &str) -> Option<&'a str> {
+    let previous = push.remote_sha_before.as_text()?;
+    (push.force_with_lease == Some(true)
+        && matches!(push.decision, PublicationPushDecision::Performed(_))
         && previous != head
         && matches!(previous.len(), 40 | 64)
         && previous.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -312,7 +324,7 @@ fn record_observation<H: RuntimeHost + ?Sized>(
     binding: &SourceRepairBinding,
     at: DateTime<Utc>,
     evidence: &Value,
-    observed: bool,
+    observation: PublicationSettlingObservation,
 ) -> Result<(), OrbitError> {
     host.apply_task_automation_update(
         &binding.task_id,
@@ -320,12 +332,17 @@ fn record_observation<H: RuntimeHost + ?Sized>(
             append_history: vec![TaskHistoryEntry {
                 at,
                 by: "system".into(),
-                event: if observed { OBSERVED } else { REFUSED }.into(),
+                event: if observation.decision == PublicationSettlingDecision::Refused {
+                    REFUSED
+                } else {
+                    OBSERVED
+                }
+                .into(),
                 note: Some(evidence.to_string()),
                 from_status: None,
                 to_status: None,
                 operation_id: None,
-                decision: None,
+                decision: Some(TaskDecision::SourceRepairPublication(observation)),
             }],
             ..Default::default()
         },
@@ -356,6 +373,21 @@ fn admission_evidence(binding: &SourceRepairBinding) -> Result<Value, OrbitError
     Ok(Value::Object(admission))
 }
 
+// Deserialize the authenticated checkpoint once, before projecting its fields.
+// Arbitrary diagnostic fields remain raw only at this observation boundary.
+#[derive(serde::Deserialize)]
+struct PushCheckpoint {
+    phase: PublicationPushCheckpoint,
+    branch: String,
+    local_sha: String,
+    #[serde(default)]
+    remote_sha_before: Value,
+    #[serde(default)]
+    force_with_lease: Value,
+    #[serde(default)]
+    decision: Value,
+}
+
 /// A checkpoint is evidence only when this run's successful step output agrees
 /// with its named pipeline checkpoint and the exact branch/published head.
 /// Missing or unreadable provenance is recorded as unconfirmed, never invented
@@ -365,25 +397,44 @@ fn successful_push<H: RuntimeHost + ?Sized>(
     run_id: &str,
     binding: &SourceRepairBinding,
     head: &str,
-) -> Value {
+) -> Result<Option<PublicationPushProof>, OrbitError> {
     let Ok(Some(state)) = host.read_run_state(run_id) else {
-        return Value::Null;
+        return Ok(None);
     };
     if state.run_id != run_id || state.job_id != "task_pr_pipeline" {
-        return Value::Null;
+        return Ok(None);
     }
     let Some(push) = state.pipeline.get("push") else {
-        return Value::Null;
+        return Ok(None);
     };
-    if push["phase"] != "push" || push["branch"] != binding.branch || push["local_sha"] != head {
-        return Value::Null;
+    let Ok(checkpoint) = serde_json::from_value::<PushCheckpoint>(push.clone()) else {
+        return Ok(None);
+    };
+    if checkpoint.branch != binding.branch || checkpoint.local_sha != head {
+        return Ok(None);
     }
     let Some((index, _)) = state.step_outputs.iter().find(|(index, output)| {
         *output == push && state.step_states.get(index) == Some(&JobRunState::Success)
     }) else {
-        return Value::Null;
+        return Ok(None);
     };
-    json!({"step_index":index, "checkpoint":"push", "checkpoint_sha256":sha256_hex(push.to_string().as_bytes()), "branch":bounded_value(&push["branch"]), "local_sha":bounded_value(&push["local_sha"]), "remote_sha_before":bounded_value(&push["remote_sha_before"]), "force_with_lease":push["force_with_lease"].as_bool(), "decision":bounded_value(&push["decision"])})
+    Ok(Some(PublicationPushProof {
+        step_index: *index,
+        checkpoint: checkpoint.phase,
+        checkpoint_sha256: sha256_hex(push.to_string().as_bytes()),
+        branch: proof_value(&json!(checkpoint.branch))?,
+        local_sha: proof_value(&json!(checkpoint.local_sha))?,
+        remote_sha_before: proof_value(&checkpoint.remote_sha_before)?,
+        force_with_lease: checkpoint.force_with_lease.as_bool(),
+        decision: serde_json::from_value(bounded_value(&checkpoint.decision))
+            .map_err(|error| OrbitError::Execution(error.to_string()))?,
+    }))
+}
+
+/// Convert only the existing fixed-depth, redacted diagnostic projection.
+fn proof_value(value: &Value) -> Result<PublicationProofValue, OrbitError> {
+    serde_json::from_value(bounded_value(value))
+        .map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
 fn observed(value: Option<&Value>) -> Value {
