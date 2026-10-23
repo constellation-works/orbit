@@ -543,13 +543,13 @@ try {
     assert(view.status === '' && view.source === '' && view.time === '' && view.empty, `${label}: the status bar is cleared: ${JSON.stringify(view)}`);
   };
   logSnapshots = {
-    [SERVING]: { events: [logEvent('alpha-only-event')], offset: 7, agent_offset: 2 },
-    hostb: { events: [], offset: 3, agent_offset: 1 },
+    [SERVING]: { events: [logEvent('alpha-only-event')], offset: 7, agent_offset: 2, cursor: '7@alpha-op:2@alpha-agent' },
+    hostb: { events: [], offset: 3, agent_offset: 1, cursor: '3@hostb-op:1@hostb-agent' },
   };
   logStreams = [];
   await openPage('/', { fresh: true });
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
-  await until('the alpha stream from its snapshot cursor', () => logStreams.some((entry) => entry.host === SERVING && entry.query === '?from=7&agent_from=2'));
+  await until('the alpha stream from its snapshot cursor', () => logStreams.some((entry) => entry.host === SERVING && entry.query === '?from=7&agent_from=2&cursor=7%40alpha-op%3A2%40alpha-agent'));
   let view = await logView();
   assert(view.rows.join() === 'alpha-only-event' && view.status === 'alpha-only-event' && !view.empty, `alpha's snapshot is shown: ${JSON.stringify(view)}`);
   await page.evaluate(() => document.getElementById('log-follow-tail').click());
@@ -585,10 +585,10 @@ try {
   await assertRetired('a stale alpha snapshot settling on hostb');
 
   settleLog('hostb', { body: logSnapshots.hostb });
-  await until('the hostb stream from its own cursor', () => logStreams.some((entry) => entry.host === 'hostb' && entry.query === '?from=3&agent_from=1'));
+  await until('the hostb stream from its own cursor', () => logStreams.some((entry) => entry.host === 'hostb' && entry.query === '?from=3&agent_from=1&cursor=3%40hostb-op%3A1%40hostb-agent'));
   await assertRetired('an empty hostb snapshot');
   const streamsSinceSwitch = routeLog.filter((entry) => entry.path.includes('/log/stream'));
-  assert(streamsSinceSwitch.every((entry) => entry.path === '/api/on/hostb/log/stream?from=3&agent_from=1'),
+  assert(streamsSinceSwitch.every((entry) => entry.path === '/api/on/hostb/log/stream?from=3&agent_from=1&cursor=3%40hostb-op%3A1%40hostb-agent'),
     `only hostb's stream opens, from hostb's cursor: ${JSON.stringify(streamsSinceSwitch)}`);
   logHolds.clear();
 

@@ -21,21 +21,22 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use super::{LogQuery, map_runtime_error, non_empty_string, server_error};
 use crate::log_format::{
-    Filters as LogFilters, RenderedLogEvent, parse_matching_event, read_recent_rendered_tail,
-    render_log_event_for_web, resolve_log_path,
+    Filters as LogFilters, RenderedLogEvent, log_file_generation, parse_matching_event,
+    read_recent_rendered_tail, render_log_event_for_web, resolve_log_path,
 };
 
 const LOG_DEFAULT_LIMIT: usize = 50;
 const LOG_MAX_LIMIT: usize = 500;
 
-/// Snapshot body for `GET /api/log`. `offset` is the byte cursor just past
-/// the records the snapshot scanned, so `/api/log/stream?from=` resumes with
-/// neither a gap nor a repeat, however many lines land in between.
+/// Snapshot body for `GET /api/log`. `cursor` binds complete-record offsets
+/// to each scanned file's generation, so `/api/log/stream?cursor=` resumes
+/// without skipping a replacement file. Numeric offsets remain for older clients.
 #[derive(Debug, Serialize)]
 struct LogSnapshot {
     events: Vec<RenderedLogEvent>,
     offset: u64,
     agent_offset: u64,
+    cursor: String,
 }
 
 const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
@@ -146,8 +147,19 @@ pub(super) async fn stream_log(Query(q): Query<LogQuery>, headers: HeaderMap) ->
         Ok(filters) => filters,
         Err(e) => return map_runtime_error(e),
     };
-    let resume = stream_resume_offset(q.from, last_event_id_header(&headers));
-    let agent_resume = stream_agent_resume_offset(q.agent_from, last_event_id_header(&headers));
+    let cursor = last_event_id_header(&headers)
+        .and_then(parse_stream_cursor)
+        .or_else(|| q.cursor.as_deref().and_then(parse_stream_cursor));
+    let (resume, agent_resume) = match cursor {
+        Some((operational, agent)) => (
+            Some(operational),
+            agent.or_else(|| q.agent_from.map(FeedCursor::legacy)),
+        ),
+        None => (
+            q.from.map(FeedCursor::legacy),
+            q.agent_from.map(FeedCursor::legacy),
+        ),
+    };
     let stream = ReceiverSseStream {
         rx: spawn_log_sse_frames(path, filters, permit, resume, agent_resume),
     };
@@ -197,11 +209,16 @@ fn read_log_snapshot_from_path(
     let mut tail = read_recent_rendered_tail(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
     let mut agent_offset = 0;
+    let mut agent_cursor = None;
     if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
         let agent_tail = read_recent_rendered_tail(&agent_path, &filters, limit).map_err(|e| {
             orbit_core::OrbitError::Io(format!("read log {}: {e}", agent_path.display()))
         })?;
         agent_offset = agent_tail.cursor;
+        agent_cursor = Some(FeedCursor {
+            offset: agent_tail.cursor,
+            generation: Some(agent_tail.generation),
+        });
         tail.events.extend(agent_tail.events);
         tail.events.sort_by(|left, right| left.ts.cmp(&right.ts));
         let discard = tail.events.len().saturating_sub(limit);
@@ -209,30 +226,101 @@ fn read_log_snapshot_from_path(
     }
     // The cursor comes from the scanned extent itself, never a later `stat`:
     // a line appended after the scan lies beyond it and reaches the client
-    // through `?from=<offset>` / `Last-Event-ID` instead of being skipped.
+    // through `?cursor=` / `Last-Event-ID` instead of being skipped.
+    let cursor = format_stream_cursor(
+        &FeedCursor {
+            offset: tail.cursor,
+            generation: Some(tail.generation),
+        },
+        agent_cursor.as_ref(),
+    );
     Ok(LogSnapshot {
+        cursor,
         events: tail.events,
         offset: tail.cursor,
         agent_offset,
     })
 }
 
-/// Prefer SSE `Last-Event-ID` over `?from=` so a browser auto-reconnect does
-/// not replay from the snapshot offset baked into the EventSource URL.
-fn stream_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
-    last_event_id
-        .and_then(|raw| raw.trim().split(':').next()?.parse::<u64>().ok())
-        .or(from)
+/// A byte position and, for rotation-safe clients, the file it belongs to.
+#[derive(Clone, Debug)]
+struct FeedCursor {
+    offset: u64,
+    generation: Option<String>,
 }
 
-fn stream_agent_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
-    last_event_id
-        .and_then(|raw| {
-            let (operational, agent) = raw.trim().split_once(':')?;
-            operational.parse::<u64>().ok()?;
-            agent.parse::<u64>().ok()
+impl FeedCursor {
+    fn legacy(offset: u64) -> Self {
+        Self {
+            offset,
+            generation: None,
+        }
+    }
+
+    fn at_end(path: &std::path::Path) -> Self {
+        // Capture identity and extent together, including before the first poll.
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|metadata| {
+                Some(Self {
+                    offset: metadata.len(),
+                    generation: Some(log_file_generation(&metadata).ok()?),
+                })
+            })
+            .unwrap_or(Self {
+                offset: 0,
+                generation: Some("missing".into()),
+            })
+    }
+
+    fn encode(&self) -> String {
+        match &self.generation {
+            Some(generation) => format!("{}@{generation}", self.offset),
+            None => self.offset.to_string(),
+        }
+    }
+}
+
+/// IDs are opaque to consumers. Accept legacy byte-only IDs deliberately,
+/// but never pair an invalid generation with a trusted offset.
+fn parse_stream_cursor(raw: &str) -> Option<(FeedCursor, Option<FeedCursor>)> {
+    fn feed(raw: &str) -> Option<FeedCursor> {
+        let (offset, generation) = match raw.split_once('@') {
+            Some((offset, generation)) => {
+                if generation.is_empty()
+                    || generation.len() > 128
+                    || !generation
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                {
+                    return None;
+                }
+                (offset, Some(generation.to_owned()))
+            }
+            None => (raw, None),
+        };
+        Some(FeedCursor {
+            offset: offset.parse().ok()?,
+            generation,
         })
-        .or(from)
+    }
+    let mut feeds = raw.trim().split(':');
+    let operational = feed(feeds.next()?)?;
+    let agent = match feeds.next() {
+        Some(raw) => Some(feed(raw)?),
+        None => None,
+    };
+    if feeds.next().is_some() {
+        return None;
+    }
+    Some((operational, agent))
+}
+
+fn format_stream_cursor(operational: &FeedCursor, agent: Option<&FeedCursor>) -> String {
+    match agent {
+        Some(agent) => format!("{}:{}", operational.encode(), agent.encode()),
+        None => operational.encode(),
+    }
 }
 
 fn last_event_id_header(headers: &HeaderMap) -> Option<&str> {
@@ -257,37 +345,34 @@ fn spawn_log_sse_frames(
     path: PathBuf,
     filters: LogFilters,
     permit: OwnedSemaphorePermit,
-    resume_offset: Option<u64>,
-    agent_resume_offset: Option<u64>,
+    resume_offset: Option<FeedCursor>,
+    agent_resume_offset: Option<FeedCursor>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel(LOG_STREAM_CHANNEL_DEPTH);
-    // A fresh stream starts at the file's end as of this request, read here
-    // before the polling thread starts rather than whenever it first runs. A
-    // resume offset past the end means the log rotated while the client was
-    // away (the tab closes its stream while hidden), so it is kept: the shrink
-    // check in `read_appended_log_events` then replays the new file from 0
-    // instead of skipping what was written to it.
-    let start_offset =
-        resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+    let start = resume_offset.unwrap_or_else(|| FeedCursor::at_end(&path));
     let agent_path = orbit_common::observability::logging::agent_jsonl_log_path(&path);
-    let agent_start_offset = agent_resume_offset.unwrap_or_else(|| {
+    let agent_start = agent_resume_offset.unwrap_or_else(|| {
         agent_path
             .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|m| m.len())
-            .unwrap_or(0)
+            .map_or_else(|| FeedCursor::legacy(0), |path| FeedCursor::at_end(path))
     });
     thread::spawn(move || {
         // Permit is dropped when this thread exits, which happens within one
         // idle poll interval — or one batch of a replay — of the client
         // disconnecting (tx.is_closed()).
         let _permit = permit;
-        let mut offset = start_offset;
-        let mut agent_offset = agent_start_offset;
-        let mut complete_offset = start_offset;
-        let mut complete_agent_offset = agent_start_offset;
-        let mut lines = LogLineBuffer::default();
-        let mut agent_lines = LogLineBuffer::default();
+        let mut offset = start.offset;
+        let mut agent_offset = agent_start.offset;
+        let mut complete = start.clone();
+        let mut complete_agent = agent_start.clone();
+        let mut lines = LogLineBuffer {
+            identity: start.generation,
+            ..LogLineBuffer::default()
+        };
+        let mut agent_lines = LogLineBuffer {
+            identity: agent_start.generation,
+            ..LogLineBuffer::default()
+        };
         let mut backoff = PollBackoff::new();
         loop {
             if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
@@ -301,12 +386,18 @@ fn spawn_log_sse_frames(
             let mut caught_up =
                 match read_appended_log_events(&path, &filters, &mut offset, &mut lines) {
                     Ok(batch) => {
-                        complete_offset = batch.cursor;
+                        complete = FeedCursor {
+                            offset: batch.cursor,
+                            generation: lines.identity.clone(),
+                        };
                         for (event, event_offset) in batch.events {
                             let frame = match format_feed_sse_frame(
                                 &event,
-                                event_offset,
-                                agent_path.as_ref().map(|_| complete_agent_offset),
+                                &FeedCursor {
+                                    offset: event_offset,
+                                    generation: lines.identity.clone(),
+                                },
+                                agent_path.as_ref().map(|_| &complete_agent),
                             ) {
                                 Ok(frame) => frame,
                                 Err(_) => continue,
@@ -329,12 +420,18 @@ fn spawn_log_sse_frames(
                     &mut agent_lines,
                 ) {
                     caught_up &= !batch.more;
-                    complete_agent_offset = batch.cursor;
+                    complete_agent = FeedCursor {
+                        offset: batch.cursor,
+                        generation: agent_lines.identity.clone(),
+                    };
                     for (event, event_offset) in batch.events {
                         let frame = match format_feed_sse_frame(
                             &event,
-                            complete_offset,
-                            Some(event_offset),
+                            &complete,
+                            Some(&FeedCursor {
+                                offset: event_offset,
+                                generation: agent_lines.identity.clone(),
+                            }),
                         ) {
                             Ok(frame) => frame,
                             Err(_) => continue,
@@ -377,8 +474,7 @@ pub(super) struct LogLineBuffer {
     /// Cursor after the last complete record. Companion-feed event IDs must
     /// not advance past an unfinished record that a reconnect cannot rebuild.
     complete_offset: u64,
-    #[cfg(unix)]
-    identity: Option<(u64, u64)>,
+    identity: Option<String>,
 }
 
 impl LogLineBuffer {
@@ -445,16 +541,16 @@ pub(super) fn read_appended_log_events(
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
     let len = metadata.len();
-    #[cfg(unix)]
+    let identity = log_file_generation(&metadata)?;
+    if lines
+        .identity
+        .as_ref()
+        .is_some_and(|prior| *prior != identity)
     {
-        use std::os::unix::fs::MetadataExt;
-        let identity = (metadata.dev(), metadata.ino());
-        if lines.identity.is_some_and(|prior| prior != identity) {
-            *offset = 0;
-            lines.clear();
-        }
-        lines.identity = Some(identity);
+        *offset = 0;
+        lines.clear();
     }
+    lines.identity = Some(identity);
     if len < *offset {
         *offset = 0;
         lines.clear();
@@ -497,20 +593,13 @@ pub(super) fn read_appended_log_events(
     })
 }
 
-fn format_sse_frame(event: &RenderedLogEvent, offset: u64) -> Result<String, serde_json::Error> {
-    serde_json::to_string(event).map(|json| format!("id: {offset}\ndata: {json}\n\n"))
-}
-
 fn format_feed_sse_frame(
     event: &RenderedLogEvent,
-    offset: u64,
-    agent_offset: Option<u64>,
+    operational: &FeedCursor,
+    agent: Option<&FeedCursor>,
 ) -> Result<String, serde_json::Error> {
-    match agent_offset {
-        Some(agent_offset) => serde_json::to_string(event)
-            .map(|json| format!("id: {offset}:{agent_offset}\ndata: {json}\n\n")),
-        None => format_sse_frame(event, offset),
-    }
+    let cursor = format_stream_cursor(operational, agent);
+    serde_json::to_string(event).map(|json| format!("id: {cursor}\ndata: {json}\n\n"))
 }
 
 struct ReceiverSseStream {
