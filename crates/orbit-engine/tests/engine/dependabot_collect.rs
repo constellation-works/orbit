@@ -39,6 +39,10 @@ case "$1" in
       echo "fake gh: unsupported call: $*" >&2
       exit 2
     fi
+    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
+      echo "transient repo view failure" >&2
+      exit 1
+    fi
     for arg in "$@"; do
       if [ "$arg" = "--repo" ]; then
         echo "unknown flag: --repo" >&2
@@ -133,6 +137,69 @@ fn explicit_repository_reaches_alert_queries() {
             "collection must query {endpoint} after repo view: {lines:?}"
         );
     }
+}
+
+#[test]
+fn repo_view_failure_degrades_without_losing_alert_families() {
+    const TEST: &str = "repo_view_failure_degrades_without_losing_alert_families";
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
+        spawn_isolated(TEST);
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("repo root");
+    let host = RootHost {
+        root: root.path().to_string_lossy().into_owned(),
+    };
+    let outcome = execute_deterministic_action(
+        &host,
+        "collect_dependabot_alerts",
+        &json!({}),
+        &json!({"repo": "acme/orbit"}),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("repo view failure should not abort alert collection");
+
+    let snapshot = &outcome["dependabot_snapshot"];
+    assert_eq!(snapshot["repository"], json!({}));
+    assert_eq!(snapshot["collected"], true);
+    assert_eq!(snapshot["collection_status"], "partially_collected");
+    for family in ["code_scanning", "secret_scanning"] {
+        assert_eq!(snapshot[family]["collected"], true, "{family} family");
+        assert_eq!(
+            snapshot[family]["collection_status"], "fully_collected",
+            "{family} family"
+        );
+    }
+    assert!(snapshot["query_errors"].as_array().is_some_and(|errors| {
+        errors.iter().any(|error| {
+            error["query"] == "repo_view"
+                && error["retryable"] == true
+                && error["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("transient repo view failure"))
+        })
+    }));
+
+    let calls =
+        fs::read_to_string(std::env::var(LOG_ENV).expect("fake gh log")).expect("read gh calls");
+    let lines: Vec<&str> = calls.lines().collect();
+    for endpoint in [
+        "repos/acme/orbit/dependabot/alerts",
+        "repos/acme/orbit/code-scanning/alerts",
+        "repos/acme/orbit/secret-scanning/alerts",
+    ] {
+        assert!(
+            lines.iter().any(|line| line.contains(endpoint)),
+            "collection must query {endpoint} after repo view failure: {lines:?}"
+        );
+    }
+    assert!(
+        lines.iter().any(|line| line.starts_with("pr list")),
+        "collection must query Dependabot pull requests after repo view failure: {lines:?}"
+    );
 }
 
 fn spawn_isolated(test: &str) {
