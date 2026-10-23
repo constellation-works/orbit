@@ -175,7 +175,7 @@ pub(super) fn evidence_to_alert(evidence: &CodeScanningAlertEvidence) -> Value {
         "security_severity": evidence.security_severity,
         "tool_name": evidence.tool_name,
         "tool_version": evidence.tool_version,
-        "tool_guid": evidence.tool_guid,
+        "tool_guid": display(&evidence.tool_guid),
         "message": evidence.message,
         "ref": evidence.git_ref,
         "commit_sha": evidence.commit_sha,
