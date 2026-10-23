@@ -2,7 +2,7 @@
 //!
 //! An owner drain started with `--auto-fix` hands a conflicting or red
 //! Orbit pull request whose task has no live run back to the delivery leaf
-//! that opened it (`application::job::pr_repair_adoption`). It does so
+//! that opened it (`application::job::pr_repair::adoption`). It does so
 //! through the ordinary checkpoint resume, rewound so the leaf's completion
 //! step runs again: the watcher there admits the repair against the pull
 //! request's attempt ledger, dispatches the `workflow.purpose_crews.auto_fix`

@@ -63,10 +63,10 @@ use orbit_types::workflow::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::orphan_adoption::AdoptionAuthority;
-use super::pr_auto_fix::pr_auto_fix_budget;
-use super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
-use super::{RunOwnerLiveness, run_owner_liveness};
+use super::super::orphan_adoption::AdoptionAuthority;
+use super::super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
+use super::super::{RunOwnerLiveness, run_owner_liveness};
+use super::admission::pr_auto_fix_budget;
 use crate::OrbitRuntime;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run_input::carried_task_ids;
