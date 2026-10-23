@@ -3,8 +3,8 @@
 use super::adopt::{Adoption, adopt};
 use super::reconcile::{reconcile, retire_covered_prefix};
 use super::{DEFINITION_CHANGED, DeliveryHost, Evaluation, input_digest, observe, stall};
-use crate::AutomationError;
 use crate::checkpoint::{commit, diagnostic};
+use crate::{AutomationError, DeferredReason};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
 
@@ -262,7 +262,7 @@ fn evaluate_pass(
     let through = if state.pending.len() > deliveries.len() {
         deliveries
             .last()
-            .ok_or_else(|| AutomationError::Deferred("empty_batch".into()))?
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::EmptyBatch))?
             .after
             .clone()
     } else {
@@ -273,7 +273,7 @@ fn evaluate_pass(
         .pending_commits
         .iter()
         .position(|sha| sha == &through.commit)
-        .ok_or_else(|| AutomationError::Deferred("delivery_boundary_missing".into()))?
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::DeliveryBoundaryMissing))?
         + 1;
 
     let commits = state.pending_commits[..end].to_vec();
@@ -283,7 +283,7 @@ fn evaluate_pass(
         .any(|delivery| !delivery.commits.iter().all(|sha| commits.contains(sha)))
     {
         return Err(AutomationError::Deferred(
-            "delivery_crosses_boundary".into(),
+            DeferredReason::DeliveryCrossesBoundary,
         ));
     }
 
@@ -385,7 +385,7 @@ fn admit_active(
     let active = state
         .active
         .as_ref()
-        .ok_or_else(|| AutomationError::Deferred("missing_claim".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::MissingClaim))?;
     if let Some(hold) = host.admission_hold(active)? {
         return stall::held(store, host, request, state, hold).map(Admission::Held);
     }

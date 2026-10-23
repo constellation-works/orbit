@@ -2,9 +2,9 @@
 
 use super::source::{BudgetClock, LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
 use crate::OrbitRuntime;
-use orbit_automation::AutomationError;
 use orbit_automation::members::preparation::{self, MaterialEvidence};
 use orbit_automation::routines::loader::declared_routine_names;
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -159,7 +159,7 @@ fn instructions_in_process(
     let mut listed_bytes = 0u64;
     let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
         if started.elapsed() >= SOURCE_DEADLINE {
-            failure = Some(AutomationError::Deferred("source_deadline".into()));
+            failure = Some(AutomationError::Deferred(DeferredReason::SourceDeadline));
             return git2::TreeWalkResult::Abort;
         }
         let Ok(name) = entry.name() else {
@@ -174,7 +174,7 @@ fn instructions_in_process(
         // `ls-tree -r -z --name-only` lists each non-tree path and a NUL.
         listed_bytes += (root.len() + name.len() + 1) as u64;
         if listed_bytes > LISTING_LIMIT {
-            failure = Some(AutomationError::Deferred("source_budget".into()));
+            failure = Some(AutomationError::Deferred(DeferredReason::SourceBudget));
             return git2::TreeWalkResult::Abort;
         }
         if matches!(name, "AGENTS.md" | "CLAUDE.md") {
@@ -190,15 +190,17 @@ fn instructions_in_process(
     let mut instructions = Vec::new();
     for (path, oid) in paths {
         if instructions.len() >= 50 {
-            return Err(AutomationError::Deferred("instruction_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::InstructionScanBudget,
+            ));
         }
         let blob = repo.find_blob(oid).map_err(local_git_error)?;
         // `git show` output above one command's evidence cap defers.
         if blob.size() as u64 > OUTPUT_LIMIT {
-            return Err(AutomationError::Deferred("source_budget".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
         let content = std::str::from_utf8(blob.content())
-            .map_err(|_| AutomationError::Deferred("stream did not contain valid UTF-8".into()))?;
+            .map_err(|_| AutomationError::Deferred(DeferredReason::SourceInvalidUtf8))?;
         instructions.push((path, content.to_owned()));
     }
     Ok(instructions)
@@ -230,7 +232,9 @@ fn instructions_with_git(
 
     for path in &paths {
         if instructions.len() >= 50 {
-            return Err(AutomationError::Deferred("instruction_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::InstructionScanBudget,
+            ));
         }
         instructions.push((
             path.to_string(),
@@ -413,7 +417,9 @@ fn selector_objects(
         return Ok(json!({".": tree}));
     }
     if paths.len() > 50 {
-        return Err(AutomationError::Deferred("selector_scan_budget".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::SelectorScanBudget,
+        ));
     }
     // A path under another selected directory is already covered by that
     // directory's tree id; listing both would make git expand the directory.
@@ -474,7 +480,9 @@ fn revision_tree<'r>(
 }
 
 fn local_git_error(error: git2::Error) -> AutomationError {
-    AutomationError::Deferred(format!("evidence_unavailable: local Git material: {error}"))
+    AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+        "local Git material: {error}"
+    )))
 }
 
 fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>, AutomationError> {
@@ -483,7 +491,9 @@ fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>
 
     for id in task.dependencies().iter().take(51) {
         if dependencies.len() + resolved.len() == 50 {
-            return Err(AutomationError::Deferred("dependency_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::DependencyScanBudget,
+            ));
         }
         match runtime.resolve_dependency_task(id)? {
             RegisteredTaskResolution::Resolved(dependency) => resolved.push(dependency),

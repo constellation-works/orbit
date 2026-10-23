@@ -10,11 +10,11 @@ use std::fmt::Write as _;
 use std::io::{Seek, Write as _};
 use std::path::Path;
 
-use orbit_automation::AutomationError;
 use orbit_automation::delivery::digest;
 use orbit_automation::delivery::recovery::{
     self, HISTORY_REPLAY_COMMIT_LIMIT, HistoryReplayInput, Recovery,
 };
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_store::{Store, compose};
 use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
@@ -285,6 +285,12 @@ fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState)
 
 #[test]
 fn missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence() {
+    // This fault changes PATH; isolate it from other source tests spawning Git.
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence,
+    )) {
+        return;
+    }
     let root = tempfile::tempdir().expect("tempdir");
     let empty_bin = root.path().join("empty-bin");
     std::fs::create_dir(&empty_bin).expect("empty PATH directory");
@@ -296,7 +302,10 @@ fn missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence(
         .is_ancestor("older", "newer")
         .expect_err("a missing Git executable is an operational failure");
     assert!(
-        matches!(&error, AutomationError::Deferred(reason) if reason.starts_with("source_spawn_failed:")),
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::SourceSpawnFailed(_))
+        ),
         "unexpected error: {error}"
     );
     assert!(
@@ -784,7 +793,8 @@ fn canonical_signature_deadline_propagates() {
     arm_canonical_signature_deadline();
     match replay(&source, &state) {
         Err(AutomationError::Deferred(reason)) => assert_eq!(
-            reason, "source_deadline",
+            reason.to_string(),
+            "source_deadline",
             "ORB-14356: a deadline while signing canonical commits propagates"
         ),
         other => panic!(
@@ -882,7 +892,9 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
                 );
                 self.calls.set(self.calls.get() + 1);
                 if self.calls.get() < 4 {
-                    Err(AutomationError::Deferred("provider offline".into()))
+                    Err(AutomationError::Deferred(DeferredReason::SourceIo(
+                        std::io::Error::other("provider offline").into(),
+                    )))
                 } else {
                     Ok("[]".into())
                 }
@@ -1014,9 +1026,12 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
         "alias.timeout-fixture=!sleep 60 & echo \"$PPID $$ $!\" > pids; wait",
         "timeout-fixture",
     ]);
-    assert!(
-        matches!(result, Err(orbit_automation::AutomationError::Deferred(reason)) if reason == "source_budget")
-    );
+    assert!(matches!(
+        result,
+        Err(orbit_automation::AutomationError::Deferred(
+            DeferredReason::SourceBudget
+        ))
+    ));
     assert!(started.elapsed() < Duration::from_secs(5));
     let pids = std::fs::read_to_string(root.path().join("pids")).unwrap();
     let pids: Vec<i32> = pids
@@ -1085,7 +1100,7 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
             assert!(result.is_err(), "a held lock must defer the fetch");
             assert!(
                 matches!(&result, Err(AutomationError::Deferred(reason))
-                if reason.contains("acquiring git fetch lock")),
+                if reason.to_string().contains("acquiring git fetch lock")),
                 "the held fetch lock must cause the deferral: {result:?}"
             );
             assert!(

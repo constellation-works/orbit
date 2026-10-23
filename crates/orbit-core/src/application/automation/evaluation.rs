@@ -3,7 +3,7 @@
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::delivery::{self, ActionOutcome, DeliveryHost};
-use orbit_automation::{AutomationError, automation_error_to_orbit};
+use orbit_automation::{AutomationError, DeferredReason, automation_error_to_orbit};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
@@ -300,9 +300,9 @@ impl DeliveryHost for Host<'_> {
             .runtime
             .automation_store()?
             .automation_state(&attempt.batch.consumer)?
-            .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
         if state.active.as_ref() != Some(attempt) {
-            return Err(AutomationError::Deferred("claim_superseded".into()));
+            return Err(AutomationError::Deferred(DeferredReason::ClaimSuperseded));
         }
 
         self.source.retain_batch(&attempt.batch)?;

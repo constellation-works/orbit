@@ -1,6 +1,6 @@
 //! Causal incident semantics. Missing recovery facts withhold diagnosis.
 
-use crate::{AutomationError, delivery::definition_epoch};
+use crate::{AutomationError, DeferredReason, delivery::definition_epoch};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,26 +18,30 @@ pub struct IncidentFacts {
 /// every other shape withholds with the reason that made it undiagnosable.
 pub fn incident_key(facts: &IncidentFacts) -> Result<String, AutomationError> {
     let withheld = if facts.cancellation {
-        Some("cancellation_withheld")
+        Some(DeferredReason::CancellationWithheld)
     } else if !facts.failure {
-        Some("not_execution_failure")
+        Some(DeferredReason::NotExecutionFailure)
     } else if !facts.current_failure_coupling {
-        Some("human_intent_or_coupling_changed")
+        Some(DeferredReason::HumanIntentOrCouplingChanged)
     } else if !facts.recovery_settled {
-        Some("recovery_pending")
+        Some(DeferredReason::RecoveryPending)
     } else {
         None
     };
 
     if let Some(reason) = withheld {
-        return Err(AutomationError::Deferred(reason.into()));
+        return Err(AutomationError::Deferred(reason));
     }
 
     let (Some(episode), Some(cause)) = (&facts.episode, &facts.cause) else {
-        return Err(AutomationError::Deferred("incident_unresolved".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::IncidentUnresolved,
+        ));
     };
     if episode.is_empty() || cause.is_empty() {
-        return Err(AutomationError::Deferred("incident_unresolved".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::IncidentUnresolved,
+        ));
     }
 
     definition_epoch(&(&facts.workspace, episode, cause))

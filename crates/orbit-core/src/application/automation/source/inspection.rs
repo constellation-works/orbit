@@ -4,7 +4,7 @@
 //! reftable refs (extensions it does not implement), keeps the bounded Git
 //! commands, so its status is unchanged.
 
-use orbit_automation::{AutomationError, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
 use orbit_types::workflow::automation::SourceRevision;
 
 use super::Source;
@@ -43,9 +43,11 @@ impl Source<'_> {
             || branch == "HEAD"
             || !git2::Reference::is_valid_name(&local_ref)
         {
-            return Err(AutomationError::Deferred(format!(
-                "evidence_unavailable: git check-ref-format --branch {branch}: fatal: '{branch}' is not a valid branch name"
-            )));
+            return Err(AutomationError::Deferred(
+                DeferredReason::EvidenceUnavailable(format!(
+                    "git check-ref-format --branch {branch}: fatal: '{branch}' is not a valid branch name"
+                )),
+            ));
         }
         let Ok(repo) = git2::Repository::open(self.root) else {
             return Ok(None);
@@ -54,10 +56,10 @@ impl Source<'_> {
             .find_reference(&local_ref)
             .and_then(|reference| reference.peel_to_commit())
             .map_err(|error| {
-                AutomationError::Deferred(format!(
-                    "evidence_unavailable: git rev-parse --verify --end-of-options {local_ref}^{{commit}}: {}",
+                AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+                    "git rev-parse --verify --end-of-options {local_ref}^{{commit}}: {}",
                     unresolved_text(&error)
-                ))
+                )))
             })?;
         let config = repo.config().map_err(unavailable)?;
         let remote = match config.get_string("remote.origin.url") {
@@ -120,7 +122,7 @@ fn unresolved_text(error: &git2::Error) -> String {
 }
 
 fn unavailable(error: git2::Error) -> AutomationError {
-    AutomationError::Deferred(format!(
-        "evidence_unavailable: local Git inspection: {error}"
-    ))
+    AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+        "local Git inspection: {error}"
+    )))
 }

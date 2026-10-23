@@ -1,7 +1,7 @@
 //! Canonical history replay and frozen-batch retention.
 
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     delivery::{digest, recovery::HISTORY_REPLAY_COMMIT_LIMIT},
 };
 use orbit_types::workflow::automation::recovery::{HistoryMapping, HistoryReplayRecord, refusal};
@@ -141,8 +141,9 @@ impl<'a> Source<'a> {
         for (_orphan, _canonical, proof_digest) in pending {
             let (Some(orphan), Some(canonical)) = (revisions.next(), revisions.next()) else {
                 return Err(AutomationError::Deferred(
-                    "evidence_unavailable: git cat-file --batch-check: replay revision count"
-                        .into(),
+                    DeferredReason::EvidenceUnavailable(
+                        "git cat-file --batch-check: replay revision count".into(),
+                    ),
                 ));
             };
             mappings.push(HistoryMapping {
@@ -348,7 +349,9 @@ impl<'a> Source<'a> {
                 Some(Err(error)) => signatures.push(Err(error)),
                 None => {
                     return Err(AutomationError::Deferred(
-                        "evidence_unavailable: git diff-tree --stdin: replay patch count".into(),
+                        DeferredReason::EvidenceUnavailable(
+                            "git diff-tree --stdin: replay patch count".into(),
+                        ),
                     ));
                 }
             }
@@ -371,7 +374,9 @@ impl<'a> Source<'a> {
         let lines: Vec<&str> = output.lines().collect();
         if lines.len() != commits.len() {
             return Err(AutomationError::Deferred(
-                "evidence_unavailable: git cat-file --batch-check: replay orbit tree count".into(),
+                DeferredReason::EvidenceUnavailable(
+                    "git cat-file --batch-check: replay orbit tree count".into(),
+                ),
             ));
         }
 
@@ -385,9 +390,9 @@ impl<'a> Source<'a> {
                 trees.push(None);
                 continue;
             }
-            return Err(AutomationError::Deferred(format!(
-                "evidence_unavailable: git cat-file --batch-check: {line}"
-            )));
+            return Err(AutomationError::Deferred(
+                DeferredReason::EvidenceUnavailable(format!("git cat-file --batch-check: {line}")),
+            ));
         }
         Ok(trees)
     }
@@ -461,7 +466,9 @@ impl<'a> Source<'a> {
         let lines: Vec<&str> = output.lines().collect();
         if lines.len() != commits.len() * 2 {
             return Err(AutomationError::Deferred(
-                "evidence_unavailable: git cat-file --batch-check: replay revision count".into(),
+                DeferredReason::EvidenceUnavailable(
+                    "git cat-file --batch-check: replay revision count".into(),
+                ),
             ));
         }
 
@@ -470,19 +477,21 @@ impl<'a> Source<'a> {
             let commit_line = lines[index * 2];
             let tree_line = lines[index * 2 + 1];
             let (commit_id, commit_kind) = object_and_type(commit_line).ok_or_else(|| {
-                AutomationError::Deferred(format!(
-                    "evidence_unavailable: git cat-file --batch-check: {commit} is not a commit"
-                ))
+                AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+                    "git cat-file --batch-check: {commit} is not a commit"
+                )))
             })?;
             let (tree_id, tree_kind) = object_and_type(tree_line).ok_or_else(|| {
-                AutomationError::Deferred(format!(
-                    "evidence_unavailable: git cat-file --batch-check: {commit} has no tree"
-                ))
+                AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+                    "git cat-file --batch-check: {commit} has no tree"
+                )))
             })?;
             if commit_kind != "commit" || tree_kind != "tree" {
-                return Err(AutomationError::Deferred(format!(
-                    "evidence_unavailable: git cat-file --batch-check: {commit} resolved to {commit_kind}/{tree_kind}"
-                )));
+                return Err(AutomationError::Deferred(
+                    DeferredReason::EvidenceUnavailable(format!(
+                        "git cat-file --batch-check: {commit} resolved to {commit_kind}/{tree_kind}"
+                    )),
+                ));
             }
             revisions.push(SourceRevision {
                 commit: commit_id.to_owned(),
@@ -549,7 +558,9 @@ impl<'a> Source<'a> {
         if self.revision(&batch.from_exclusive.commit)? != batch.from_exclusive
             || self.revision(&batch.through_inclusive.commit)? != batch.through_inclusive
         {
-            return Err(AutomationError::Deferred("source_revision_changed".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::SourceRevisionChanged,
+            ));
         }
 
         let (_, head) = self.head(&batch.branch)?;
@@ -558,7 +569,7 @@ impl<'a> Source<'a> {
         // folding every merge-base failure into `history_diverged` would
         // settle a closed action during an outage.
         if !self.is_ancestor(&batch.through_inclusive.commit, &head.commit)? {
-            return Err(AutomationError::Deferred("history_diverged".into()));
+            return Err(AutomationError::Deferred(DeferredReason::HistoryDiverged));
         }
 
         let range = format!(
@@ -574,7 +585,7 @@ impl<'a> Source<'a> {
 
         if actual != batch.commits {
             return Err(AutomationError::Deferred(
-                "source_membership_changed".into(),
+                DeferredReason::SourceMembershipChanged,
             ));
         }
 
@@ -616,23 +627,27 @@ impl<'a> Source<'a> {
 pub(in crate::application::automation) fn is_batch_mismatch(error: &AutomationError) -> bool {
     matches!(
         deferred_reason(error),
-        Some("source_revision_changed" | "history_diverged" | "source_membership_changed")
+        Some(
+            DeferredReason::SourceRevisionChanged
+                | DeferredReason::HistoryDiverged
+                | DeferredReason::SourceMembershipChanged
+        )
     )
 }
 
-fn deferred_reason(error: &AutomationError) -> Option<&str> {
+fn deferred_reason(error: &AutomationError) -> Option<&DeferredReason> {
     match error {
-        AutomationError::Deferred(reason) => Some(reason.as_str()),
+        AutomationError::Deferred(reason) => Some(reason),
         _ => None,
     }
 }
 
 fn is_source_deadline(error: &AutomationError) -> bool {
-    deferred_reason(error) == Some("source_deadline")
+    matches!(deferred_reason(error), Some(DeferredReason::SourceDeadline))
 }
 
 fn is_source_budget(error: &AutomationError) -> bool {
-    deferred_reason(error) == Some("source_budget")
+    matches!(deferred_reason(error), Some(DeferredReason::SourceBudget))
 }
 
 /// Deadline exhaustion, including the in-command check that reports
@@ -642,9 +657,9 @@ fn is_source_deadline_or_budget(error: &AutomationError) -> bool {
 }
 
 fn missing_orbit_tree(commit: &str) -> AutomationError {
-    AutomationError::Deferred(format!(
-        "evidence_unavailable: git rev-parse --verify --end-of-options {commit}:.orbit: path '.orbit' does not exist"
-    ))
+    AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+        "git rev-parse --verify --end-of-options {commit}:.orbit: path '.orbit' does not exist"
+    )))
 }
 
 fn is_object_name(line: &str) -> bool {

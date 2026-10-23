@@ -247,7 +247,7 @@ pub fn wedged_delivery_consumers(
 /// with the remote-tracking ref without fetching.
 pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
     source.verify_branch(branch).err().map(|error| match error {
-        AutomationError::Deferred(reason) => reason,
+        AutomationError::Deferred(reason) => reason.to_string(),
         other => other.to_string(),
     })
 }
