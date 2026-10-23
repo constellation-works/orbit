@@ -155,6 +155,45 @@ pub struct ReconciliationLog {
     pub sha256: String,
 }
 
+/// The raw classification of a required command's failure.
+///
+/// Stored records and log projections use the strings `environment` and
+/// `candidate`. Unknown strings remain opaque and retain non-candidate
+/// semantics, so historical and future records need no migration. A run that
+/// passes without deferring execution has no failure kind; its containing
+/// record controls null or omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequiredValidationFailureKind {
+    /// The environment could not judge the command, including missing tools
+    /// and deferred execution paths.
+    Environment,
+    /// The command ran and failed against the candidate.
+    Candidate,
+    /// An unrecognized persisted string, preserved verbatim.
+    Other(String),
+}
+
+impl Serialize for RequiredValidationFailureKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::Environment => "environment",
+            Self::Candidate => "candidate",
+            Self::Other(value) => value,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for RequiredValidationFailureKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "environment" => Self::Environment,
+            "candidate" => Self::Candidate,
+            _ => Self::Other(value),
+        })
+    }
+}
+
 /// One run of a required command at one commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,7 +203,7 @@ pub struct ReconciledCommandRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<String>,
+    pub failure_kind: Option<RequiredValidationFailureKind>,
     pub log: ReconciliationLog,
 }
 
@@ -184,11 +223,17 @@ impl ReconciledCommand {
     /// the baseline rather than to this delivery.
     pub fn reproduced_on_base(&self) -> bool {
         !self.head.passed
-            && self.head.failure_kind.as_deref() == Some("candidate")
-            && self
-                .baseline
-                .as_ref()
-                .is_some_and(|run| !run.passed && run.failure_kind.as_deref() == Some("candidate"))
+            && matches!(
+                self.head.failure_kind,
+                Some(RequiredValidationFailureKind::Candidate)
+            )
+            && self.baseline.as_ref().is_some_and(|run| {
+                !run.passed
+                    && matches!(
+                        run.failure_kind,
+                        Some(RequiredValidationFailureKind::Candidate)
+                    )
+            })
     }
 }
 

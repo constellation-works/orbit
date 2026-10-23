@@ -101,7 +101,7 @@ impl FailureLog<'_> {
         } else if self.network_transient {
             json!("transient")
         } else {
-            self.run.failure_kind()
+            json!(self.run.failure_kind())
         }
     }
 }
