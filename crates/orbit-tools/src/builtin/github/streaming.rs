@@ -118,6 +118,11 @@ pub struct StreamedLog {
     /// Whether the requested step/window matched anything in this source.
     /// Always true for an unscoped read.
     pub selection_found: bool,
+    /// A step was requested, none matched, and the source was a raw
+    /// (uncolumned) log: its only step titles are `Run <command>` display
+    /// groups, so an unmatched name may be a workflow step name that maps
+    /// to a command rather than an absent step.
+    pub selection_unsupported: bool,
 }
 
 /// Incrementally retain the head/tail excerpt and checkout evidence from a
@@ -154,6 +159,8 @@ pub struct StreamedLogCollector {
     selected_lines: usize,
     selection_found: bool,
     plain_step_active: bool,
+    plain_group_depth: usize,
+    plain_log_seen: bool,
 }
 
 impl StreamedLogCollector {
@@ -218,6 +225,8 @@ impl StreamedLogCollector {
             selected_lines: 0,
             selection_found: true,
             plain_step_active: false,
+            plain_group_depth: 0,
+            plain_log_seen: false,
         }
     }
 
@@ -332,24 +341,50 @@ impl StreamedLogCollector {
     fn line_belongs_to_step(&mut self, line: &[u8], step: &str) -> bool {
         let text = String::from_utf8_lossy(line);
         let text = text.trim_end_matches(['\n', '\r']);
-        if text.contains('\t') {
+        // Column lines are `job<TAB>step<TAB>…`; a raw line starts with its
+        // timestamp, so tabs inside its payload are runtime data, not columns.
+        let starts_with_timestamp = text
+            .trim_start_matches('\u{feff}')
+            .split_once([' ', '\t'])
+            .is_some_and(|(first, _)| first.contains('T') && first.ends_with('Z'));
+        if text.contains('\t') && !starts_with_timestamp {
             let (column, _) = split_log_line(text);
             return column.trim() == step;
         }
-        // A plain job-API log has no step column. Its only step boundary is
-        // the runner's `##[group]…` / `##[endgroup]` framing, whose title is
-        // `Run <command>` for a run step.
+        // A plain job-API log has no step column. A step starts at a
+        // top-level `##[group]Run <command>` display group, but that group
+        // closes (`##[endgroup]`) before the command runs: the step's
+        // runtime output and error annotations follow it. The step therefore
+        // runs until the next top-level `Run` group or the end of the log.
+        // Groups nested in the runtime output (depth > 0, or any non-`Run`
+        // title at the top level) belong to the step and never reset it.
+        self.plain_log_seen = true;
         let (_, payload) = split_log_line(text);
         let payload = payload.trim();
         if let Some(title) = payload.strip_prefix("##[group]") {
             let title = title.trim();
+            let is_run_group = title == "Run" || title.starts_with("Run ");
             let name = title.strip_prefix("Run ").unwrap_or(title);
-            self.plain_step_active = name == step || title == step;
-            return self.plain_step_active;
+            if self.plain_step_active {
+                if self.plain_group_depth == 0 && is_run_group {
+                    self.plain_step_active = false;
+                    self.plain_group_depth = 1;
+                    return false;
+                }
+                self.plain_group_depth = self.plain_group_depth.saturating_add(1);
+                return true;
+            }
+            if self.plain_group_depth == 0 && (name == step || title == step) {
+                self.plain_step_active = true;
+                self.plain_group_depth = 1;
+                return true;
+            }
+            self.plain_group_depth = self.plain_group_depth.saturating_add(1);
+            return false;
         }
         if payload.starts_with("##[endgroup]") {
             let was_active = self.plain_step_active;
-            self.plain_step_active = false;
+            self.plain_group_depth = self.plain_group_depth.saturating_sub(1);
             return was_active;
         }
         self.plain_step_active
@@ -463,6 +498,9 @@ impl StreamedLogCollector {
             },
             selected_lines: self.selected_lines,
             selection_found: self.selection_found,
+            selection_unsupported: self.selection.as_ref().is_some_and(|s| s.step.is_some())
+                && !self.selection_found
+                && self.plain_log_seen,
             selection: self.selection.clone(),
         }
     }
