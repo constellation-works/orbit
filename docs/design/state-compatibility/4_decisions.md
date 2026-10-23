@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Compatibility is declared by the binary that migrates, never inferred from the version number
 
 **Recorded:** 2026-09 · [ORB-12434]
-**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::write_compat_record`
+**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger/compatibility.rs::write_compat_record`
 
 ### Context
 
@@ -166,7 +166,7 @@ applies this rule.
 ## One versioned ledger per SQLite database, with frozen migration bodies
 
 **Recorded:** 2026-10-12 · [ORB-15729]
-**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
+**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
 
 ### Context
 
@@ -218,7 +218,7 @@ The alternatives considered:
 ### Decision
 
 There is one schema-evolution mechanism: the store ledger engine in
-`migration/ledger.rs`. It is an append-only registry of
+`migration/ledger/mod.rs`. It is an append-only registry of
 `Migration { version, name, compat, apply }` entries. Each entry commits in one
 `BEGIN IMMEDIATE` transaction with its `schema_meta` ledger row and its
 `migration.compat` record. The rules, for any Orbit SQLite database whose

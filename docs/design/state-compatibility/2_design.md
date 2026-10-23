@@ -174,7 +174,7 @@ binary, and the apply path are otherwise unchanged.
 
 ## 7 Frozen store migration bodies
 
-The store registry in `driver/sqlite/migration/ledger.rs` is append-only.
+The store registry in `driver/sqlite/migration/ledger/registry.rs` is append-only.
 Each shipped entry owns its body and private shape-defining helpers; only
 schema-neutral primitives in `migration/introspect.rs` are shared. Later
 schema changes append an entry rather than altering what an earlier version
