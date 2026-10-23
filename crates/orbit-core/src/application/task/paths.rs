@@ -1,7 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::{
-    anchor_path, canonical_selector_in_workspace, exists_in_workspace,
+    anchor_path, canonical_selector_in_workspace, canonicalize_existing_prefix, exists_in_workspace,
 };
 use orbit_types::task::{
     ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, ReadinessGapCode, Task, TaskHistoryEntry,
@@ -574,32 +574,6 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
 /// shape so that absolute paths inside the checkout are still checked.
 fn is_non_repository_token(token: &str) -> bool {
     token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with('~')
-}
-
-pub(super) fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    while let Some(parent) = ancestor.parent() {
-        if parent == ancestor {
-            break;
-        }
-        if let Some(name) = ancestor.file_name() {
-            missing.push(name.to_os_string());
-        }
-        if let Ok(canonical) = parent.canonicalize() {
-            let mut resolved = canonical;
-            for name in missing.iter().rev() {
-                resolved.push(name);
-            }
-            return resolved;
-        }
-        ancestor = parent;
-    }
-    path.to_path_buf()
 }
 
 pub(super) fn is_path_under_workspace(path: &Path, workspace_root: &Path) -> bool {

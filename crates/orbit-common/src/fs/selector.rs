@@ -530,7 +530,10 @@ fn normalize_workspace_anchor(
     Ok((relative, contained))
 }
 
-fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+/// Canonicalize the longest existing ancestor, then append the missing tail.
+///
+/// Returns the original path if no ancestor can be canonicalized.
+pub fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
     }
