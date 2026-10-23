@@ -164,41 +164,65 @@ fn apply_validation_assessment(pair: &Pair, criterion: &str) {
     apply_assessment(pair, criterion, json!({}));
 }
 
+fn apply_validation_assessment_for_task(pair: &Pair, task_id: &str, criterion: &str) {
+    apply_assessment_for_task(pair, task_id, criterion, json!({}));
+}
+
 fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
     for release in ["approve-anyway", "selectors"] {
-        let pair = Pair::new(1);
-        apply_assessment(
+        let pair = Pair::new(2);
+        let drain = pair.start_drain();
+        let earlier_leaf = pair.running_leaf(&drain, 1);
+        let earlier_receipt = pair
+            .admission(&earlier_leaf)
+            .receipt
+            .expect("the earlier admission receipt");
+        assert!(
+            earlier_receipt.queue_depth > 0,
+            "the stale earlier receipt must have queued work: {earlier_receipt:?}"
+        );
+        pair.leaf_hands_off(&earlier_leaf);
+
+        let held_task = &pair.tasks[1];
+        apply_assessment_for_task(
             &pair,
+            held_task,
             "The owner-side repair is observable.",
             json!({
                 "disposition": "host_operational", "context_files_after": [],
                 "evidence": "Only the operator can repair the owner-side definition.",
             }),
         );
-        let drain = pair.start_drain();
         let first = pair.pass(&drain);
         assert!(first["error"].is_null(), "{first}");
-        assert!(pair.owner_claims().is_empty());
-        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+        assert!(!pair.owner_has_claim_for_task(held_task));
+        assert_eq!(pair.owner_status(held_task), "backlog");
         let records = pair.follower_jobs.local_pull_admissions().unwrap();
+        let stale_first = records
+            .iter()
+            .find_map(|record| record.receipt.as_ref())
+            .unwrap();
+        assert_eq!(
+            stale_first.request.request_id,
+            earlier_receipt.request.request_id
+        );
+        assert!(stale_first.queue_depth > 0, "{stale_first:?}");
         let receipt = records
             .iter()
             .filter_map(|record| record.receipt.as_ref())
-            .next()
+            .find(|receipt| {
+                receipt.deferred_conflicts.iter().any(|entry| {
+                    entry.task_id == *held_task
+                        && entry.reason.contains("host_operational")
+                        && entry
+                            .reason
+                            .contains("Only the operator can repair the owner-side definition.")
+                })
+            })
             .unwrap();
         assert_eq!(receipt.queue_depth, 0);
-        assert!(
-            receipt
-                .deferred_conflicts
-                .iter()
-                .any(|entry| entry.task_id == pair.tasks[0]
-                    && entry.reason.contains("host_operational")
-                    && entry
-                        .reason
-                        .contains("Only the operator can repair the owner-side definition.")),
-            "{receipt:?}"
-        );
-        let history = pair.wire.owner.get_task_history(&pair.tasks[0]).unwrap();
+
+        let history = pair.wire.owner.get_task_history(held_task).unwrap();
         let hold = history
             .iter()
             .find(|entry| entry.event == "host_operational_held")
@@ -206,16 +230,21 @@ fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
         let record: Value = serde_json::from_str(hold.note.as_deref().unwrap()).unwrap();
         assert_eq!(record["disposition"], "host_operational");
         if release == "selectors" {
-            apply_assessment(&pair, "The owner-side repair is observable.", json!({}));
+            apply_assessment_for_task(
+                &pair,
+                held_task,
+                "The owner-side repair is observable.",
+                json!({}),
+            );
         } else {
-            pair.wire.owner.update_task_as_human(&pair.tasks[0], orbit_core::application::task::TaskUpdateParams {
+            pair.wire.owner.update_task_as_human(held_task, orbit_core::application::task::TaskUpdateParams {
                 comment: Some("task-pilot-admission: approve-anyway\nThe operator reviewed the handoff and accepts admission.".into()),
                 ..Default::default()
             }, "human:fixture".into()).unwrap();
         }
         let second = pair.pass(&drain);
         assert!(launch_refused(&second), "{second}");
-        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
+        assert!(pair.owner_has_claim_for_task(held_task));
     }
 }
 
@@ -238,14 +267,33 @@ fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
 pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
-    let input = assessment_input(pair, criterion, findings);
+    apply_assessment_for_task(pair, &pair.tasks[0], criterion, findings);
+}
+
+fn apply_assessment_for_task(pair: &Pair, task_id: &str, criterion: &str, findings: Value) {
+    let input = assessment_input_for_task(pair, task_id, criterion, findings);
     let output = action(pair, "apply_task_pilot_results", input);
     assert_eq!(output["status"], "succeeded", "{output}");
     assert_eq!(output["applied_count"], 1, "{output}");
 }
 
 fn assessment_input(pair: &Pair, criterion: &str, findings: Value) -> Value {
-    let task_id = &pair.tasks[0];
+    assessment_input_for_task(pair, &pair.tasks[0], criterion, findings)
+}
+
+fn assessment_input_for_task(
+    pair: &Pair,
+    task_id: &str,
+    criterion: &str,
+    findings: Value,
+) -> Value {
+    let context_file = format!(
+        "file:src/f{}.rs",
+        pair.tasks
+            .iter()
+            .position(|id| id == task_id)
+            .expect("assessment task belongs to the pair")
+    );
     pair.wire
         .owner
         .update_task_as_human(
@@ -259,8 +307,8 @@ fn assessment_input(pair: &Pair, criterion: &str, findings: Value) -> Value {
         .unwrap();
     let prepared = prepare(pair, task_id);
     let mut assessment = json!({
-        "task_id": task_id, "context_files_before": ["file:src/f0.rs"],
-        "context_files_after": ["file:src/f0.rs"], "disposition": "selectors",
+        "task_id": task_id, "context_files_before": [context_file],
+        "context_files_after": [context_file], "disposition": "selectors",
         "recommended_crew": "fixture", "recommended_complexity": "low",
         "confidence": "high", "assessment_rationale": "The declared file contains the repair.",
         "validation_approach": "Exercise the owner admission boundary.",
@@ -279,9 +327,26 @@ fn assessment_input(pair: &Pair, criterion: &str, findings: Value) -> Value {
 
 fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
     for decision in ["evaluated", "approve-anyway", "rescope"] {
-        let pair = Pair::new(1);
-        apply_validation_assessment(&pair, "Run a live evaluation with `orbit.pipeline.invoke`.");
-        let history = pair.wire.owner.get_task_history(&pair.tasks[0]).unwrap();
+        let pair = Pair::new(2);
+        let drain = pair.start_drain();
+        let earlier_leaf = pair.running_leaf(&drain, 1);
+        let earlier_receipt = pair
+            .admission(&earlier_leaf)
+            .receipt
+            .expect("the earlier admission receipt");
+        assert!(
+            earlier_receipt.queue_depth > 0,
+            "the stale earlier receipt must have queued work: {earlier_receipt:?}"
+        );
+        pair.leaf_hands_off(&earlier_leaf);
+
+        let held_task = &pair.tasks[1];
+        apply_validation_assessment_for_task(
+            &pair,
+            held_task,
+            "Run a live evaluation with `orbit.pipeline.invoke`.",
+        );
+        let history = pair.wire.owner.get_task_history(held_task).unwrap();
         assert!(history.iter().any(|entry| entry.from_status
             == Some(orbit_types::task::TaskStatus::Proposed)
             && entry.to_status == Some(orbit_types::task::TaskStatus::Backlog)
@@ -296,27 +361,34 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
             evidence["hold"]["requirements"][0]["tool"],
             "orbit.pipeline.invoke"
         );
-        let drain = pair.start_drain();
         let first = pair.pass(&drain);
         assert!(first["error"].is_null(), "{first}");
-        assert!(pair.owner_claims().is_empty());
-        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+        assert!(!pair.owner_has_claim_for_task(held_task));
+        assert_eq!(pair.owner_status(held_task), "backlog");
         let records = pair.follower_jobs.local_pull_admissions().unwrap();
+        let stale_first = records
+            .iter()
+            .find_map(|record| record.receipt.as_ref())
+            .unwrap();
+        assert_eq!(
+            stale_first.request.request_id,
+            earlier_receipt.request.request_id
+        );
+        assert!(stale_first.queue_depth > 0, "{stale_first:?}");
         let receipt = records
             .iter()
             .filter_map(|record| record.receipt.as_ref())
-            .next()
+            .find(|receipt| {
+                receipt.deferred_conflicts.iter().any(|entry| {
+                    entry.task_id == *held_task
+                        && entry
+                            .reason
+                            .contains("criterion 1 requires `orbit.pipeline.invoke`")
+                })
+            })
             .unwrap();
         assert_eq!(receipt.queue_depth, 0);
-        assert!(
-            receipt.deferred_conflicts.iter().any(|entry| {
-                entry.task_id == pair.tasks[0]
-                    && entry
-                        .reason
-                        .contains("criterion 1 requires `orbit.pipeline.invoke`")
-            }),
-            "{receipt:?}"
-        );
+
         let mut resolution = orbit_core::application::task::TaskUpdateParams::default();
         if decision == "rescope" {
             resolution.acceptance_criteria = Some(vec![
@@ -336,11 +408,11 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
         }
         pair.wire
             .owner
-            .update_task_as_human(&pair.tasks[0], resolution, "human:fixture".into())
+            .update_task_as_human(held_task, resolution, "human:fixture".into())
             .unwrap();
         let second = pair.pass(&drain);
         assert!(launch_refused(&second), "{second}");
-        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
+        assert!(pair.owner_has_claim_for_task(held_task));
     }
 }
 
