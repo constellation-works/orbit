@@ -129,9 +129,19 @@ pub enum ReviewTimingSetting {
 
 impl ReviewTimingSetting {
     /// Every value `review.timing` admits, in the order help lists them.
-    pub const CHOICES: &'static [&'static str] = &["off", "before_pr", "before_landing"];
+    pub const CHOICES: &'static [&'static str] = &[
+        "off",
+        "before_pr",
+        "before_landing",
+        "none",
+        "before-pr",
+        "before-landing",
+        "after_landing",
+        "after-landing",
+    ];
 
-    /// The configured spelling.
+    /// The persisted spelling, kept readable by the previous release during
+    /// a mixed-version deployment. Reading an alias never changes the policy.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
@@ -143,14 +153,27 @@ impl ReviewTimingSetting {
     /// The timing a configured spelling names.
     pub fn parse(raw: &str) -> Result<Self, OrbitError> {
         match raw.trim() {
-            "off" => Ok(Self::Off),
-            "before_pr" => Ok(Self::BeforePr),
-            "before_landing" => Ok(Self::BeforeLanding),
+            "off" | "none" | "after_landing" | "after-landing" => Ok(Self::Off),
+            "before_pr" | "before-pr" => Ok(Self::BeforePr),
+            "before_landing" | "before-landing" => Ok(Self::BeforeLanding),
             other => Err(OrbitError::InvalidInput(format!(
                 "{REVIEW_TIMING_KEY} has invalid value '{other}'; expected one of: {}",
                 Self::CHOICES.join(", ")
             ))),
         }
+    }
+
+    /// Parse a value from a physical config layer, naming it on failure.
+    pub(crate) fn parse_in_file(raw: &str, config_path: &Path) -> Result<Self, OrbitError> {
+        Self::parse(raw).map_err(|error| match error {
+            OrbitError::InvalidInput(message) => OrbitError::InvalidInput(format!(
+                "{}: {message}",
+                orbit_common::security::redaction::redact_home_dir(
+                    &config_path.display().to_string()
+                )
+            )),
+            other => other,
+        })
     }
 
     /// The timing two before-landing switches select. Both on is refused:
@@ -331,7 +354,7 @@ impl OperationLayer {
         // The document is translated before it is read, so a deprecated
         // switch already reached `review.timing`; one key states both halves.
         let timing = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)?
-            .map(|raw| ReviewTimingSetting::parse(&raw))
+            .map(|raw| ReviewTimingSetting::parse_in_file(&raw, config_path))
             .transpose()?
             .map(ReviewTimingSetting::switches);
         Ok(Self {

@@ -208,7 +208,8 @@ fn review_halves(
     config_path: &Path,
 ) -> Result<(Option<bool>, Option<bool>), OrbitError> {
     if let Some(raw) = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)? {
-        let (before_pr, before_landing) = ReviewTimingSetting::parse(&raw)?.switches();
+        let (before_pr, before_landing) =
+            ReviewTimingSetting::parse_in_file(&raw, config_path)?.switches();
         return Ok((Some(before_pr), Some(before_landing)));
     }
     let before_pr = match read_optional::<bool>(document, LEGACY_REVIEW_BEFORE_PR_KEY, config_path)?

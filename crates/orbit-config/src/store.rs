@@ -706,6 +706,24 @@ impl ConfigStore {
     /// an older version. Run the open-to-save sequence inside
     /// [`Self::with_write_lock`] to wait for such a writer instead.
     pub fn save(&mut self) -> Result<(), OrbitError> {
+        // Every writer (CLI, doctor, migration, or unrelated edit) uses the
+        // spelling older running clients admit. Keep canonical values and
+        // comments untouched; only normalize aliases with the same meaning.
+        if let Some(value) = self
+            .doc
+            .get_mut("review")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|table| table.get_mut("timing"))
+            .and_then(Item::as_value_mut)
+            && let Some(raw) = value.as_str()
+        {
+            let timing = crate::operation::ReviewTimingSetting::parse_in_file(raw, &self.path)?;
+            if raw != timing.as_str() {
+                let mut canonical = toml_edit::Value::from(timing.as_str());
+                *canonical.decor_mut() = value.decor().clone();
+                *value = canonical;
+            }
+        }
         let content = self.doc.to_string();
         Self::with_write_lock(&self.path, || {
             if read_optional(&self.path)? != self.opened {

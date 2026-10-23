@@ -16,7 +16,7 @@ use super::resolve::{
     DEFAULT_JOURNAL_RETENTION_DAYS, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS,
     DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
-    resolve_agent_stall_minutes, resolve_bounded_count, resolve_bounded_minutes,
+    resolve_agent_stall_minutes, resolve_at, resolve_bounded_count, resolve_bounded_minutes,
     resolve_bounded_range, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_generated_paths, resolve_host_shutdown_hold_minutes,
     resolve_light_delivery_paths, resolve_machine_id, resolve_machine_name,
@@ -162,7 +162,7 @@ macro_rules! define_config_settings {
             ) -> Result<Self, OrbitError> {
                 $(let $field: $resolved = {
                     let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
-                    ($resolve)(raw_value)?
+                    resolve_at(($resolve)(raw_value), config_path)?
                 };)+
                 let mut snapshot = Self {
                     execution_env_inherit: false,
@@ -193,7 +193,7 @@ macro_rules! define_config_settings {
                 match key {
                     $($key => {
                         let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
-                        snapshot.$field = ($resolve)(raw_value)?;
+                        snapshot.$field = resolve_at(($resolve)(raw_value), config_path)?;
                     },)+
                     _ => return Ok(None),
                 }
@@ -426,7 +426,7 @@ define_config_settings! {
         key: "review.timing", value_type: "string",
         description: "When a fresh reviewer runs before landing: off, before_pr, or before_landing.",
         section: ConfigSection::Review, order: 10,
-        resolve: |raw: Option<String>| resolve_choice(raw, "off", "review.timing", operation::ReviewTimingSetting::CHOICES),
+        resolve: |raw: Option<String>| operation::ReviewTimingSetting::parse(raw.as_deref().unwrap_or("off")).map(|timing| timing.as_str().to_string()),
     },
     review_before_landing_hosts: Vec<String> => Vec<String> {
         key: "review.before_landing_hosts", value_type: "array<string>",
