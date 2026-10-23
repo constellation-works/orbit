@@ -1,5 +1,5 @@
 ---
-title: PR Workflow
+title: PR workflow
 description: "How to keep Orbit changes scoped, tested, and reviewable."
 sidebar:
   order: 4

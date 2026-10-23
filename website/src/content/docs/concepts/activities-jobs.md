@@ -1,5 +1,5 @@
 ---
-title: Activities and Jobs
+title: Activities and jobs
 description: "How Orbit defines reusable execution units (activities) and the workflows that chain them (jobs)."
 sidebar:
   order: 3

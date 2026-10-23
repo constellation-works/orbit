@@ -1,5 +1,5 @@
 ---
-title: Run a Delivery Window
+title: Run a delivery window
 description: "Prepare and approve tasks, check readiness, start a bounded drain from the dashboard or CLI, retune or stop it, and recover failures."
 sidebar:
   order: 3

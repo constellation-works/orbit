@@ -1,5 +1,5 @@
 ---
-title: Connect Your Agent
+title: Connect your agent
 description: "Connect Claude Code, Codex, Cursor, and other agent clients to Orbit over MCP: let the orbit-setup skill do it, or run one command."
 sidebar:
   order: 5

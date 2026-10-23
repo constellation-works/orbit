@@ -1,5 +1,5 @@
 ---
-title: First Task
+title: First task
 description: "Ask your agent for a change, approve and ship the task from the dashboard, then review the pull request and close it."
 sidebar:
   order: 3

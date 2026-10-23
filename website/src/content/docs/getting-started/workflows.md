@@ -1,5 +1,5 @@
 ---
-title: Delivery Workflows
+title: Delivery workflows
 description: "Ship one task, drain a backlog, or hand a spec to your orchestrator agent, from the dashboard, your agent, or the CLI; then let runs merge and recover the ones that fail."
 sidebar:
   order: 4
