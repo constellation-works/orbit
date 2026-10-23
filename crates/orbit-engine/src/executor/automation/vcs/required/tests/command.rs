@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde_json::json;
+use orbit_types::workflow::RequiredValidationFailureKind;
 use tempfile::TempDir;
 
 use super::super::command::{
@@ -223,7 +223,7 @@ fn assert_environment(run: &RequiredCommandRun, label: &str) {
     assert!(!run.timed_out, "{label}");
     assert_eq!(
         run.failure_kind(),
-        json!("environment"),
+        Some(RequiredValidationFailureKind::Environment),
         "{label}: {}",
         run.output
     );

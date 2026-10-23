@@ -1089,6 +1089,75 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     assert_eq!(still_waiting["outcome"], "awaiting_disposition");
     assert_eq!(still_waiting["record"]["validation"]["complete"], false);
 
+    // Owners previously persisted Option<String> here. Feed those bytes into
+    // the store and public reconciliation tool, including unknown strings:
+    // only candidate failures at both revisions permit a disposition.
+    let database = delivery.owner.global_root().join("orbit.db");
+    let connection = rusqlite::Connection::open(database).unwrap();
+    let original_json: String = connection
+        .query_row(
+            "SELECT record_json FROM review_reconciliations WHERE workspace_id=?1 AND reconciliation_id=?2",
+            rusqlite::params![delivery.owner.workspace_id().unwrap(), reconciliation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for side in ["head", "baseline"] {
+        for kind in [
+            Some(json!("candidate")),
+            Some(json!("environment")),
+            Some(json!("future_failure")),
+            Some(json!("")),
+            Some(Value::Null),
+            None,
+        ] {
+            let mut historical: Value = serde_json::from_str(&original_json).unwrap();
+            let command_run = historical["validation"]["commands"][0][side]
+                .as_object_mut()
+                .unwrap();
+            match &kind {
+                Some(value) => {
+                    command_run.insert("failure_kind".into(), value.clone());
+                }
+                None => {
+                    command_run.remove("failure_kind");
+                }
+            }
+            let changed = connection.execute(
+                "UPDATE review_reconciliations SET record_json=?1 WHERE workspace_id=?2 AND reconciliation_id=?3",
+                rusqlite::params![serde_json::to_string(&historical).unwrap(), delivery.owner.workspace_id().unwrap(), reconciliation],
+            ).unwrap();
+            assert_eq!(changed, 1);
+            let status = delivery.status(&reconciliation);
+            let projected = &status["record"]["validation"]["commands"][0][side];
+            if let Some(value) = kind.as_ref().filter(|value| !value.is_null()) {
+                assert_eq!(&projected["failure_kind"], value, "{side}: {kind:?}");
+            } else {
+                assert!(projected.get("failure_kind").is_none(), "{side}: {kind:?}");
+            }
+            let candidate = kind == Some(json!("candidate"));
+            let stored = delivery.stored(&reconciliation);
+            assert_eq!(
+                stored.validation.unwrap().commands[0].reproduced_on_base(),
+                candidate
+            );
+            if !candidate {
+                let refusal = dispose(&remediation)
+                    .expect_err("non-candidate historical failures cannot authorize a disposition");
+                assert!(
+                    refusal
+                        .to_string()
+                        .contains("no recorded failure reproduced at the base"),
+                    "{side}: {kind:?}: {refusal}"
+                );
+                assert!(delivery.stored(&reconciliation).dispositions.is_empty());
+            }
+        }
+    }
+    connection.execute(
+        "UPDATE review_reconciliations SET record_json=?1 WHERE workspace_id=?2 AND reconciliation_id=?3",
+        rusqlite::params![original_json, delivery.owner.workspace_id().unwrap(), reconciliation],
+    ).unwrap();
+
     let disposed = dispose(&remediation).expect("disposition");
     assert_eq!(
         disposed["outcome"], "accepted_with_disposition",

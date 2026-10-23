@@ -17,7 +17,8 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_RECONCILIATION_JOB, ReconciledCommand, ReconciledCommandRun,
     ReconciledReview, ReconciledValidation, ReconciliationAdmission, ReconciliationLog,
-    ReconciliationOutcome, ReviewReconciliation, ReviewReport, ReviewVerdict,
+    ReconciliationOutcome, RequiredValidationFailureKind, ReviewReconciliation, ReviewReport,
+    ReviewVerdict,
 };
 use serde_json::{Value, json};
 
@@ -169,7 +170,13 @@ pub(crate) fn validate(
     let failed: Vec<String> = commands
         .iter()
         .zip(&head_runs)
-        .filter(|(_, run)| !run.passed && run.failure_kind.as_deref() == Some("candidate"))
+        .filter(|(_, run)| {
+            !run.passed
+                && matches!(
+                    run.failure_kind,
+                    Some(RequiredValidationFailureKind::Candidate)
+                )
+        })
         .map(|(command, _)| command.clone())
         .collect();
     let base_runs = if failed.is_empty() {
@@ -465,7 +472,10 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
         .iter()
         .filter(|command| {
             !command.head.passed
-                && command.head.failure_kind.as_deref() == Some("candidate")
+                && matches!(
+                    command.head.failure_kind,
+                    Some(RequiredValidationFailureKind::Candidate)
+                )
                 && command
                     .baseline
                     .as_ref()
@@ -510,11 +520,11 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
         }
         if let Some(command) = validation.commands.iter().find(|command| {
             !command.head.passed
-                && command.head.failure_kind.as_deref() == Some("candidate")
+                && matches!(command.head.failure_kind, Some(RequiredValidationFailureKind::Candidate))
                 && command
                     .baseline
                     .as_ref()
-                    .is_none_or(|baseline| !baseline.passed && baseline.failure_kind.as_deref() != Some("candidate"))
+                    .is_none_or(|baseline| !baseline.passed && !matches!(baseline.failure_kind, Some(RequiredValidationFailureKind::Candidate)))
         }) {
             let baseline_log = command
                 .baseline
@@ -539,7 +549,7 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
             );
         }
         if let Some(command) = validation.commands.iter().find(|command| {
-            !command.head.passed && command.head.failure_kind.as_deref() != Some("candidate")
+            !command.head.passed && !matches!(command.head.failure_kind, Some(RequiredValidationFailureKind::Candidate))
         }) {
             return refused(
                 format!(

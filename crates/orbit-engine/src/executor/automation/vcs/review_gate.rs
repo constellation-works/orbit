@@ -9,8 +9,8 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::{CommitIdentity, RequiredValidationFailureKind};
 
 pub use super::base::claim::{
     BaseFailureCheck, BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure,
@@ -547,9 +547,9 @@ pub struct RequiredValidationRun {
     pub passed: bool,
     pub exit_code: i32,
     pub timed_out: bool,
-    /// `environment` when a tool was missing, `candidate` for any other
-    /// failure, `None` when the command passed.
-    pub failure_kind: Option<String>,
+    /// The raw command failure classification, absent when it passed without
+    /// deferring execution.
+    pub failure_kind: Option<RequiredValidationFailureKind>,
     pub output: String,
     /// How the validation environment was resolved.
     pub environment: serde_json::Value,
@@ -571,7 +571,7 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
         super::required::command::VALIDATION_TIMEOUT_MS,
     )?;
     Ok(RequiredValidationRun {
-        failure_kind: run.failure_kind().as_str().map(str::to_string),
+        failure_kind: run.failure_kind(),
         environment: run.environment_record(),
         command: run.command,
         passed: run.passed,
