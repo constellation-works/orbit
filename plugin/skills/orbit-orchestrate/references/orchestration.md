@@ -310,8 +310,9 @@ Two of its answers separate contention from capacity:
   `review.verify_findings = false` to stop gating findings; `detail` gives
   the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
-  no `context_files` in a run with more than one slot. It waits for the task
-  pilot, then for a slot with nothing else in flight; `detail` names the
+  no `context_files` and has no `no-diff-expected` tag in a run with more than
+  one slot. It would hold no file lock, so it waits for the task pilot, then
+  for a slot with nothing else in flight; `detail` names the
   deadline and the fix. A `conflict_deferred` whose `provenance` is
   `unknown_footprint` is blocked by a running task with no footprint, and
   `exclusive_reservation` by such a task waiting to go alone. See
