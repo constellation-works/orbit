@@ -475,6 +475,78 @@ pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), Orbit
     git_output_raw(current_dir, args).map(|_| ())
 }
 
+/// A URL argument that reaches `push_url` itself, without Git applying
+/// `url.*.insteadOf` to the already-resolved push URL a second time.
+///
+/// `git remote get-url --push` resolves `pushInsteadOf` (and, when no
+/// push-specific rule matches, `insteadOf`) exactly once, as `git push
+/// origin` does. Passing that resolved URL to `ls-remote` or `fetch`
+/// would apply `insteadOf` again and can name a different repository
+/// [ORB-17686]. The probe URL appends a suffix segment so an ephemeral
+/// identity rewrite for it is strictly longer — and therefore wins —
+/// over every `insteadOf` rule whose value is a prefix of `push_url`.
+/// The identity rewrite maps the probe URL back to `push_url`, so the
+/// transport still addresses exactly `push_url`. This adds only a
+/// command-line `-c` value; it never writes the user's Git config.
+#[derive(Debug, Clone)]
+pub(crate) struct DirectRemoteTarget {
+    pub probe_url: String,
+    pub config_arg: Option<String>,
+}
+
+impl DirectRemoteTarget {
+    pub(crate) fn prefix_args(&self) -> Vec<String> {
+        match &self.config_arg {
+            Some(config) => vec!["-c".to_string(), config.clone()],
+            None => Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn direct_remote_target(push_url: &str) -> DirectRemoteTarget {
+    // A `-c url.<push_url>.insteadOf=...` key cannot carry these bytes:
+    // `=` would end the config name early and the rest corrupt parsing.
+    // Such URLs fall back to a plain probe, which
+    // `verify_direct_remote_target` then refuses if it would rewrite.
+    if push_url.is_empty() || push_url.contains(['=', '\n', '\r', '\\', '"']) {
+        return DirectRemoteTarget {
+            probe_url: push_url.to_string(),
+            config_arg: None,
+        };
+    }
+    let separator = if push_url.ends_with('/') { "" } else { "/" };
+    let probe_url = format!("{push_url}{separator}.orbit-publication-probe");
+    DirectRemoteTarget {
+        config_arg: Some(format!("url.{push_url}.insteadOf={probe_url}")),
+        probe_url,
+    }
+}
+
+/// Fail closed when Git would still rewrite `target` away from
+/// `push_url` (for example a rule matching the probe URL itself at the
+/// same length). Probing or fetching the rewritten repository could
+/// report publication at a destination `git push origin` never wrote.
+pub(crate) fn verify_direct_remote_target(
+    current_dir: &Path,
+    push_url: &str,
+    target: &DirectRemoteTarget,
+) -> Result<(), OrbitError> {
+    let mut args: Vec<&str> = Vec::new();
+    if let Some(config) = target.config_arg.as_deref() {
+        args.extend(["-c", config]);
+    }
+    args.extend(["ls-remote", "--get-url", target.probe_url.as_str()]);
+    let expanded = git_output(current_dir, &args)?;
+    if expanded != push_url {
+        return Err(OrbitError::Execution(format!(
+            "git_push: effective push URL '{push_url}' would be rewritten to '{expanded}' \
+             when probed or fetched by URL, so it does not name the repository \
+             'git push origin' writes; refusing to probe or fetch a different repository"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<bool, OrbitError> {
     let outcome = git_run(current_dir, args)?;
     if outcome.timed_out {

@@ -7,6 +7,7 @@ use orbit_common::process::jitter::JitterRng;
 use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
+use super::super::git::direct_remote_target;
 use super::input::{
     optional_string, reject_option_like, required_string, valid_expected_remote_sha,
 };
@@ -287,6 +288,97 @@ fn bounded_diagnostic(text: &str) -> String {
     text[..end].to_string()
 }
 
+/// Whether every effective publication destination holds `head_sha` at
+/// `target_ref`. A failed remote read is an error, so it stops further
+/// mutations instead of reading as an unconfirmed push.
+fn confirmed_at_publication_destination(
+    repo_root: &Path,
+    target_ref: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    let listed = execute(
+        "git",
+        vec![
+            "remote".into(),
+            "get-url".into(),
+            "--push".into(),
+            "--all".into(),
+            "origin".into(),
+        ],
+        Some(repo_root),
+        LONG_TIMEOUT_MS,
+        "push remote confirmation",
+    )?;
+    let mut urls: Vec<String> = Vec::new();
+    for url in listed
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        if !urls.iter().any(|seen| seen == url) {
+            urls.push(url.to_string());
+        }
+    }
+    if urls.is_empty() {
+        return Err(OrbitError::Execution(
+            "private automation VCS push remote confirmation found no effective push URL for 'origin'"
+                .to_string(),
+        ));
+    }
+    for url in &urls {
+        let target = direct_remote_target(url);
+        let mut verify_args = target.prefix_args();
+        verify_args.extend([
+            "ls-remote".into(),
+            "--get-url".into(),
+            target.probe_url.clone(),
+        ]);
+        let expanded = execute(
+            "git",
+            verify_args,
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+            "push remote confirmation",
+        )?;
+        if expanded.stdout.trim() != url {
+            return Err(OrbitError::Execution(format!(
+                "git_push: effective push URL '{url}' would be rewritten to '{}' when probed \
+                 by URL, so it does not name the repository 'git push origin' writes; \
+                 refusing to confirm publication at a different repository",
+                expanded.stdout.trim()
+            )));
+        }
+        let mut args = target.prefix_args();
+        args.extend([
+            "ls-remote".into(),
+            "--refs".into(),
+            "--".into(),
+            target.probe_url.clone(),
+            target_ref.into(),
+        ]);
+        let remote = execute(
+            "git",
+            args,
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+            "push remote confirmation",
+        )?;
+        let holds = remote.stdout.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields
+                .next()
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
+                && fields.next() == Some(target_ref)
+                && fields.next().is_none()
+        });
+        if !holds {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Retry only transient push failures, confirming the exact remote ref before
 /// resending. A lost reply may hide a successful push, including one that
 /// consumed its force-with-lease. A failed remote read stops further mutations.
@@ -332,28 +424,13 @@ fn execute_push_with_transient_retry(
             no_thin = true;
         }
 
-        let remote = execute(
-            "git",
-            vec![
-                "ls-remote".into(),
-                "--refs".into(),
-                "--".into(),
-                "origin".into(),
-                target_ref.into(),
-            ],
-            Some(repo_root),
-            LONG_TIMEOUT_MS,
-            "push remote confirmation",
-        )
-        .map_err(PushFailure::Error)?;
-        if remote.stdout.lines().any(|line| {
-            let mut fields = line.split_whitespace();
-            fields
-                .next()
-                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
-                && fields.next() == Some(target_ref)
-                && fields.next().is_none()
-        }) {
+        // Confirm at the publication destination `git push origin`
+        // wrote, not the fetch remote: a plain `ls-remote origin` reads
+        // the fetch URL, and probing the resolved push URL by URL would
+        // apply `insteadOf` to it a second time [ORB-17671, ORB-17686].
+        if confirmed_at_publication_destination(repo_root, target_ref, head_sha)
+            .map_err(PushFailure::Error)?
+        {
             tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",
                 operation,
                 attempt,
@@ -361,7 +438,7 @@ fn execute_push_with_transient_retry(
                 "confirmed push landed after a transient failure"
             );
             return Ok(Pushed {
-                result: remote,
+                result,
                 attempts: attempt,
                 waited_ms,
             });
