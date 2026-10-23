@@ -55,7 +55,7 @@ Loop-engine events use the same table with `source: loop_event`. Content-address
 .orbit/state/audit/blobs/<hh>/<hash>
 ```
 
-The writer's `events_snapshot()` reads events back from its configured persistence sink; it returns `SnapshotUnavailable` when no inspectable sink is attached. Production CLI inspection reads the persisted SQLite audit rows and blob store. The writer's legacy `envelope_log_path()` hook returns `None` for the SQLite-backed production writer.
+The writer's `events_snapshot()` reads events back from its configured persistence sink; it returns `SnapshotUnavailable` when no inspectable sink is attached. Production CLI inspection reads the persisted SQLite audit rows and blob store.
 
 ## CLI Inspection
 
