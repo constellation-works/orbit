@@ -23,7 +23,8 @@ use crate::review_after_landing_cli::{
 const CONSUMER: &str = "delivery-code-review";
 const POOL_KEY: &str = "workflow.purpose_crews.review";
 
-/// Two crews on the shipped `muse` executor, which declares `host_os: macos`.
+/// Two crews on the `muse` executor, which this fixture explicitly pins to
+/// `host_os: macos` (the shipped muse asset itself is unrestricted).
 const MUSE_CREWS: &str = r#"
 [crews.muse-wonder]
 model = "muse-spark-1.3"
@@ -36,8 +37,27 @@ provider = "muse"
 
 /// A workspace whose after-landing consumer mints review tasks tagged
 /// `os:linux`, with the muse crews defined and `haiku` and `sonnet` enabled.
+/// Pin the seeded `muse` executor to macOS only, so these cases exercise the
+/// general crew→OS contract with a constrained executor.
+fn pin_muse_macos_only(fixture: &Fixture) {
+    let runtime = open_runtime(fixture);
+    let mut muse = runtime
+        .list_executor_defs()
+        .expect("list executors")
+        .into_iter()
+        .find(|def| def.name == "muse")
+        .expect("muse seeded");
+    muse.host_os = Some(std::collections::BTreeSet::from([
+        orbit_types::task::HostOs::Macos,
+    ]));
+    runtime
+        .upsert_executor_def(&muse)
+        .expect("pin muse host_os");
+}
+
 fn linux_tagged_consumer() -> Fixture {
     let fixture = Fixture::new();
+    pin_muse_macos_only(&fixture);
     enable_review_crew(&fixture);
     set_policy(&fixture, "crews.haiku.enabled", "true");
     fs::OpenOptions::new()

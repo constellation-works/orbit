@@ -297,6 +297,7 @@
         "application/tests/executor.rs::seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform",
         "application/tests/executor.rs::seed_default_executors_upgrades_old_unsandboxed_linux_default",
         "application/tests/executor.rs::seed_on_macos_keeps_sandbox_exec_and_existing_choices",
+        "application/tests/executor.rs::seed_shipped_muse_is_unrestricted_with_platform_sandbox",
         "application/tests/executor.rs::seed_without_a_host_backend_keeps_the_declared_sandbox",
         "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority",
         "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects",

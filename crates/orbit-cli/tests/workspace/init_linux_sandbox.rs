@@ -246,6 +246,19 @@ fn linux_bwrap_dispatch_after_warned_init_refuses_to_launch_the_provider() {
     )
     .unwrap();
     assert_eq!(executor["spec"]["sandbox"].as_str(), Some("linux-bwrap"));
+    let muse_executor: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(root.join("resources/executors/muse.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        muse_executor["spec"]["sandbox"].as_str(),
+        Some("linux-bwrap"),
+        "seeded muse sandbox is translated on Linux: {muse_executor:?}"
+    );
+    assert!(
+        muse_executor["spec"].get("host_os").is_none(),
+        "seeded muse carries no host_os restriction: {muse_executor:?}"
+    );
     let doctor = fixture
         .command()
         .args(["doctor", "providers", "--json"])
@@ -280,8 +293,8 @@ fn linux_bwrap_dispatch_after_warned_init_refuses_to_launch_the_provider() {
         .find(|provider| provider["name"] == "muse")
         .expect("muse executor");
     assert_eq!(
-        muse["availability"], "unsupported on this OS",
-        "a macOS-only lane is not a missing binary: {muse}"
+        muse["availability"], "not installed",
+        "muse is unrestricted, so a missing binary stays not installed: {muse}"
     );
     let claude = providers
         .as_array()

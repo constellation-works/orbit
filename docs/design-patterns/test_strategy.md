@@ -253,6 +253,14 @@ Admitted unit tests:
   registry cases use exported APIs in the crate-root `tests/registry/main.rs`
   binary, preserving their original behavior and platform guards.
 
+- `crates/orbit-core/src/application/tests/executor.rs::seed_shipped_muse_is_unrestricted_with_platform_sandbox`
+  is a criterion 1 table-driven platform seed check. It drives the production
+  shipped-executor seeding path for both Linux and macOS targets, proving that
+  Muse remains unrestricted while the declared sandbox marker translates to
+  each target's backend. A public workspace-init boundary can only seed for
+  the host running the test, so it cannot cover both target translations in a
+  single CI run.
+
 - `orbit-exec` retains six corrected security-seam admissions from the
   [applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md).
   `build_sandbox/tests/supervise.rs` checks host process-group reaping before
