@@ -26,7 +26,7 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. The 31 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. The 33 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
@@ -78,7 +78,7 @@ A closed stdout is not an error. During rendering, `output/pipe.rs` suppresses t
 
 Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; the table form needs a terminal, so no golden covers it.
 
-The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
+The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit task list` is *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
 `crates/orbit-cli/tests/output/table_rendering.rs` also runs a piped table with `COLUMNS=200` and `CLICOLOR_FORCE=1`, asserting that the long title survives without width adaptation or ANSI styling [ORB-10570]. The built binary resolves its real non-terminal sink, so the assertion covers rendering as well as sink selection.
 
