@@ -51,7 +51,11 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
             blocking: false,
             attempt: 1,
             scheduled_at: Utc::now(),
-            input: Some(json!({ "task_ids": ["T-1"] })),
+            input: Some(json!({
+                "task_ids": ["T-1", 13, null, {}, "", " T-1 "],
+                "task_id": "T-2",
+                "nested": {"task_ids": ["T-3"]},
+            })),
         })
         .unwrap()
     else {
@@ -77,11 +81,48 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         .list_job_runs_filtered(&Default::default())
         .expect("list runs");
     assert_eq!(listed.len(), 2);
+    let projected = jobs
+        .job_run_task_ids(&orbit_store::contracts::JobRunQuery {
+            job_id: Some("task_pr_pipeline".into()),
+            states: vec![JobRunState::Cancelled],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        projected,
+        ["T-1".to_string(), "T-2".to_string()].into_iter().collect(),
+        "task binding projection must not depend on large checkpoints"
+    );
+    for query in [
+        orbit_store::contracts::JobRunQuery {
+            job_id: Some("task_auto_pipeline".into()),
+            ..Default::default()
+        },
+        orbit_store::contracts::JobRunQuery {
+            states: vec![JobRunState::Failed],
+            ..Default::default()
+        },
+        orbit_store::contracts::JobRunQuery {
+            limit: Some(0),
+            ..Default::default()
+        },
+    ] {
+        assert!(jobs.job_run_task_ids(&query).unwrap().is_empty());
+    }
+    assert!(
+        workspace_job_run_store(store.clone(), "foreign")
+            .job_run_task_ids(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 
     // Deleting a run deletes its state.
     jobs.delete_job_run(&child.run_id).unwrap();
     assert!(jobs.read_run_state(&child.run_id).unwrap().is_none());
-    assert_eq!(count_job_rows(&store, "SELECT COUNT(*) FROM job_run_states"), 1);
+    assert_eq!(
+        count_job_rows(&store, "SELECT COUNT(*) FROM job_run_states"),
+        1
+    );
 }
 
 /// A run that recorded a plain step, a fan-out with a fan-in alias, a nested

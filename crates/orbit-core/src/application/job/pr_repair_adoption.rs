@@ -5,9 +5,11 @@
 //! merge conflict only while it runs. Once the leaf ends without completing
 //! (a forge timeout, a final-recovery escalation or requeue, a dead worker),
 //! its pull request can turn red or conflict with its base while nothing
-//! watches it. Each pass of a drain started with `--auto-fix` therefore looks
-//! at the newest delivery leaf of every task that records a pull request and, for one whose pull request
-//! is blocked, hands the task back to that leaf's completion step: a
+//! watches it. Each pass of a drain started with `--auto-fix` therefore projects
+//! task bindings from stopped delivery history without an age window, reads
+//! only those tasks' current metadata, and checks each task's newest own leaf.
+//! When that pull request is blocked, the pass hands the task back to the
+//! leaf's completion step: a
 //! checkpoint resume rewound to `pr_complete` (`plan_completion_repair_resume`)
 //! with `auto_fix` granted. The watcher there admits the repair against the
 //! pull request's attempt ledger, dispatches the `workflow.purpose_crews.auto_fix`
@@ -170,26 +172,53 @@ impl OrbitRuntime {
             return json!({ "started": [], "skipped": [], "hold_reason": "write_free" });
         }
         let throttled = self.resource_admission().throttle.is_some();
-        let tasks = match self.list_task_metadata() {
-            Ok(tasks) => tasks,
-            Err(error) => {
-                tracing::warn!(
-                    target: "orbit.core.drain",
-                    error = %error,
-                    "could not list tasks; this pass repairs no pull request",
-                );
-                return json!({
-                    "started": [],
-                    "skipped": [],
-                    "pass_error": format!("list tasks: {error}"),
+        let tasks = {
+            let _span = tracing::debug_span!("pr_repair_candidates").entered();
+            // A repair needs a stopped delivery. Project task IDs from all
+            // stopped leaves before reading envelopes, so unrelated task history
+            // costs no reads and old stopped leaves remain discoverable. This
+            // projection is fresh on each pass, with no age window or cache.
+            let tasks = self
+                .stores()
+                .jobs()
+                .job_run_task_ids(&JobRunQuery {
+                    job_id: Some(DELIVERY_LEAF_JOB.to_string()),
+                    states: vec![
+                        JobRunState::Failed,
+                        JobRunState::Timeout,
+                        JobRunState::Interrupted,
+                    ],
+                    include_steps: false,
+                    ..Default::default()
+                })
+                .and_then(|mut ids| {
+                    // Malformed bindings in an unrelated historical run cannot
+                    // name a task, and must not refuse the other candidates.
+                    ids.retain(|id| orbit_types::task::is_valid_orb_task_id(id));
+                    self.list_task_metadata_for_ids(&ids)
                 });
+            match tasks {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.drain",
+                        error = %error,
+                        "could not list tasks; this pass repairs no pull request",
+                    );
+                    return json!({
+                        "started": [],
+                        "skipped": [],
+                        "pass_error": format!("list tasks: {error}"),
+                    });
+                }
             }
         };
         let mut started = Vec::new();
         let mut skipped = Vec::new();
         let mut reads = PassReads::default();
-        // Candidates come from the tasks, not from a window of recent runs, so
-        // a task's stopped leaf is found however many deliveries ran since.
+        // Re-read the newest own leaf, including live and finished ones, so a
+        // newer delivery supersedes the stopped leaf that nominated this task.
+        let leaf_span = tracing::debug_span!("pr_repair_leaf_lookup").entered();
         let mut leaves = Vec::new();
         for task in tasks.iter().filter(|task| {
             matches!(
@@ -210,6 +239,7 @@ impl OrbitRuntime {
                 })),
             }
         }
+        drop(leaf_span);
         // Newest first, so a pass short of slots serves the freshest leaves.
         leaves.sort_by(|(left_task, left), (right_task, right)| {
             run_recency(right)
@@ -579,6 +609,7 @@ impl OrbitRuntime {
             ));
         }
         let repo_root = self.context.paths().repo_root.clone();
+        let _span = tracing::debug_span!("pr_repair_forge").entered();
         match self
             .task_pr_forge()
             .pull_request_blockers(&repo_root, number)

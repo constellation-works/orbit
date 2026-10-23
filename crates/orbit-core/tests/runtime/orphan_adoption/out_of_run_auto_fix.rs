@@ -587,12 +587,23 @@ fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() 
     fx.blocked(&foreign, "ccc3", "someone-else", true, &[]);
     let wants_merge = fx.stopped_leaf(94, "done", Shelf::Escalated);
     fx.blocked(&wants_merge, "ccc4", "orbit-bot", true, &[]);
+    let claimed = fx.stopped_leaf(96, "review", Shelf::Review);
+    fx.blocked(&claimed, "claimed-head", "orbit-bot", true, &[]);
+    let mut claimed_run = fx.jobs.get_job_run(&claimed.run).unwrap().unwrap();
+    claimed_run.input.as_mut().unwrap()["claimed"] = json!(true);
+    fx.runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&fx.runtime.workspace_id().unwrap(), &claimed_run, None)
+        .unwrap();
     let clean = fx.stopped_leaf(95, "review", Shelf::Review);
     fx.blocked(&clean, "ccc5", "orbit-bot", false, &[]);
     let drain = fx.drain();
 
     let pass = fx.pass(&drain, "review", true);
     assert_eq!(pass["auto_fix"]["started"], json!([]), "{pass}");
+    assert_eq!(repair_skip(&pass, &claimed.task), None, "{pass}");
+    assert!(fx.retries(&claimed.run).is_empty());
     for (leaf, reason) in [
         (&held, "operator_hold"),
         (&opted_out, "opted_out"),
@@ -738,4 +749,106 @@ crate::scenario_table!(
 crate::scenario_table!(
     unknown_mergeability_scenarios,
     unknown_mergeability_on_the_newest_pull_request_does_not_defer_older_repairs,
+);
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+struct EnvelopeSelections(Arc<AtomicUsize>);
+impl<S: tracing::Subscriber> Layer<S> for EnvelopeSelections {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if matches!(
+            attrs.metadata().name(),
+            "task_envelope_selection" | "task_metadata_read"
+        ) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+fn idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates() {
+    let fx = fixture();
+    for index in 0..64 {
+        fx.runtime
+            .add_task(TaskAddParams {
+                title: format!("Closed history {index}"),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let leaf = fx.stopped_leaf(112, "review", Shelf::Review);
+    fx.blocked(&leaf, "newly-eligible-head", "orbit-bot", true, &[]);
+    let other = OrbitRuntime::from_roots(
+        &fx._root.path().join("home/.orbit"),
+        &fx._root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    other
+        .apply_task_automation_update(
+            &leaf.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let malformed = fx
+        .jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": ["not-a-task", "ORB-999999"], "task_id": "../foreign"})),
+            None,
+        )
+        .unwrap();
+    fx.fail(&malformed.run_id);
+    let drain = fx.drain();
+    // Warm the normal freshness proofs, outside the observed candidate query.
+    fx.runtime.list_task_metadata().unwrap();
+    for _ in 0..2 {
+        let selections = Arc::new(AtomicUsize::new(0));
+        let subscriber =
+            tracing_subscriber::registry().with(EnvelopeSelections(Arc::clone(&selections)));
+        let pass =
+            tracing::subscriber::with_default(subscriber, || fx.pass(&drain, "review", true));
+        assert_eq!(
+            pass["auto_fix"],
+            json!({"started":[],"skipped":[]}),
+            "{pass}"
+        );
+        assert_eq!(
+            selections.load(Ordering::Relaxed),
+            2,
+            "idle adoption probes only stopped-leaf bindings, not unrelated closed history"
+        );
+    }
+    // A second runtime publishes the status change: no process-local cache may
+    // hide it, even immediately after the previous idle pass.
+    other
+        .apply_task_automation_update(
+            &leaf.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &leaf.task).is_some(), "{pass}");
+    assert_eq!(fx.retries(&leaf.run).len(), 1);
+    let new = fx.stopped_leaf(113, "review", Shelf::Requeued);
+    fx.blocked(&new, "new-task-head", "orbit-bot", false, &["Test"]);
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &new.task).is_some(), "{pass}");
+    assert_eq!(fx.retries(&new.run).len(), 1);
+}
+crate::scenario_table!(
+    candidate_population_scenarios,
+    idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates
 );

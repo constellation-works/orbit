@@ -145,6 +145,36 @@ pub trait JobRunStoreBackend: Send + Sync {
 
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
+    /// Distinct trimmed, nonblank task IDs carried by the selected runs' top-level
+    /// `task_ids` string array or text `task_id`. Run filters and limits apply
+    /// before projection; nested fields confer no ownership. Backends may
+    /// project these IDs without hydrating runs, checkpoints or step payloads.
+    fn job_run_task_ids(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+        let mut query = query.clone();
+        query.include_steps = false;
+        Ok(self
+            .list_job_runs_filtered(&query)?
+            .into_iter()
+            .filter_map(|run| run.input)
+            .flat_map(|input| {
+                input
+                    .get("task_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .chain(input.get("task_id").and_then(serde_json::Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect())
+    }
+
     /// Latest created run, including steps, for each distinct requested job.
     /// Missing jobs are omitted; results are ordered by job ID. Ties use the
     /// same run-ID ordering as a default `JobRunQuery`. Backends may batch the
