@@ -25,7 +25,7 @@ macro_rules! scenario_table {
         #[test]
         fn $table() {
             crate::scenarios::run(module_path!(), stringify!($table), &[
-                $((stringify!($row), $row as fn())),+
+                $((stringify!($row), $row as fn() -> _)),+
             ]);
         }
     };

@@ -33,6 +33,8 @@ The claimed-review bridge's owner-store lock recovery lost its wait-then-succeed
 
 Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
 
+Conditional runtime scenario rows can return `scenarios::Outcome`: `Passed` records `qa-scenario-pass`, while `Unavailable(reason)` emits a recognized `SKIP:` notice without execution credit. Ordinary unit-returning rows retain their existing completion reporting. The provider PID-reuse cancellation table uses explicit outcomes for its native identity prerequisite; a subprocess control checks unavailable and executed reporting through both whole-table forwarding and single-row selection, with libtest capture enabled. Its deterministic unavailable control is consumed inside the observer, so it does not advertise missing native coverage to the surrounding test run.
+
 Fixture templates follow these rules:
 
 - **Profile first.** Each runtime scenario row prints `scenario: <row> row elapsed <seconds>`. The parent prints `child elapsed` for each child it runs, which includes process startup. A separate-process family has one child per row, and any other table runs as one `<module>::*` child.

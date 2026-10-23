@@ -4,10 +4,34 @@
 
 use std::process::Command;
 
-type Scenario = (&'static str, fn());
+type Scenario<T> = (&'static str, fn() -> T);
 const ROW: &str = "ORBIT_RUNTIME_SCENARIO_ROW";
 
-pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
+/// Conditional rows award execution credit only after their assertions run.
+pub(super) enum Outcome {
+    Passed,
+    Unavailable(String),
+}
+
+impl From<()> for Outcome {
+    fn from((): ()) -> Self {
+        Self::Passed
+    }
+}
+
+impl Outcome {
+    fn report(self, name: &str) {
+        match self {
+            Self::Passed => orbit_common::test_env::record_scenario_pass(name),
+            Self::Unavailable(reason) => {
+                use std::io::Write;
+                writeln!(std::io::stderr(), "SKIP: {name}: {reason}").expect("unavailable row");
+            }
+        }
+    }
+}
+
+pub(super) fn run<T: Into<Outcome>>(module: &str, table: &str, rows: &[Scenario<T>]) {
     let module = module.split_once("::").expect("test module").1;
     let qualified = format!("{module}::{table}");
     if let Ok(selected) = std::env::var(ROW) {
@@ -18,9 +42,9 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
                 use std::io::Write;
                 writeln!(std::io::stderr(), "scenario: {module}::{name}").expect("row identity");
                 let started = std::time::Instant::now();
-                scenario();
+                let outcome = scenario().into();
                 report_elapsed(&format!("{module}::{name}"), "row", started);
-                orbit_common::test_env::record_scenario_pass(name);
+                outcome.report(name);
             }
             return;
         }
@@ -29,9 +53,9 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             .find(|(name, _)| *name == selected)
             .expect("the selected row belongs to this table");
         let started = std::time::Instant::now();
-        scenario();
+        let outcome = scenario().into();
         report_elapsed(&format!("{module}::{selected}"), "row", started);
-        orbit_common::test_env::record_scenario_pass(&selected);
+        outcome.report(&selected);
         return;
     }
 
