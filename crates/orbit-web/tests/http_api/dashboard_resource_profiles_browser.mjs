@@ -133,7 +133,7 @@ try {
   assert.equal(classes[0].pressed, 'true');
   const cards = await body.locator('.mx-sc').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.equal(cards.length, 3);
-  assert.match(cards[0], /^Easylow2\.0 cores.*12 deliveries · to \+30m$/);
+  assert.match(cards[0], /^Low2\.0 cores.*12 deliveries · to \+30m$/);
   assert.match(cards[2], /^Hard6\.0 cores.*2 deliveriessparse · to \+60m$/);
   assert.match(await page.locator('#resources-count').textContent(), /5 profiles · host 16 cores · 64 GiB/);
   pass('change series cards', { cards });
@@ -148,7 +148,7 @@ try {
   assert.equal(await body.locator('.rp-end.hollow').count(), 3, 'and ends hollow');
   // Each series ends at its horizon, on a 60-minute axis set by the longest.
   const lastX = await body.locator('.rp-area-cpu g.rp-s-low .rp-line').evaluate(node => Number(node.getAttribute('d').trim().split(/[ML]/).filter(Boolean).at(-1).trim().split(' ')[0]));
-  assert.equal(lastX, 500, 'easy stops at +30m of 60 although its deliveries ran to +40m');
+  assert.equal(lastX, 500, 'low stops at +30m of 60 although its deliveries ran to +40m');
   assert.equal(await body.locator('.rp-area-cpu .rp-end.rp-s-low').evaluate(node => node.style.left), '50%');
   assert.deepEqual(await body.locator('.rp-x-axis .mx-x-tick').allTextContents(), ['0', '10m', '20m', '30m', '40m', '50m', '1h']);
   await shot('resources-change-1440.png');
@@ -161,7 +161,7 @@ try {
   await tip.waitFor({ state: 'visible' });
   const tipText = await tip.textContent();
   assert.match(tipText, /^\+40m since admission/);
-  assert.match(tipText, /Easy×12ended \+30m/);
+  assert.match(tipText, /Low×12ended \+30m/);
   assert.match(tipText, /Hard×2alive \d+%cpu 3\.6 cores ± 1\.1mem p90 6\.0 GiB · mean 4\.2 GiB/);
   assert.equal(await tip.locator('.mx-tip-n.low').count(), 1);
   assert.match(tipText, /Amber counts: sparse, fewer than 3 deliveries/);

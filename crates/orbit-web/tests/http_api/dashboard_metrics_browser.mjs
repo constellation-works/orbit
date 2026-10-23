@@ -190,6 +190,7 @@ try {
     delta: node.querySelector('.mx-sc-delta').textContent, pressed: node.getAttribute('aria-pressed'),
   })));
   assert.deepEqual(cards.map(card => card.value), ['43.9m', '43.0m', '41.5m', '47.0m']);
+  assert.deepEqual(cards.map(card => card.label), ['All runs', 'Low', 'Medium', 'Hard']);
   assert.match(cards[0].delta, /▲ 46% slower/);
   assert.match(cards[0].delta, /vs prev 24h 30\.1m/);
   assert.ok(cards.every(card => card.pressed === 'true'));
@@ -257,6 +258,7 @@ try {
   const table = body.locator('.mx-trend-view table');
   assert.equal(await table.locator('tbody tr').count(), 25);
   assert.match(await table.locator('caption').textContent(), /p95 per bucket/);
+  assert.deepEqual(await table.locator('thead th').allTextContents(), ['Bucket', 'Runs', 'All', 'Low', 'Medium', 'Hard']);
   assert.match(await table.locator('tbody tr').first().textContent(), /in progress/, 'newest bucket first');
   assert.match(await table.locator('tbody tr').nth(15).textContent(), /—/, 'an empty bucket reads as a dash');
   await page.screenshot({ path: path.join(evidence, 'duration-table-1440.png'), fullPage: true, animations: 'disabled' });
@@ -270,7 +272,9 @@ try {
   assert.equal(await body.getByRole('group', { name: 'Statistic' }).count(), 0, 'counts have no statistic');
   const doneCards = await body.locator('.mx-sc').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.match(doneCards[0], /Done \(total\)276▲ 21% morevs prev 24h 2291 rejected · 2 archived/);
-  assert.match(doneCards[2], /Medium.*127.*46% of done/);
+  assert.match(doneCards[1], /^Low.*56.*20% of done/);
+  assert.match(doneCards[2], /^Medium.*127.*46% of done/);
+  assert.match(doneCards[3], /^Hard/);
   assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 25);
   assert.equal((await paths()).length, 1, 'the total line');
   await hoverColumns.nth(4).hover();

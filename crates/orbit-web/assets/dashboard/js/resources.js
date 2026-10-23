@@ -36,7 +36,7 @@ const ENDPOINT = "/api/resource-profiles";
 // Complexity series in overlay order. Colours match Analytics › Metrics for
 // the complexities both views show.
 const COMPLEXITIES = [
-  { key: "low", label: "Easy", tag: "low" },
+  { key: "low", label: "Low", tag: "low" },
   { key: "medium", label: "Medium", tag: "medium" },
   { key: "hard", label: "Hard", tag: "hard" },
   { key: "xhard", label: "Xhard", tag: "xhard" },
