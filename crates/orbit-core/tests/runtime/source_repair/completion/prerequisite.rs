@@ -133,7 +133,8 @@ pub(crate) fn later_prerequisite_read_failure_resumes_only_completion() {
             .any(|(path, _)| path == orbit_types::workflow::REVIEW_GATE_ARTIFACT)
     );
 
-    let outcome = run_tail(&f).unwrap();
+    let (outcome, _) = run_tail(&f);
+    let outcome = outcome.unwrap();
     assert!(outcome.success, "{outcome:?}");
 
     let requests = std::fs::read_to_string(calls).unwrap();
@@ -251,7 +252,8 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
             },
         )
         .unwrap();
-    assert!(run_tail(&f).is_err());
+    let (outcome, _) = run_tail(&f);
+    assert!(outcome.is_err());
     let requests = std::fs::read_to_string(calls).unwrap();
     assert!(requests.contains("/status?"), "{requests}");
     assert!(!requests.contains("/pulls/17/merge"), "{requests}");
@@ -387,7 +389,8 @@ fn assert_resumed_merge(
     reread: bool,
 ) {
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
-    let outcome = run_tail(f).unwrap();
+    let (outcome, _) = run_tail(f);
+    let outcome = outcome.unwrap();
     assert!(outcome.success, "{outcome:?}");
     let requests = std::fs::read_to_string(calls).unwrap();
     let requests = requests.lines().collect::<Vec<_>>();
@@ -496,7 +499,8 @@ pub(crate) fn permanent_required_check_and_merge_capability_answers_do_not_resum
         let (mut f, checkout) = fixture();
         configure_review(&mut f, &checkout);
         let calls = observation_forge(&f, mode, kind);
-        assert!(run_tail(&f).is_err(), "{kind} on {mode} resumed completion");
+        let (outcome, _) = run_tail(&f);
+        assert!(outcome.is_err(), "{kind} on {mode} resumed completion");
         let requests = std::fs::read_to_string(calls).unwrap();
         assert!(
             requests.contains(token),

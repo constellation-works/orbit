@@ -81,8 +81,9 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
             "{case}: authentication never rewrites checkpoints"
         );
         tail_forge(&f, "lost_read");
+        let (outcome, _) = run_tail(&f);
         assert!(
-            run_tail(&f).is_err(),
+            outcome.is_err(),
             "{case}: never reuse an unchanged prefix after a mutation reservation"
         );
         if case == "local" {
