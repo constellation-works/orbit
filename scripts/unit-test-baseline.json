@@ -384,6 +384,7 @@
         "executor/automation/ci/tests/collect.rs::over_budget_in_flight_candidate_yields_an_investigation_budget_error",
         "executor/automation/ci/tests/collect.rs::query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context",
         "executor/automation/ci/tests/collect.rs::repeated_collection_for_one_sweep_does_not_advance_persistence",
+        "executor/automation/ci/tests/collect.rs::repository_and_run_view_query_failures_are_retryable",
         "executor/automation/ci/tests/collect.rs::run_bound_above_the_page_limit_reports_the_applied_limit_and_its_cap",
         "executor/automation/ci/tests/collect.rs::unavailable_collection_breaks_a_consecutive_error_streak",
         "executor/automation/ci/tests/collect.rs::zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete",
