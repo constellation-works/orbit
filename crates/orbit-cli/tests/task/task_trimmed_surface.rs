@@ -436,9 +436,10 @@ fn task_show_and_write_tools_report_readiness_gaps(workspace: &TestWorkspace) {
     assert!(!String::from_utf8_lossy(&shown.stdout).contains("Readiness:"));
 }
 
-/// [ORB-15191] A write that leaves a task in the backlog with no
-/// `context_files` warns that it holds no file lock, on the CLI and MCP
-/// surfaces alike. The warning is the task's own advisory backlog readiness
+/// A creation or readiness-field write that leaves a task in the backlog with
+/// no `context_files` warns that it holds no file lock, on the CLI and MCP
+/// surfaces alike. Metadata writes do not repeat it.
+/// The warning is the task's own advisory backlog readiness
 /// gap with its fix, so the assertion pins that consistency rather than the
 /// wording. A task with selectors or tagged `no-diff-expected` gets none.
 fn backlog_writes_without_context_warn_about_the_missing_file_lock(workspace: &TestWorkspace) {
@@ -486,14 +487,22 @@ fn backlog_writes_without_context_warn_about_the_missing_file_lock(workspace: &T
 
     let id = cold["id"].as_str().expect("task id");
     let updated = workspace.task_json(&["task", "update", id, "--priority", "high", "--json"]);
-    assert_eq!(updated["warnings"], expected(&updated), "{updated}");
+    assert!(updated.get("warnings").is_none(), "{updated}");
+    assert_eq!(updated["readiness"], cold["readiness"], "{updated}");
     let input = json!({"id": id, "model": "codex", "priority": "low"}).to_string();
     let tool = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
-    assert_eq!(tool["warnings"], expected(&tool), "{tool}");
+    assert!(tool.get("warnings").is_none(), "{tool}");
+    assert_eq!(tool["readiness"], cold["readiness"], "{tool}");
     let input =
         json!({"id": id, "model": "codex", "context_files": ["file:existing.rs"]}).to_string();
     let prepared = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
     assert!(prepared.get("warnings").is_none(), "{prepared}");
+
+    // Removing the footprint still warns; unrelated writes must not hide a
+    // subsequent readiness edit that reintroduces the missing-context gap.
+    let input = json!({"id": id, "context_files": []}).to_string();
+    let cleared = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+    assert_eq!(cleared["warnings"], expected(&cleared), "{cleared}");
 }
 
 /// The existence guard is an operator-surface default, not a wall: work that

@@ -315,9 +315,11 @@ response lists the stored-but-unresolved selectors as
 keeps the strict check. Task writes on every surface return the same advisory
 `warnings` (on add: a disabled required tool, an unreadable parent, or a
 proposed task added without `context_files` and without the `no-diff-expected`
-tag, regardless of type; on add and update: an unreadable dependency or a
-backlog task with no footprint; and on approval: task-pilot blockers and a
-backlog task with no footprint); they never refuse the write.
+tag, regardless of type; on add and update: an unreadable dependency;
+on add, approval, or updates to status, tags, context files or complexity:
+a backlog task with no footprint; and on approval: task-pilot blockers).
+Comments and other metadata edits do not repeat the footprint warning;
+readiness remains visible in the task response. Warnings never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
@@ -333,7 +335,8 @@ empty `context_files` while a drain is live.** File it `proposed`, run the
 pilot or set selectors, then promote. On 2026-10-10 three tasks filed into a
 live four-slot drain's backlog with no selectors all edited
 `website/src/styles/custom.css` concurrently, and two of their runs were
-cancelled. Add and update warn when they leave such a task in the backlog.
+cancelled. Creation, approval and readiness-field updates warn when they leave
+such a task in the backlog.
 
 A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
 each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`

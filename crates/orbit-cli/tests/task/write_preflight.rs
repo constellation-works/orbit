@@ -205,6 +205,65 @@ fn missing_context_warning_follows_readiness_on_cli_and_tool() {
     }
     assert_eq!(warnings(&via_tool), warnings(&cli), "{via_tool}");
 
+    // Promotion still warns once, but subsequent comments leave readiness
+    // unchanged and must not repeat its advisory warning on either surface.
+    for (document, via_tool) in [(&cli, false), (&via_tool, true)] {
+        let id = document["id"].as_str().expect("task id");
+        let promoted = if via_tool {
+            tool(
+                &fixture,
+                "orbit.task.update",
+                json!({"id": id, "status": "backlog"}),
+            )
+        } else {
+            fixture.json(&["task", "update", id, "--status", "backlog", "--json"])
+        };
+        assert_eq!(warnings(&promoted).len(), 1, "{promoted}");
+        let readiness = &promoted["readiness"];
+        assert_eq!(readiness["ready"], json!(true), "{promoted}");
+        assert_eq!(
+            readiness["gaps"][0]["code"],
+            json!("missing_context_files"),
+            "{promoted}"
+        );
+        assert_eq!(
+            readiness["gaps"][0]["severity"],
+            json!("advisory"),
+            "{promoted}"
+        );
+        assert_eq!(
+            warnings(&promoted)[0],
+            format!(
+                "{} Fix: {}.",
+                readiness["gaps"][0]["message"].as_str().unwrap(),
+                readiness["gaps"][0]["fix"].as_str().unwrap()
+            ),
+            "{promoted}"
+        );
+        assert!(
+            !warnings(&promoted)[0].contains("before promoting"),
+            "backlog guidance must apply after promotion: {promoted}"
+        );
+        for comment in ["First comment", "Second comment"] {
+            let updated = if via_tool {
+                tool(
+                    &fixture,
+                    "orbit.task.update",
+                    json!({"id": id, "comment": comment}),
+                )
+            } else {
+                fixture.json(&["task", "update", id, "--comment", comment, "--json"])
+            };
+            assert!(warnings(&updated).is_empty(), "{updated}");
+            assert_eq!(&updated["readiness"], readiness, "{updated}");
+        }
+        fixture
+            .command(&["task", "update", id, "--comment", "Plain output comment"])
+            .assert()
+            .success()
+            .stderr(predicates::str::is_empty());
+    }
+
     // A non-chore type keeps the warning.
     let feature = fixture.json(&[
         "task",
