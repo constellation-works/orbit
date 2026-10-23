@@ -172,6 +172,32 @@ After [ORB-10338] (see [Derive invocation cost at query time from a versioned pr
 
 After [ORB-10579], each price row also declares its `input_token_basis`, either `exclusive` or `gross_includes_cache`. Existing rows default to exclusive accounting; GPT-5.6 rows use gross accounting, so derived pricing subtracts cached-read and both cache-write buckets from the gross input total before charging the full input rate. Checked subtraction makes inconsistent rows unknown instead of silently saturating. Codex JSONL and OpenAI-compatible response parsing retain provider-reported cached-read, standard cache-write, and output buckets; OpenAI reports no 1-hour write bucket, while a malformed stored nonzero count still has a nonzero fallback price. GPT-5.6 results are standard short-context API-equivalent derived estimates. Exact Fast/service-tier and long-context billing remains future work because Orbit does not yet retain those per-request dimensions.
 
+For the exact model string `gpt-5.6-sol`, the current row starts at
+`2026-10-23T03:09:14.111507Z`, the audit's first verified current-price
+observation. This is a conservative observation boundary, not a verified
+provider change instant. The [August 21 changelog](https://developers.openai.com/api/docs/changelog)
+announces reduced input/output prices without an exact time or timezone.
+No calendar-date convention has been approved for historical repricing, so
+both shipped July rows remain intact: their post-August-21 estimates through
+September 21 remain unresolved, and the existing gap from September 22 up to
+the observation remains unknown (`derived_cost_usd: null`). A crew migration
+does not establish model retirement. Historical cache-read/write effective
+dates are independently unresolved; current rates are not backdated.
+
+The [Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+and [pricing table](https://developers.openai.com/api/docs/pricing), rechecked
+on October 23, document standard short-context USD/M rates of 4 input,
+0.40 cached input and 20 output. The [caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+distinguishes 30-minute writes at 1.25 times input (5/M) from 12-hour writes at
+2.5 times input (10/M). The new row uses the standard 30-minute write rate;
+its `cache_create_1h` rate of 5/M retains only the nonzero fallback for malformed
+legacy data. That Anthropic-named bucket does not represent OpenAI's 12-hour
+tier, which this table's token buckets cannot express. Fast, Ultrafast,
+long-context and 12-hour premiums are not approximated into the base row.
+The promotion continues at least through November 21; the row has no invented
+expiry or future reversion. All periods remain half-open, and persisted token
+history and provider-reported costs remain unchanged.
+
 After [ORB-10581] / [Attribute managed execution cost to an explicit task orchestrator](../task-artifacts/4_decisions.md#attribute-managed-execution-cost-to-an-explicit-task-orchestrator), `GET /api/metrics/orchestrators?since=&until=` reports managed-execution accounting from one unbounded, half-open invocation-fact read captured at an `as_of` timestamp and scoped to the runtime workspace. Invocations recorded under other workspaces, or legacy rows without a resolved workspace, contribute to neither buckets nor normalized token totals. Each invocation's distinct linked task ids resolve against that workspace's canonical tasks and enter exactly one conservative bucket with precedence `missing task > unattributed task > one named orchestrator > shared named orchestrators`; duplicate links and multiple tasks owned by the same orchestrator do not multiply cost. Buckets retain all five token splits and separate provider, derived, and same-population comparable cost sums, counts, and delta. Missing provider values and unpriced/invalid derived values remain explicit counts, so partial sums are never presented as reconciled totals. Direct Codex/Claude orchestration sessions that do not emit managed invocation rows remain outside this endpoint.
 
 Orchestration accounting first appeared in the dashboard scoreboard after [ORB-10582]. The current dashboard Cost page uses `GET /api/cost?window=1h|24h|7d|30d|all` (lifetime when omitted); the retired agent-family scoreboard's `/api/scoreboard` route is a deprecated alias serving only that cost payload. The response retains a top-level `orchestration` section, now schema v2, with normalized tokens and model attribution beside the ownership buckets. It uses the same selected window for current and previous-window comparisons and labels provider-reported totals, derived estimates, comparable totals, and unavailable populations separately. The scope remains managed execution only; direct interactive orchestration-session overhead is not included. See `crates/orbit-core/src/metrics/cost.rs` and `crates/orbit-web/src/api/cost.rs`.
