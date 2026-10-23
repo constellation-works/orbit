@@ -164,7 +164,12 @@ esac
     calls
 }
 
-fn run_tail(f: &Fixture) -> Result<orbit_engine::JobOutcome, orbit_engine::DispatchError> {
+fn run_tail(
+    f: &Fixture,
+) -> (
+    Result<orbit_engine::JobOutcome, orbit_engine::DispatchError>,
+    Vec<String>,
+) {
     let path = f
         ._root
         .path()
@@ -213,23 +218,27 @@ fn run_tail(f: &Fixture) -> Result<orbit_engine::JobOutcome, orbit_engine::Dispa
             )
         },
     );
+    let started = audit
+        .events_snapshot()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            orbit_types::workflow::V2AuditEventKind::StepStarted { step_id } => Some(step_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        started.len() <= 2 && started.iter().all(|step_id| step_id == "complete_pr"),
+        "a resumed completion tail may start at most two completion attempts, including on error; it must never restart earlier steps: {started:?}"
+    );
     if matches!(&outcome, Ok(outcome) if outcome.success) {
-        let started = audit
-            .events_snapshot()
-            .unwrap()
-            .into_iter()
-            .filter_map(|event| match event.kind {
-                orbit_types::workflow::V2AuditEventKind::StepStarted { step_id } => Some(step_id),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
             started,
             ["complete_pr", "complete_pr"],
             "only completion runs twice; implementation, commit, native validation and push never restart, including no-op attempts"
         );
     }
-    outcome
+    (outcome, started)
 }
 
 pub(super) fn unchanged_publication_retries_only_completion() {
@@ -255,7 +264,8 @@ fn unchanged_publication_tail(auto_fix: bool, review: bool) {
     assert_ne!(state.pipeline["sync_base"]["head_sha_before"], f.head);
     let prefix = state.step_outputs.clone();
     let artifacts = f.runtime.get_task_artifact_manifest(&f.task).unwrap();
-    let outcome = run_tail(&f).unwrap_or_else(|error| {
+    let (outcome, _) = run_tail(&f);
+    let outcome = outcome.unwrap_or_else(|error| {
         panic!(
             "{error}; recovery: {:?}",
             f.runtime
@@ -352,7 +362,8 @@ pub(super) fn moved_base_and_empty_requirements_retry_unchanged_completion() {
         git(&f.repo, &["add", "drain-base.txt"]);
         git(&f.repo, &["commit", "-qm", "another delivery lands"]);
         git(&f.repo, &["push", "origin", "HEAD:main"]);
-        let outcome = run_tail(&f).unwrap_or_else(|error| {
+        let (outcome, _) = run_tail(&f);
+        let outcome = outcome.unwrap_or_else(|error| {
             panic!(
                 "required commands {required_commands}: {error}; recovery: {:?}",
                 f.runtime
@@ -432,7 +443,7 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
 pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
     let (f, checkout) = fixture_with(true, true, true);
     let calls = tail_forge(&f, "repeated_lost_read");
-    let outcome = run_tail(&f);
+    let (outcome, _started) = run_tail(&f);
     assert!(
         !matches!(&outcome, Ok(outcome) if outcome.success),
         "{outcome:?}"
@@ -936,7 +947,12 @@ pub(super) fn refused_receipts_stop_before_agent_or_republication() {
             b"{}".to_vec(),
         )
         .unwrap();
-    assert!(run_tail(&f).is_err());
+    let (outcome, started) = run_tail(&f);
+    assert!(outcome.is_err());
+    assert!(
+        started.iter().all(|step_id| step_id == "complete_pr"),
+        "a refused receipt must not start an agent, commit, validation, or publication step: {started:?}"
+    );
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     assert!(
         matches!(state.final_recovery.unwrap().decision,
