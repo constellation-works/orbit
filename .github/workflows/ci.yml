@@ -150,6 +150,7 @@ jobs:
           sparse-checkout: |
             /scripts/ci-await-jobs.py
             /scripts/ci-download-verified.sh
+            /scripts/ci-repack-nextest.py
 
       - name: Install ripgrep
         run: |
@@ -658,13 +659,19 @@ jobs:
           time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
 
-      # The archive is already zstd-compressed. The shards start on this
+      # Repeated linked executables extend beyond nextest's default 2 MiB
+      # compression window. Use a larger window only for transfer; the
+      # original archive remains here for the partition proof below.
+      - name: Pack nextest archive for transfer
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst"
+
+      # The transfer is already zstd-compressed. The shards start on this
       # step's success, so keep its name in step with their wait.
       - name: Upload nextest archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-archive
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: ${{ runner.temp }}/nextest-transfer.tar.zst
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -867,6 +874,11 @@ jobs:
         with:
           name: nextest-archive
           path: ${{ runner.temp }}
+
+      # Native nextest decoders cap their history below the transfer window.
+      # Re-encode the identical tar stream; leave safe extraction to nextest.
+      - name: Restore native nextest archive
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py unpack "$RUNNER_TEMP/nextest-transfer.tar.zst" "$RUNNER_TEMP/nextest-archive.tar.zst"
 
       # The archive extracts to target/ under this checkout, the path the test
       # build compiled against, so `env!("CARGO_BIN_EXE_orbit")` and fixture
