@@ -44,6 +44,7 @@ mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
+mod write_response;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,
 /// reservations, status-derived locks, and the admission work that freezes a
@@ -105,6 +106,14 @@ pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
+pub(crate) use write_response::task_reference_status_index;
+pub use write_response::{
+    TaskWriteMetadata, TaskWriteResponsePolicy, job_run_is_locally_navigable, link_pull_requests,
+    mark_readiness_preparing, screened_task_write_response_json, summary_status_transitions,
+    task_detail_with_dashboard_extras, task_fields_response_json,
+    task_write_response_from_tool_answer, task_write_response_json, tasks_in_pilot_preparation,
+    with_dashboard_extras,
+};
 
 pub use external_merge::ExternalMergeSettlement;
 pub(crate) use external_merge::settled_merge_commit;

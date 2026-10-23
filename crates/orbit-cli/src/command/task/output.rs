@@ -1,10 +1,13 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::task_record_json;
+use orbit_core::application::task::{
+    TaskWriteMetadata, TaskWriteResponsePolicy, task_write_response_from_tool_answer,
+    task_write_response_json,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskHistoryEntry;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::output::color::Domain;
 
@@ -35,11 +38,16 @@ pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.dependency_status_index([task])?;
-    let row = runtime.task_row_with_sidecars(task.clone())?;
-    let doc = task_record_json(runtime, &row, &status_by_id)?;
-    warn_unresolved_crew(&doc);
-    Ok(Value::Object(doc))
+    let document = task_write_response_json(
+        runtime,
+        task,
+        &TaskWriteResponsePolicy::FullRecord,
+        &TaskWriteMetadata::default(),
+    )?;
+    if let Some(doc) = document.as_object() {
+        warn_unresolved_crew(doc);
+    }
+    Ok(document)
 }
 
 /// A crew this host cannot resolve is a configuration gap, not a corrupt
@@ -52,57 +60,26 @@ pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
     }
 }
 
-/// A task write's document: the stored task's full record, carrying the
-/// write's `warnings` and `context_files_unverified` selectors from the
-/// tool's answer when there are any, and its redactions when it applied
-/// any. Each warning is also printed to stderr so a text-mode caller sees it.
+/// A task write's document: the shared full-record projection of the
+/// stored task, carrying the tool answer's write metadata. Rendering
+/// stays here: each warning is also printed to stderr so a text-mode
+/// caller sees it, as is an unresolved crew.
 pub(super) fn task_write_json(
     runtime: &OrbitRuntime,
     answer: &Value,
 ) -> Result<(Value, orbit_core::Task), OrbitError> {
-    let id = answer.get("id").and_then(Value::as_str).ok_or_else(|| {
-        OrbitError::Execution("task write answer did not name the task".to_string())
-    })?;
-    let task = runtime.get_task(id)?;
-    let mut document = task_to_json_for_runtime(runtime, &task)?;
-    let strings = |key: &str| {
-        answer
-            .get(key)
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
-    let warnings = strings("warnings");
-    let unverified = strings("context_files_unverified");
-    for warning in &warnings {
+    let (document, task, metadata) = task_write_response_from_tool_answer(runtime, answer)?;
+    for warning in &metadata.warnings {
         eprintln!("warning: {warning}");
     }
-    if !unverified.is_empty() {
+    if !metadata.context_files_unverified.is_empty() {
         eprintln!(
             "warning: context selectors stored without a verified target: {}",
-            unverified.join(", ")
+            metadata.context_files_unverified.join(", ")
         );
     }
-    if let Some(object) = document.as_object_mut() {
-        if !unverified.is_empty() {
-            object.insert("context_files_unverified".to_string(), json!(unverified));
-        }
-        if !warnings.is_empty() {
-            object.insert("warnings".to_string(), json!(warnings));
-        }
-        if answer.get("redactions_applied") == Some(&Value::Bool(true)) {
-            object.insert("redactions_applied".to_string(), Value::Bool(true));
-            object.insert(
-                "redactions".to_string(),
-                answer.get("redactions").cloned().unwrap_or(Value::Null),
-            );
-        }
+    if let Some(doc) = document.as_object() {
+        warn_unresolved_crew(doc);
     }
     Ok((document, task))
 }

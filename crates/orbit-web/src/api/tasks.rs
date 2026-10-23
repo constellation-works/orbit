@@ -8,7 +8,8 @@ use axum::extract::{Path, RawQuery};
 use axum::http::{HeaderName, HeaderValue, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::task::{
-    ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
+    ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority, TaskUpdateParams,
+    TaskWriteResponsePolicy, TaskWriteScreen, screened_task_write_response_json,
 };
 use orbit_core::{
     ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus,
@@ -27,7 +28,7 @@ use super::{
     OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
     validate_id,
 };
-use crate::projections::{TaskListProjection, task_detail_json, task_to_json_with_sidecars};
+use crate::projections::{TaskListProjection, task_detail_json};
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -63,23 +64,12 @@ where
 {
     let rendered = tokio::task::spawn_blocking(move || {
         let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
-        let task = &written.task;
-        let status_by_id =
-            dashboard_status_index(&runtime, task).map_err(TaskMutationFailure::Render)?;
-        let mut value = task_to_json_with_sidecars(&runtime, task, &status_by_id)
-            .map_err(TaskMutationFailure::Render)?;
-        if let Some(object) = value.as_object_mut() {
-            if !written.context_files_unverified.is_empty() {
-                object.insert(
-                    "context_files_unverified".to_string(),
-                    json!(written.context_files_unverified),
-                );
-            }
-            if !written.warnings.is_empty() {
-                object.insert("warnings".to_string(), json!(written.warnings));
-            }
-        }
-        Ok(value)
+        screened_task_write_response_json(
+            &runtime,
+            &written,
+            &TaskWriteResponsePolicy::DashboardFullRecord,
+        )
+        .map_err(TaskMutationFailure::Render)
     })
     .await;
     match rendered {
