@@ -98,7 +98,11 @@ fn both_promotion_authorities_keep_real_warning_holds() {
             let mut assessed = assessment(&task);
             assessed[field] = json!([finding]);
             // An advisory item must not hide a holding item in the same list.
-            assessed["surface_warnings"]
+            let advisory_field = match field {
+                "surface_warnings" | "utility_warnings" => field,
+                _ => "surface_warnings",
+            };
+            assessed[advisory_field]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"text": "Optional adjacent cleanup.", "holds_promotion": false}));
