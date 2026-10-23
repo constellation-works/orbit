@@ -13,6 +13,32 @@ use super::super::commit::commit_failure_candidate;
 use super::super::git::git_output;
 use super::{MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES, VALIDATION_ENVIRONMENT_EVENT};
 
+/// Read the branch and committed head kept by a failure handoff.
+fn candidate_head(workspace_path: &Path) -> Result<(String, String), OrbitError> {
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    Ok((branch, head_sha))
+}
+
+/// Bound a quoted failure diagnostic without splitting a UTF-8 character.
+fn bounded_diagnostic(error_message: &str) -> String {
+    let diagnostic = error_message.trim();
+    let cut = orbit_common::text::floor_char_boundary(
+        diagnostic,
+        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
+    );
+    let mut bounded = diagnostic[..cut].to_string();
+    if cut < diagnostic.len() {
+        bounded.push_str(&format!(
+            "\n[truncated to {cut} of {} bytes]",
+            diagnostic.len()
+        ));
+    }
+    bounded
+}
+
 /// The spec digest a later run compares before resuming this candidate
 /// [ORB-13985], read after this handoff's own selector widening.
 pub(super) fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
@@ -131,18 +157,11 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let (branch, head_sha) = candidate_head(workspace_path)?;
     let kind = orbit_types::workflow::task_blocked_by_agent_kind(error_message)
         .unwrap_or("unspecified")
         .to_string();
-    let diagnostic = error_message.trim();
-    let cut = orbit_common::text::floor_char_boundary(
-        diagnostic,
-        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
-    );
+    let diagnostic = bounded_diagnostic(error_message);
     let note = format!(
         "{} kind={kind} an agent declared a blocker: run={run_id}, \
          failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; no PR was opened",
@@ -155,13 +174,7 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
          candidate as the agent left it, including uncommitted files.\n\n- Run: `{run_id}`\n- Failed step: \
          `{failed_step_id}`\n- Kind: `{kind}`\n- Branch: `{branch}`\n- Head: `{head_sha}`\n\n\
          Move the task back to `in-progress` once the blocker is gone, then resume the run if the \
-         candidate should continue.\n\n## Failure\n\n```text\n{}{}\n```",
-        &diagnostic[..cut],
-        if cut < diagnostic.len() {
-            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
-        } else {
-            String::new()
-        }
+         candidate should continue.\n\n## Failure\n\n```text\n{diagnostic}\n```"
     );
     host.apply_task_automation_update(
         &task.id,
@@ -216,15 +229,8 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let diagnostic = error_message.trim();
-    let cut = orbit_common::text::floor_char_boundary(
-        diagnostic,
-        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
-    );
+    let (branch, head_sha) = candidate_head(workspace_path)?;
+    let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,
         task,
@@ -248,14 +254,8 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
          Make the tool available to the owner's login shell (or set \
          `workflow.validation_env.path`), check with `orbit doctor`, then resume validation on \
          the same candidate with `orbit job resume {run_id}`.\n\n{}\n\n## Failure\n\n\
-         ```text\n{}{}\n```",
-        held_place(&held),
-        &diagnostic[..cut],
-        if cut < diagnostic.len() {
-            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
-        } else {
-            String::new()
-        }
+         ```text\n{diagnostic}\n```",
+        held_place(&held)
     );
     host.apply_task_automation_update(
         &task.id,
@@ -568,15 +568,8 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
     hold: &orbit_types::workflow::BaselineRedHold,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let diagnostic = error_message.trim();
-    let cut = orbit_common::text::floor_char_boundary(
-        diagnostic,
-        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
-    );
+    let (branch, head_sha) = candidate_head(workspace_path)?;
+    let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,
         task,
@@ -616,17 +609,11 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
          The task is back in the backlog and admission skips it while {base_ref} fails \
          the command; fixing the base is the way forward. Once it passes on a new base tip, the \
          next delivery can resume this candidate and validate it again.\n\n{}\n\n## Failure\n\n\
-         ```text\n{}{}\n```",
+         ```text\n{diagnostic}\n```",
         hold.command,
         hold.base_sha,
         failing_on_base(&hold.failures),
-        held_place(&held),
-        &diagnostic[..cut],
-        if cut < diagnostic.len() {
-            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
-        } else {
-            String::new()
-        }
+        held_place(&held)
     );
     host.apply_task_automation_update(
         &task.id,
