@@ -180,7 +180,8 @@ impl Table {
     /// stderr when there are no records. Notices about dropped columns go to
     /// stderr so that they never land in a consumer's record stream. This
     /// table's own trailing notices (a truncation count, say) are printed to
-    /// stderr after the body in both table and plain modes (ORB-12206).
+    /// stderr after the body in both table and plain modes (ORB-12206), and
+    /// after the empty-state line when there is no body.
     ///
     /// Returns whether any cell was shortened or a column hidden.
     /// Called only by `output::render`; a command hands its table back inside a
@@ -188,6 +189,9 @@ impl Table {
     pub(crate) fn emit(&self, sink: &OutputSink) -> bool {
         if self.rows.is_empty() {
             eprintln!("{}", self.empty_message);
+            for notice in &self.trailing_notices {
+                eprintln!("{notice}");
+            }
             return false;
         }
         if sink.mode() == OutputMode::Plain {

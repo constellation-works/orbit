@@ -112,6 +112,8 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     assert_eq!(scorecard["cache_ttl_seconds"], 0, "{scorecard}");
     let rows = scorecard["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{scorecard}");
+    // A plain record has the five fixed columns and one per term.
+    let width = 5 + scorecard["terms"].as_array().unwrap().len();
     let opus = rows.iter().find(|row| row["crew"] == "opus").unwrap();
     assert_eq!(opus["units"], 2, "{opus}");
     assert_eq!(opus["below_support"], false, "{opus}");
@@ -365,6 +367,76 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             .lines()
             .any(|line| line.trim_start().starts_with(landed.as_str())),
         "the landed task is listed under its count:\n{shown}"
+    );
+
+    // Plain stdout is the record stream: one tab-separated row per crew and
+    // model, each with a field per column, and the selection and units
+    // summary on stderr. `--header` puts the column header before the rows.
+    let plain = |extra: &[&str]| {
+        fixture
+            .command(
+                &[
+                    &["agents", "scorecard", "--role", "orchestrators"][..],
+                    &selection,
+                    extra,
+                ]
+                .concat(),
+            )
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let piped = plain(&[]);
+    let piped_stdout = String::from_utf8(piped.stdout).unwrap();
+    let records: Vec<Vec<&str>> = piped_stdout
+        .lines()
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(records.len(), 2, "one record per row:\n{piped_stdout}");
+    assert!(
+        records.iter().all(|fields| fields.len() == width),
+        "every record has one field per column:\n{piped_stdout}"
+    );
+    let status = String::from_utf8_lossy(&piped.stderr);
+    assert!(
+        status.contains("tasks scanned") && status.contains("Units:"),
+        "the summary stays on stderr:\n{status}"
+    );
+    let with_header = plain(&["--header"]);
+    let with_header = String::from_utf8(with_header.stdout).unwrap();
+    let header: Vec<&str> = with_header.lines().next().unwrap().split('\t').collect();
+    assert_eq!(header.len(), width, "{with_header}");
+    assert_eq!(header[0], "RANK", "{with_header}");
+    assert_eq!(
+        with_header.lines().count(),
+        records.len() + 1,
+        "--header adds exactly one line before the rows:\n{with_header}"
+    );
+
+    // An empty scorecard leaves stdout empty; its status is on stderr.
+    let empty = fixture
+        .command(
+            &[
+                &["agents", "scorecard", "--role", "implementers"][..],
+                &selection,
+            ]
+            .concat(),
+        )
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        empty.stdout.is_empty(),
+        "an empty scorecard prints no stdout: {}",
+        String::from_utf8_lossy(&empty.stdout)
+    );
+    assert!(
+        !empty.stderr.is_empty(),
+        "an empty scorecard still explains itself on stderr"
     );
 
     let refused = fixture
