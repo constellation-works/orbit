@@ -119,7 +119,6 @@
 use std::time::Duration;
 
 mod admission;
-mod admission_waiters;
 mod clock_hold;
 mod handoff;
 mod identity;
