@@ -286,10 +286,17 @@ impl OrbitRuntime {
             .map(|dependencies| self.unreadable_dependency_warnings(dependencies))
             .unwrap_or_default();
 
+        // Only readiness-field writes repeat the footprint warning. Comments
+        // and other metadata edits still project the task's readiness, but
+        // do not ask the writer to fix an unchanged gap again.
+        let updates_readiness = params.status.is_some()
+            || params.tags.is_some()
+            || params.context_files.is_some()
+            || params.complexity.is_some();
         let task = write(params)?;
-        // [ORB-15191] A write that leaves the task in the backlog with no
-        // footprint says so as loudly as an add does.
-        warnings.extend(backlog_footprint_warning(&task));
+        if updates_readiness {
+            warnings.extend(backlog_footprint_warning(&task));
+        }
         Ok(ScreenedTaskWrite {
             task,
             warnings,

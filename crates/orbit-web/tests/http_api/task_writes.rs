@@ -149,9 +149,10 @@ fn dashboard_task_writes_return_the_core_preflight_warnings() {
     );
 }
 
-/// [ORB-15191] A write that leaves the task in the backlog with no
-/// footprint warns on the dashboard too: the warning is the task's own
-/// backlog readiness gap with its fix.
+/// A creation or readiness-field write that leaves the task in the
+/// backlog with no footprint warns on the dashboard too: the warning is
+/// the task's own backlog readiness gap with its fix. Metadata writes do
+/// not repeat it.
 #[test]
 fn dashboard_backlog_writes_without_context_warn_about_the_missing_file_lock() {
     isolated(
@@ -196,11 +197,18 @@ fn dashboard_backlog_writes_without_context_warn_about_the_missing_file_lock() {
                 &format!("/api/tasks/{id}{WORKSPACE}"),
                 json!({ "priority": "high" }),
             ));
-            assert_eq!(
-                updated["warnings"],
-                footprint_warning(&updated),
-                "{updated}"
-            );
+            assert!(updated.get("warnings").is_none(), "{updated}");
+            assert_eq!(updated["readiness"], created["readiness"], "{updated}");
+
+            // A subsequent readiness-field write still warns; unrelated
+            // writes must not hide a later edit that keeps the
+            // missing-context gap.
+            let edited = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{id}{WORKSPACE}"),
+                json!({ "complexity": "medium" }),
+            ));
+            assert_eq!(edited["warnings"], footprint_warning(&edited), "{edited}");
         },
     );
 }
