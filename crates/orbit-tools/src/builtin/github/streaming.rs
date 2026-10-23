@@ -648,25 +648,49 @@ impl WindowBoundaryTokens {
         };
         let api_key_assignment = assignment_key.is_some_and(|key| {
             let key = key.trim_matches(['\'', '"', '[', ']', '{', '}', '(', ')']);
-            let lowercase = key.to_ascii_lowercase();
-            let Some(stem) = lowercase.strip_suffix("key") else {
+            // Normalize separators and case for one suffix check, while
+            // retaining source positions to distinguish `capiKey` from a
+            // prefixed API-key segment.
+            let normalized: Vec<_> = key
+                .char_indices()
+                .filter_map(|(index, character)| {
+                    character
+                        .is_ascii_alphanumeric()
+                        .then_some((character.to_ascii_lowercase(), index))
+                })
+                .collect();
+            if normalized.len() < 6
+                || !normalized
+                    .iter()
+                    .map(|(character, _)| *character)
+                    .collect::<String>()
+                    .ends_with("apikey")
+            {
                 return false;
-            };
-            let stem = stem.strip_suffix(['_', '-']).unwrap_or(stem);
-            // Match the api[_-]?key family, with optional prefix segments
-            // such as x-api-key, serviceApiKey or HTTPApiKey. Keep the
-            // original case for camelCase/acronym segment boundaries.
-            stem.strip_suffix("api").is_some_and(|prefix| {
-                if prefix.is_empty() || prefix.ends_with(['_', '-']) {
-                    return true;
-                }
-                let api_start = prefix.len();
-                let original = key.as_bytes();
-                original[api_start].is_ascii_uppercase()
-                    && (original[api_start - 1].is_ascii_lowercase()
-                        || original[api_start - 1].is_ascii_digit()
-                        || original[api_start + 1].is_ascii_lowercase())
-            })
+            }
+
+            let api_start_in_normalized = normalized.len() - 6;
+            if api_start_in_normalized == 0 {
+                return true;
+            }
+            let api_start = normalized[api_start_in_normalized].1;
+            let prefix_end = normalized[api_start_in_normalized - 1].1;
+            let previous = key.as_bytes()[prefix_end];
+            let api_a = key.as_bytes()[api_start];
+            let api_p = key.as_bytes()[normalized[api_start_in_normalized + 1].1];
+            let separated = key[prefix_end + 1..api_start]
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric());
+            let camel_case_boundary = api_a.is_ascii_uppercase()
+                && ((previous.is_ascii_lowercase() || previous.is_ascii_digit())
+                    || (previous.is_ascii_uppercase() && api_p.is_ascii_lowercase()));
+            let uppercase_api = normalized[api_start_in_normalized..api_start_in_normalized + 3]
+                .iter()
+                .all(|(_, index)| key.as_bytes()[*index].is_ascii_uppercase());
+
+            // Accept separator-delimited keys, case transitions (including
+            // an acronym followed by `Api`), and an all-caps `API` segment.
+            separated || camel_case_boundary || uppercase_api
         });
         api_key_assignment
             || redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
