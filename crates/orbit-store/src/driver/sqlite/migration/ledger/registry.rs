@@ -1,49 +1,7 @@
-//! Versioned schema-migration ledger for the SQLite store (ORB-10003).
-//!
-//! Migrations are a stable, ordered registry of `(version, name, apply)`
-//! entries. Each applied migration is recorded in the `schema_meta`
-//! key/value table under `migration.v<NNNN>` (value = migration name,
-//! `updated_at` = applied-at timestamp), so the ledger doubles as the
-//! data source for a future `orbit migrate` command (P3.4).
-//!
-//! Guarantees:
-//! - Each migration runs inside a single transaction together with its
-//!   ledger insert, so an interrupted migration rolls back instead of
-//!   leaving half-applied schema (SQLite ALTER/rename-copy-drop batches
-//!   are wrappable in a transaction).
-//! - Concurrent openers serialize on `BEGIN IMMEDIATE` and re-read the
-//!   ledger inside that transaction, so a waiter neither hits
-//!   `SQLITE_BUSY_SNAPSHOT` nor re-applies a version another process
-//!   just committed.
-//! - A database whose recorded version is newer than
-//!   [`SUPPORTED_SCHEMA_VERSION`] is decided from the
-//!   `schema_meta` forward-compatibility record a newer binary leaves
-//!   behind (ORB-12434): newer by additive migrations only keeps
-//!   serving reads and writes, newer by a read-compatible migration opens
-//!   read-only, anything else is refused with [`OrbitError::Migration`]
-//!   naming the first breaking migration this binary lacks.
-//! - Legacy databases created by the pre-ledger idempotent migrations
-//!   adopt the ledger transparently: the v1 baseline is the same
-//!   idempotent schema code, so running it on an existing database is a
-//!   no-op that then records version 1.
-//!
-//! The engine is not specific to the store database. Each SQLite file that
-//! keeps authority describes itself with a [`LedgeredDatabase`] and owns a
-//! registry of its own: the store ([`STORE_DATABASE`], [`MIGRATIONS`]), the
-//! task registry (`task_registry::ledger`), and the recovery authority in
-//! `orbit-core`. Each file carries its own
-//! `schema_meta` ledger rows and `migration.compat` record.
+use orbit_common::OrbitError;
+use rusqlite::Connection;
 
-use std::path::Path;
-
-use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
-use orbit_common::{OrbitError, SqliteContention, StorageLayer};
-use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
-
-use crate::contracts::{
-    CompatibilityRecord, CompatibilityRefusal, ForwardCompatibleOpen, MigrationCompatibility,
-    StateComponent, evaluate_newer_state,
-};
+use crate::contracts::{MigrationCompatibility, StateComponent};
 
 /// One SQLite database file that evolves through its own migration registry.
 pub struct LedgeredDatabase {
@@ -101,44 +59,44 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "baseline",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_baseline_schema,
+        apply: super::super::apply_baseline_schema,
     },
     Migration {
         version: 2,
         name: "learnings_index_workspace_scope",
         // Drops and reshapes `learnings_index`, which binaries without it query.
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_learning_index_workspace_scope,
+        apply: super::super::apply_learning_index_workspace_scope,
     },
     Migration {
         version: 3,
         name: "flat_crew_model",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_flat_crew_model,
+        apply: super::super::apply_flat_crew_model,
     },
     Migration {
         version: 4,
         name: "job_run_archive_stage",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_job_run_archive_stage,
+        apply: super::super::apply_job_run_archive_stage,
     },
     Migration {
         version: 5,
         name: "host_registry_core",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_host_registry_core,
+        apply: super::super::apply_host_registry_core,
     },
     Migration {
         version: 6,
         name: "workspace_coordination_projections",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_workspace_coordination_projections,
+        apply: super::super::apply_workspace_coordination_projections,
     },
     Migration {
         version: 7,
         name: "trusted_mcp_audit_provenance",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_trusted_mcp_audit_provenance,
+        apply: super::super::apply_trusted_mcp_audit_provenance,
     },
     Migration {
         version: 8,
@@ -146,13 +104,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // Every host-registry write must bump `registry_revision` in the same
         // transaction; an older writer of those tables leaves it stale.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_hub_registry_metadata,
+        apply: super::super::apply_hub_registry_metadata,
     },
     Migration {
         version: 9,
         name: "feature_schema_ledger",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_feature_schema_ledger,
+        apply: super::super::apply_feature_schema_ledger,
     },
     // ORB-10367: carries the invocation telemetry columns
     // (`cache_create_1h_tokens`, `provider_cost_usd`) to databases that
@@ -161,7 +119,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 10,
         name: "invocation_telemetry_columns",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_invocation_telemetry_columns,
+        apply: super::super::apply_invocation_telemetry_columns,
     },
     // ADR-0287: baseline v1 is frozen; schema added later always advances
     // through an append-only ledger entry.
@@ -169,7 +127,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 11,
         name: "routine_scheduler_schema",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_routine_scheduler_schema,
+        apply: super::super::apply_routine_scheduler_schema,
     },
     // ORB-10680: hub friction records leave the Markdown tree for the
     // host-global store, keyed by `(workspace_id, friction_id)`.
@@ -180,7 +138,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // an older binary keeps writing the Markdown tree the newer one no
         // longer reads, and can reuse friction IDs.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_friction_records_schema,
+        apply: super::super::apply_friction_records_schema,
     },
     // ORB-10709 / ADR-0352: `task_reservations` gains the coordination
     // dimension that separates worker file reservations from the exclusive
@@ -191,7 +149,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // Adds the coordination dimension to `task_reservations`: a binary
         // without it reads an exclusive workspace claim as a file reservation.
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_workspace_claim_scope,
+        apply: super::super::apply_workspace_claim_scope,
     },
     // ORB-10736: keep the shipped learning migrations above intact, then
     // retire their projections explicitly for both upgraded and fresh stores.
@@ -200,13 +158,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "remove_native_learning_subsystem",
         // Drops the learning tables older binaries still query.
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_remove_native_learning_subsystem,
+        apply: super::super::apply_remove_native_learning_subsystem,
     },
     Migration {
         version: 15,
         name: "invocation_audit_context",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_invocation_audit_context,
+        apply: super::super::apply_invocation_audit_context,
     },
     // ORB-10888: `role` alone conflates agent families, model strings, system
     // markers, and unattributed markers. The canonical actor projection lands
@@ -218,7 +176,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // never re-derived; an older writer leaves them NULL, which newer
         // reads count as unattributed.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_audit_actor_identity,
+        apply: super::super::apply_audit_actor_identity,
     },
     // ORB-10890: the untrusted half of attribution. An MCP client started from
     // its own config cannot satisfy the managed-run trust boundary, so its
@@ -227,7 +185,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 17,
         name: "audit_self_reported_actor",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_self_reported_actor,
+        apply: super::super::apply_audit_self_reported_actor,
     },
     // Alias map v2: `fable` became a family rule so versioned Fable labels
     // resolve to `claude`. Rows stamped with the old map are re-derived.
@@ -237,7 +195,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // An older writer keeps stamping rows with the v1 alias map, and
         // nothing re-derives them afterwards.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_audit_actor_alias_v2,
+        apply: super::super::apply_audit_actor_alias_v2,
     },
     // The run listing orders by `created_at DESC, run_id` per workspace; the
     // existing indexes cover `(workspace_id, job_id, scheduled_at)` and
@@ -247,7 +205,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 19,
         name: "job_runs_created_index",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_job_runs_created_index,
+        apply: super::super::apply_job_runs_created_index,
     },
     // Every window filter (`ts >= ? AND ts < ?`) and the newest-first
     // listing (`ORDER BY ts DESC, id DESC LIMIT n`) over `invocations` had
@@ -257,7 +215,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 20,
         name: "invocations_ts_index",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_invocations_ts_index,
+        apply: super::super::apply_invocations_ts_index,
     },
     // ORB-12528: the durable commit decision that lets one task transition,
     // its history, a reservation, and dependent coordination rows be
@@ -271,13 +229,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // rows under a partition lock; an older writer bypasses both and can
         // admit a task the newer binary has claimed.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_task_commit_journal,
+        apply: super::super::apply_task_commit_journal,
     },
     Migration {
         version: 22,
         name: "execution_provenance",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_execution_provenance,
+        apply: super::super::apply_execution_provenance,
     },
     // ORB-12725: `caller_host_id`/`process_host_id` carry a machine's display
     // name, so they are renamed to `caller_machine_name`/`process_machine_name`
@@ -288,7 +246,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 23,
         name: "audit_machine_name_columns",
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_audit_machine_name_columns,
+        apply: super::super::apply_audit_machine_name_columns,
     },
     // Plugin standard phase 1: the `plugins` table beside `tools`, plus the
     // audit columns carrying plugin name, version and manifest digest.
@@ -296,14 +254,14 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 24,
         name: "plugins_and_audit_plugin_provenance",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_plugins_and_audit_plugin_provenance,
+        apply: super::super::apply_plugins_and_audit_plugin_provenance,
     },
     // Plugin standard phase 2: the grant set a plugin call ran under.
     Migration {
         version: 25,
         name: "audit_plugin_grants",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_plugin_grants,
+        apply: super::super::apply_audit_plugin_grants,
     },
     // Operation mode was removed on 2026-09-21 (ORB-12772): the grant and
     // recovery-ledger tables its `operation` feature migration created go
@@ -313,7 +271,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 26,
         name: "remove_operation_mode",
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_remove_operation_mode,
+        apply: super::super::apply_remove_operation_mode,
     },
     // Plugin standard phase 4: the Orbit version a plugin's conformance
     // goldens last passed on (`orbit plugin test`).
@@ -323,7 +281,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // A reinstall must clear the certification when the manifest changes;
         // an older upsert keeps it for bytes that were never tested.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_plugin_certified_orbit_version,
+        apply: super::super::apply_plugin_certified_orbit_version,
     },
     // Plugin standard: the SHA-256 of the archive a digest-pinned `https://`
     // plugin source was installed from, so `orbit plugin doctor` can report a
@@ -334,7 +292,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // A reinstall must overwrite the archive digest; an older upsert keeps
         // the previous archive's digest and hides drift from doctor.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_plugin_archive_digest,
+        apply: super::super::apply_plugin_archive_digest,
     },
     // Friction re-homing: the workspace that owns a friction recorded in
     // another one, so curation can finish with a durable disposition.
@@ -342,7 +300,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 29,
         name: "friction_rehome_target",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_friction_rehome_target,
+        apply: super::super::apply_friction_rehome_target,
     },
     // Plugin secrets: the names of the declared secrets a plugin call
     // delivered, never their values.
@@ -350,7 +308,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 30,
         name: "audit_plugin_secrets",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_plugin_secrets,
+        apply: super::super::apply_audit_plugin_secrets,
     },
     // Plugin secret rotation: each secret a backend asked to rotate, by
     // name, and whether the update was applied or refused — never a value.
@@ -358,7 +316,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 31,
         name: "audit_plugin_secret_updates",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_plugin_secret_updates,
+        apply: super::super::apply_audit_plugin_secret_updates,
     },
     // The plugin broker: whether a call was brokered for a sandboxed agent,
     // and the peer PID that asked.
@@ -366,7 +324,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 32,
         name: "audit_brokered_call",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_brokered_call,
+        apply: super::super::apply_audit_brokered_call,
     },
     // Run ids were probed only against live `job_runs` rows, so archiving or
     // deleting a run freed its id for the next submission in that minute while
@@ -377,7 +335,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // An older allocator ignores the reservations and can mint a freed id
         // again, handing a stale reference an unrelated run.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_job_run_id_allocations,
+        apply: super::super::apply_job_run_id_allocations,
     },
     // Per-job newest-first reads sorted every run the job ever had, and the
     // retry children read scanned the workspace for want of an index that
@@ -387,7 +345,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 34,
         name: "job_runs_job_created_and_retry_indexes",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_job_runs_job_created_and_retry_indexes,
+        apply: super::super::apply_job_runs_job_created_and_retry_indexes,
     },
     // Plugin standard: the build record of a plugin built from a
     // commit-pinned `git+` source under `--allow-build`
@@ -398,7 +356,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // A reinstall must overwrite the build record; an older upsert keeps
         // the previous build's record beside a tree no build produced.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_plugin_build_record,
+        apply: super::super::apply_plugin_build_record,
     },
     // Run ids are only unique within a workspace, yet invocations were keyed
     // by run id alone, so a run-id collision across workspaces read the other
@@ -409,13 +367,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // An older writer records invocations without a workspace, and no
         // workspace-scoped read matches those rows.
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_invocation_workspace_scope,
+        apply: super::super::apply_invocation_workspace_scope,
     },
     Migration {
         version: 37,
         name: "audit_tool_call_index",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_audit_tool_call_index,
+        apply: super::super::apply_audit_tool_call_index,
     },
     // Every run listing walked each run's pipeline-state overflow chain to
     // reach the columns `ALTER TABLE` had appended after it. The state moves
@@ -426,7 +384,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         // Drops `job_runs.pipeline_state_json`, which binaries without this
         // migration read and write for every run's state.
         compat: MigrationCompatibility::Breaking,
-        apply: super::apply_job_run_states,
+        apply: super::super::apply_job_run_states,
     },
     // Recency-ordered run pages (the dashboard's aggregate run list) sorted
     // every run of the workspace for want of an index over the recency
@@ -436,7 +394,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 39,
         name: "job_runs_recency_index",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_job_runs_recency_index,
+        apply: super::super::apply_job_runs_recency_index,
     },
     // ORB-14695: the host's provider usage limits. A new table only, which an
     // older binary never reads, so drains on older binaries keep writing.
@@ -444,7 +402,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 40,
         name: "provider_limit_observations",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_provider_limit_observations,
+        apply: super::super::apply_provider_limit_observations,
     },
     // ORB-14696: a provider's own usage-window reading on the same rows. New
     // nullable or defaulted columns only, so older binaries keep writing.
@@ -452,7 +410,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 41,
         name: "provider_limit_readings",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_provider_limit_readings,
+        apply: super::super::apply_provider_limit_readings,
     },
     // ORB-14699: the provider an invocation ran on, beside its agent. One new
     // nullable column, so older binaries keep inserting.
@@ -460,7 +418,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 42,
         name: "invocation_provider",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_invocation_provider,
+        apply: super::super::apply_invocation_provider,
     },
     // Windowed reads of one v2 event type (the audit summary's policy
     // denials) had no index over both the type and the window. Index-only,
@@ -469,7 +427,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 43,
         name: "v2_audit_event_type_ts_index",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_v2_audit_event_type_ts_index,
+        apply: super::super::apply_v2_audit_event_type_ts_index,
     },
     // Per-minute CPU and memory of each delivery run's worker scope, for
     // auto-concurrency profiles. A new table only, which an older binary never
@@ -478,7 +436,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 44,
         name: "run_resource_minutes",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_run_resource_minutes,
+        apply: super::super::apply_run_resource_minutes,
     },
     // The host's CPU and memory per wall-clock minute, the ground truth for
     // the forecast. A new table only, as v44.
@@ -486,13 +444,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 45,
         name: "host_resource_minutes",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_host_resource_minutes,
+        apply: super::super::apply_host_resource_minutes,
     },
     Migration {
         version: 46,
         name: "job_run_step_lock_wait",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_job_run_step_lock_wait,
+        apply: super::super::apply_job_run_step_lock_wait,
     },
     // Admissions decided under the host admission lock whose runs may not
     // exist yet, so every drain's forecast counts them. A new table only, as
@@ -501,7 +459,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 47,
         name: "admission_reservations",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_admission_reservations,
+        apply: super::super::apply_admission_reservations,
     },
     // Each drain admission pass's forecast and decisions, checked against
     // `host_resource_minutes` by the forecast accuracy report. A new table
@@ -510,7 +468,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 48,
         name: "admission_forecasts",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_admission_forecasts,
+        apply: super::super::apply_admission_forecasts,
     },
     // The automation, review and local-pull feature ledgers, which features
     // applied lazily on first open, run to completion here and freeze; later
@@ -521,19 +479,19 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 49,
         name: "absorb_feature_ledgers",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_absorb_feature_ledgers,
+        apply: super::super::apply_absorb_feature_ledgers,
     },
     Migration {
         version: 50,
         name: "pull_forecast_decisions",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_pull_forecast_decisions,
+        apply: super::super::apply_pull_forecast_decisions,
     },
     Migration {
         version: 51,
         name: "worker_cpu_accounting",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_worker_cpu_accounting,
+        apply: super::super::apply_worker_cpu_accounting,
     },
     // ORB-16379: the crews this host's provider was unavailable for. A new
     // table only, which an older binary never reads, so drains on older
@@ -542,19 +500,19 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 52,
         name: "provider_crew_outages",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_provider_crew_outages,
+        apply: super::super::apply_provider_crew_outages,
     },
     Migration {
         version: 53,
         name: "forecast_attribution",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_forecast_attribution,
+        apply: super::super::apply_forecast_attribution,
     },
     Migration {
         version: 54,
         name: "retention_analytics",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_retention_analytics,
+        apply: super::super::apply_retention_analytics,
     },
     // ORB-17304: each executor's latest declared capability per workspace,
     // which admission orders against. A new table only, which an older
@@ -563,7 +521,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 55,
         name: "executor_census",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_executor_census,
+        apply: super::super::apply_executor_census,
     },
     // ORB-17288: a crew that sets `env` is its own provider account. A new
     // table for its usage readings and a nullable `invocations.account`
@@ -574,7 +532,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 56,
         name: "provider_crew_accounts",
         compat: MigrationCompatibility::Additive,
-        apply: super::apply_provider_crew_accounts,
+        apply: super::super::apply_provider_crew_accounts,
     },
     // Restore older lifecycle readers without reinterpreting a handoff as
     // fail/release. Only attribution moves to a row family they never touch;
@@ -585,7 +543,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 57,
         name: "handoff_settlement_sidecars",
         compat: MigrationCompatibility::ReadCompatible,
-        apply: super::apply_handoff_settlement_sidecars,
+        apply: super::super::apply_handoff_settlement_sidecars,
     },
 ];
 
@@ -594,434 +552,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
 /// [`AppliedMigration`] and the `Store` version accessors.
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 57;
 
-const LEDGER_KEY_PREFIX: &str = "migration.v";
-
-/// `schema_meta` key carrying the forward-compatibility record (ORB-12434).
-/// Deliberately outside the `migration.v<NNNN>` namespace the ledger scans.
-pub(crate) const COMPAT_KEY: &str = "migration.compat";
-
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedMigration {
     pub version: u32,
     pub name: String,
     pub applied_at: String,
-}
-
-/// Bring `conn` up to the newest version in `migrations`, recording each
-/// applied migration in the ledger.
-///
-/// A database newer than the registry supports is decided by its
-/// forward-compatibility record: `Ok(Some(..))` describes that newer open —
-/// the caller must keep the connection read-only unless it is
-/// [`ForwardCompatibleOpen::writable`] (ORB-12434); an error means this binary
-/// must not touch the database at all.
-pub(crate) fn run_migrations(
-    conn: &Connection,
-    migrations: &[Migration],
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_database_migrations(conn, &STORE_DATABASE, migrations, None)
-}
-
-pub(crate) fn run_migrations_at_path(
-    conn: &Connection,
-    migrations: &[Migration],
-    path: &Path,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_database_migrations(conn, &STORE_DATABASE, migrations, Some(path))
-}
-
-/// Apply a database's ordered registry through its own transactional ledger.
-/// `path`, when known, names the file in a contention error.
-///
-/// Returns `None` for a current or migrated database. For a newer database,
-/// returns its compatibility decision without migrating: the caller must hold
-/// the connection read-only unless [`ForwardCompatibleOpen::writable`] is true.
-/// An incompatible or unclassified newer schema is refused before any write.
-pub fn run_database_migrations(
-    conn: &Connection,
-    database: &LedgeredDatabase,
-    migrations: &[Migration],
-    path: Option<&Path>,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    validate_registry(migrations)?;
-    let current = current_schema_version(conn)?;
-    let supported = migrations.last().map(|m| m.version).unwrap_or(0);
-    if current > supported {
-        return evaluate_newer_database(conn, database, current, supported).map(Some);
-    }
-    // A current database needs no write transaction. Return before the
-    // idempotent CREATE TABLE so read-only mounts remain genuinely readable.
-    if current == supported {
-        return Ok(None);
-    }
-
-    // `current` is only a hint for which versions to attempt. `apply_one`
-    // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
-    // opener already committed while this connection waited.
-    for migration in migrations.iter().filter(|m| m.version > current) {
-        if let Some(forward) = apply_one(conn, database, migrations, migration, supported, path)? {
-            // Another opener advanced the database past this binary while we
-            // were applying; the rest of the registry is moot and the caller
-            // must hold the connection read-only.
-            return Ok(Some(forward));
-        }
-    }
-
-    Ok(None)
-}
-
-/// Decide a database recorded newer than this binary supports. Reads only
-/// the compatibility record a newer binary left behind; never writes.
-pub fn evaluate_newer_database(
-    conn: &Connection,
-    database: &LedgeredDatabase,
-    current: u32,
-    supported: u32,
-) -> Result<ForwardCompatibleOpen, OrbitError> {
-    let record = match read_compat_record(conn) {
-        Ok(record) => evaluate_newer_state(database.component, current, supported, record, true),
-        Err(refusal) => Err(refusal),
-    };
-    match record {
-        Ok(forward) if forward.writable => {
-            orbit_common::tracing::info!(
-                target: "orbit.store.sqlite",
-                database = database.noun,
-                schema_version = current,
-                supported_version = supported,
-                "opening a newer database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
-            );
-            Ok(forward)
-        }
-        Ok(forward) => {
-            orbit_common::tracing::warn!(
-                target: "orbit.store.sqlite",
-                database = database.noun,
-                schema_version = current,
-                supported_version = supported,
-                "opening a newer database read-only; this binary applies no schema migration to it",
-            );
-            Ok(forward)
-        }
-        Err(refusal) => Err(newer_than_supported(database, current, supported, &refusal)),
-    }
-}
-
-/// Read the forward-compatibility record from `schema_meta`. A missing row
-/// is the pre-ORB-12434 case, not an error.
-pub(crate) fn read_compat_record(
-    conn: &Connection,
-) -> Result<Option<CompatibilityRecord>, CompatibilityRefusal> {
-    let raw = match conn.query_row(
-        "SELECT value FROM schema_meta WHERE key = ?1",
-        [COMPAT_KEY],
-        |row| row.get::<_, String>(0),
-    ) {
-        Ok(raw) => raw,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(error) => return Err(CompatibilityRefusal::CorruptRecord(error.to_string())),
-    };
-    CompatibilityRecord::decode(raw.trim()).map(Some)
-}
-
-/// Record what this binary knows about schema compatibility, inside the same
-/// transaction that commits the migration it describes.
-fn write_compat_record(
-    conn: &Connection,
-    migrations: &[Migration],
-    version: u32,
-) -> Result<(), OrbitError> {
-    let record = CompatibilityRecord::for_registry(
-        version,
-        migrations
-            .iter()
-            .map(|migration| (migration.version, migration.name, migration.compat)),
-    );
-    conn.execute(
-        "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![COMPAT_KEY, record.encode()?, crate::now_string()],
-    )
-    .map_err(|error| {
-        sqlite_error(
-            StorageLayer::Migration,
-            &error,
-            format!("failed to record schema compatibility metadata at v{version}: {error}"),
-        )
-    })?;
-    Ok(())
-}
-
-/// Current schema version recorded in the ledger; 0 when no versioned
-/// migration has been applied (fresh or pre-ledger legacy database).
-pub fn current_schema_version(conn: &Connection) -> Result<u32, OrbitError> {
-    Ok(applied_migrations(conn)?
-        .last()
-        .map(|m| m.version)
-        .unwrap_or(0))
-}
-
-/// All migrations recorded as applied, ordered by version ascending.
-pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigration>, OrbitError> {
-    if !super::table_exists(conn, "schema_meta")? {
-        return Ok(Vec::new());
-    }
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT key, value, updated_at FROM schema_meta
-             WHERE key LIKE ?1 ORDER BY key",
-        )
-        .map_err(sqlite_store_error)?;
-    let rows = stmt
-        .query_map([format!("{LEDGER_KEY_PREFIX}%")], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(sqlite_store_error)?;
-
-    let mut applied = Vec::new();
-    for row in rows {
-        let (key, name, applied_at) = row.map_err(sqlite_store_error)?;
-        let version = parse_ledger_key(&key)?;
-        applied.push(AppliedMigration {
-            version,
-            name,
-            applied_at,
-        });
-    }
-    applied.sort_by_key(|m| m.version);
-    Ok(applied)
-}
-
-/// Apply one migration, unless the database has meanwhile moved past this
-/// binary — in which case the forward-compatibility decision is returned
-/// instead (or raised as a refusal).
-fn apply_one(
-    conn: &Connection,
-    database: &LedgeredDatabase,
-    migrations: &[Migration],
-    migration: &Migration,
-    supported: u32,
-    path: Option<&Path>,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    // Declared before the transaction so it is restored after the
-    // transaction commits or rolls back.
-    let _foreign_keys = database
-        .foreign_keys_off
-        .then(|| ForeignKeysOff::new(conn))
-        .transpose()?;
-    // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
-    // snapshot cannot be pinned under DEFERRED while another opener
-    // commits. `new_unchecked` is the `&Connection` form of
-    // `transaction_with_behavior(TransactionBehavior::Immediate)`.
-    // Drop rolls back, so a failure or panic leaves neither partial
-    // schema nor a ledger row behind.
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
-        .map_err(|error| migration_begin_error(path, migration, error))?;
-
-    let current = current_schema_version(&tx)?;
-    if current > supported {
-        // Another opener advanced the database past this binary while we
-        // waited for the write lock. Re-decide from its record rather than
-        // continuing to apply migrations to a newer database.
-        return evaluate_newer_database(&tx, database, current, supported).map(Some);
-    }
-    if current >= migration.version {
-        return Ok(None);
-    }
-
-    ensure_schema_meta_table(&tx)?;
-
-    (migration.apply)(&tx).map_err(|error| {
-        OrbitError::storage(
-            StorageLayer::Migration,
-            error.is_readonly_or_access_failure(),
-            format!(
-                "failed to apply migration v{} ({}): {error}",
-                migration.version, migration.name
-            ),
-        )
-    })?;
-
-    tx.execute(
-        "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![
-            ledger_key(migration.version),
-            migration.name,
-            crate::now_string()
-        ],
-    )
-    .map_err(|e| {
-        sqlite_error(
-            StorageLayer::Migration,
-            &e,
-            format!(
-                "failed to record migration v{} ({}) in schema_meta: {e}",
-                migration.version, migration.name
-            ),
-        )
-    })?;
-    write_compat_record(&tx, migrations, migration.version)?;
-    if let Some(stamp) = database.stamp {
-        stamp(&tx, migrations, migration.version)?;
-    }
-
-    tx.commit()
-        .map_err(|error| commit_migration_error(migration, error))?;
-
-    orbit_common::tracing::info!(
-        target: "orbit.store.sqlite",
-        database = database.noun,
-        version = migration.version,
-        name = migration.name,
-        "applied schema migration",
-    );
-    Ok(None)
-}
-
-fn migration_begin_error(
-    path: Option<&Path>,
-    migration: &Migration,
-    error: rusqlite::Error,
-) -> OrbitError {
-    if matches!(
-        error.sqlite_error_code(),
-        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-    ) && let Some(path) = path
-    {
-        return OrbitError::SqliteContention(Box::new(SqliteContention {
-            path: path.display().to_string(),
-            phase: format!(
-                "begin migration v{} ({})",
-                migration.version, migration.name
-            ),
-            detail: error.to_string(),
-        }));
-    }
-
-    sqlite_error(
-        StorageLayer::Migration,
-        &error,
-        format!(
-            "failed to begin transaction for migration v{} ({}): {error}",
-            migration.version, migration.name
-        ),
-    )
-}
-
-fn newer_than_supported(
-    database: &LedgeredDatabase,
-    current: u32,
-    supported: u32,
-    refusal: &CompatibilityRefusal,
-) -> OrbitError {
-    let noun = database.noun;
-    OrbitError::Migration(format!(
-        "{noun} schema version {current} is newer than the newest version this \
-        orbit binary supports ({supported}); {refusal}; upgrade orbit to open this database"
-    ))
-}
-
-/// Foreign-key enforcement turned off on one connection until dropped.
-struct ForeignKeysOff<'a> {
-    conn: &'a Connection,
-}
-
-impl<'a> ForeignKeysOff<'a> {
-    fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
-        conn.pragma_update(None, "foreign_keys", "OFF")
-            .map_err(|error| {
-                sqlite_error(
-                    StorageLayer::Migration,
-                    &error,
-                    format!("failed to turn off foreign keys for a migration: {error}"),
-                )
-            })?;
-        Ok(Self { conn })
-    }
-}
-
-impl Drop for ForeignKeysOff<'_> {
-    fn drop(&mut self) {
-        if let Err(error) = self.conn.pragma_update(None, "foreign_keys", "ON") {
-            orbit_common::tracing::warn!(
-                target: "orbit.store.sqlite",
-                error = %error,
-                "could not turn foreign keys back on after a migration",
-            );
-        }
-    }
-}
-
-pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Error) -> OrbitError {
-    if matches!(
-        &error,
-        rusqlite::Error::SqliteFailure(sqlite_error, _)
-            if sqlite_error.code == ErrorCode::DiskFull
-    ) {
-        return sqlite_error(
-            StorageLayer::Store,
-            &error,
-            format!(
-                "SQLITE_FULL / ENOSPC while committing migration v{} ({}): {error}",
-                migration.version, migration.name
-            ),
-        );
-    }
-
-    sqlite_error(
-        StorageLayer::Migration,
-        &error,
-        format!(
-            "failed to commit migration v{} ({}): {error}",
-            migration.version, migration.name
-        ),
-    )
-}
-
-fn ensure_schema_meta_table(conn: &Connection) -> Result<(), OrbitError> {
-    // Bootstrap table for the ledger itself; must match the shape the
-    // baseline schema declares (also used for state-import markers).
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );",
-    )
-    .map_err(sqlite_store_error)
-}
-
-fn validate_registry(migrations: &[Migration]) -> Result<(), OrbitError> {
-    let mut previous = 0u32;
-    for migration in migrations {
-        if migration.version <= previous {
-            return Err(OrbitError::Migration(format!(
-                "migration registry is not strictly increasing: v{} ({}) follows v{previous}",
-                migration.version, migration.name
-            )));
-        }
-        previous = migration.version;
-    }
-    Ok(())
-}
-
-fn ledger_key(version: u32) -> String {
-    format!("{LEDGER_KEY_PREFIX}{version:04}")
-}
-
-fn parse_ledger_key(key: &str) -> Result<u32, OrbitError> {
-    key.strip_prefix(LEDGER_KEY_PREFIX)
-        .and_then(|suffix| suffix.parse::<u32>().ok())
-        .ok_or_else(|| {
-            OrbitError::Migration(format!(
-                "corrupt schema_meta migration ledger entry: {key:?}"
-            ))
-        })
 }
