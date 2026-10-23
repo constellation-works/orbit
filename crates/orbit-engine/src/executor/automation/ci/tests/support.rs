@@ -17,6 +17,11 @@ pub(super) struct FakeQueries {
     repo: Value,
     auth_usable: bool,
     branch_heads: BTreeMap<String, String>,
+    branch_head_errors: BTreeMap<String, String>,
+    open_pull_request_branch_errors: BTreeMap<String, String>,
+    ancestry_query_errors: BTreeMap<(String, String), String>,
+    run_view_errors: BTreeMap<String, String>,
+    run_log_errors: BTreeMap<u64, String>,
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
     runs: Mutex<Vec<Vec<Value>>>,
@@ -75,6 +80,42 @@ impl FakeQueries {
     pub(super) fn with_head(mut self, branch: &str, sha: &str) -> Self {
         self.branch_heads
             .insert(branch.to_string(), sha.to_string());
+        self
+    }
+
+    pub(super) fn with_head_error(mut self, branch: &str, error: &str) -> Self {
+        self.branch_head_errors
+            .insert(branch.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_open_pull_request_branch_error(mut self, branch: &str, error: &str) -> Self {
+        self.open_pull_request_branch_errors
+            .insert(branch.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_ancestry_error(
+        mut self,
+        ancestor: &str,
+        descendant: &str,
+        error: &str,
+    ) -> Self {
+        self.ancestry_query_errors.insert(
+            (ancestor.to_string(), descendant.to_string()),
+            error.to_string(),
+        );
+        self
+    }
+
+    pub(super) fn with_run_view_error(mut self, run_id: u64, error: &str) -> Self {
+        self.run_view_errors
+            .insert(run_id.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_run_log_error(mut self, job_id: u64, error: &str) -> Self {
+        self.run_log_errors.insert(job_id, error.to_string());
         self
     }
 
@@ -264,6 +305,9 @@ impl CiQueries for FakeQueries {
             .lock()
             .expect("open pull request branch queries lock")
             .push(branch.to_string());
+        if let Some(error) = self.open_pull_request_branch_errors.get(branch) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self
             .open_pull_requests_by_branch
             .get(branch)
@@ -288,6 +332,9 @@ impl CiQueries for FakeQueries {
     }
 
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
+        if let Some(error) = self.run_view_errors.get(run_id) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         let failed_jobs = self.failed_jobs.get(run_id).cloned();
         Ok(json!({"failed_jobs": failed_jobs.unwrap_or_else(|| json!([]))}))
     }
@@ -301,6 +348,9 @@ impl CiQueries for FakeQueries {
         _cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
         self.log_reads.lock().expect("log reads lock").push(job_id);
+        if let Some(error) = self.run_log_errors.get(&job_id) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self
             .logs
             .get(&job_id)
@@ -311,11 +361,17 @@ impl CiQueries for FakeQueries {
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         Ok(RemoteBranchHeads::from_scripted(
             self.branch_heads.clone(),
-            BTreeMap::new(),
+            self.branch_head_errors.clone(),
         ))
     }
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError> {
+        if let Some(error) = self
+            .ancestry_query_errors
+            .get(&(ancestor.to_string(), descendant.to_string()))
+        {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         if let Some(sha) = [ancestor, descendant]
             .into_iter()
             .find(|sha| self.ancestry_errors.iter().any(|unknown| unknown == sha))
