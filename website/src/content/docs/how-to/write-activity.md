@@ -1,5 +1,5 @@
 ---
-title: Write an Activity
+title: Write an activity
 description: "Create a schemaVersion 2 activity file for agent or deterministic execution."
 sidebar:
   order: 3

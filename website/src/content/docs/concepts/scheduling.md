@@ -1,5 +1,5 @@
 ---
-title: Routines and Auto-Tasks
+title: Routines and auto-tasks
 description: "How Orbit schedules unattended work: the host scheduler clock, routines that fire jobs, and auto-tasks that mint recurring chores as tasks."
 sidebar:
   order: 4

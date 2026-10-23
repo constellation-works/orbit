@@ -1,5 +1,5 @@
 ---
-title: Local Development
+title: Local development
 description: "Commands and expectations for working on Orbit locally."
 sidebar:
   order: 2

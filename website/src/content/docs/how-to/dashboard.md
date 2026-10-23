@@ -1,5 +1,5 @@
 ---
-title: Use the Dashboard
+title: Use the dashboard
 description: "Open the Orbit dashboard locally or over SSH, pick a workspace, act on tasks and runs, run a delivery window, and edit settings."
 sidebar:
   order: 6

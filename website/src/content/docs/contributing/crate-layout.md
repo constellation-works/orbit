@@ -1,5 +1,5 @@
 ---
-title: Crate Layout
+title: Crate layout
 description: "The Orbit Rust workspace layout and dependency direction."
 sidebar:
   order: 3

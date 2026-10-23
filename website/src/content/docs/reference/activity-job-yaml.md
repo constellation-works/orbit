@@ -1,5 +1,5 @@
 ---
-title: Activity and Job YAML
+title: Activity and job YAML
 description: "Reference shapes for schemaVersion 2 activity and job assets."
 sidebar:
   order: 3

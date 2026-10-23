@@ -1,5 +1,5 @@
 ---
-title: Privacy Policy
+title: Privacy
 description: "What Orbit, its MCP server, its agent plugins, and orbit-cli.com do with your data."
 tableOfContents:
   minHeadingLevel: 2

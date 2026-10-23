@@ -1,5 +1,5 @@
 ---
-title: Policy Format
+title: Policy format
 description: "Reference for Orbit policy YAML and filesystem profiles."
 sidebar:
   order: 4

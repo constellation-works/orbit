@@ -1,5 +1,5 @@
 ---
-title: Schedule Recurring Work
+title: Schedule recurring work
 description: "Run Orbit unattended: the host scheduler clock, routines that fire jobs on a schedule, and auto-task definitions that mint tasks."
 sidebar:
   order: 4

@@ -1,5 +1,5 @@
 ---
-title: Agents and Crews
+title: Agents and crews
 description: "How Orbit runs coding agents through provider CLIs, which executors ship, and how to write a crew."
 sidebar:
   order: 6

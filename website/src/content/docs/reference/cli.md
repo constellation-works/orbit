@@ -1,5 +1,5 @@
 ---
-title: CLI Commands
+title: CLI commands
 description: "A map of the Orbit CLI command surface, grouped the way orbit --help groups it."
 sidebar:
   order: 2

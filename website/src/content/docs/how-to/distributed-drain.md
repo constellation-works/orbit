@@ -1,5 +1,5 @@
 ---
-title: Set Up a Distributed Drain
+title: Set up a distributed drain
 description: "Let a second machine pull work from the machine that owns your backlog: ask your agent to set it up, then start a pull drain on the replica."
 sidebar:
   order: 4

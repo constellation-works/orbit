@@ -1,5 +1,5 @@
 ---
-title: Publish and Restore Tasks
+title: Publish and restore tasks
 description: "Back up a workspace's task records to a dedicated Git repository and restore them: ask your agent, or run three commands."
 sidebar:
   order: 5
