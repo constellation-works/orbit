@@ -339,6 +339,12 @@ fault_read() {{
         credentials)
             echo 'gh: Bad credentials (HTTP 401)' >&2
             exit 1 ;;
+        not_found)
+            echo 'gh: Not Found (HTTP 404)' >&2
+            exit 1 ;;
+        unprocessable)
+            echo 'gh: Validation Failed (HTTP 422)' >&2
+            exit 1 ;;
         malformed)
             printf '%s\n' 'not-json'
             exit 0 ;;
@@ -474,11 +480,13 @@ fn assert_resumed_merge(
     );
 }
 
-/// [ORB-16340] A REST TLS handshake timeout on the required-checks read, and an
-/// persistent HTTP 5xx on the merge-capability read, resume only that completion.
+/// [ORB-16340] TLS and HTTP 5xx failures on both prerequisite reads resume only
+/// that completion.
 pub(crate) fn transient_required_check_and_merge_capability_reads_resume_completion() {
     for (mode, kind, token, reread) in [
         ("required", "tls", "isRequired(pullRequestNumber", false),
+        ("required", "http500", "isRequired(pullRequestNumber", false),
+        ("merge", "tls", "autoMergeAllowed", true),
         ("merge", "http500", "autoMergeAllowed", true),
     ] {
         let (mut f, checkout) = fixture();
@@ -488,13 +496,20 @@ pub(crate) fn transient_required_check_and_merge_capability_reads_resume_complet
     }
 }
 
-/// Auth, permission, other permanent 4xx answers, and a malformed provider
-/// body stay terminal. None of them resumes completion or merges.
+/// Auth, permission, permanent 4xx answers, and malformed provider bodies stay
+/// terminal on both prerequisite reads. None resumes completion or merges.
 pub(crate) fn permanent_required_check_and_merge_capability_answers_do_not_resume() {
     for (mode, kind, token) in [
         ("required", "forbidden", "isRequired(pullRequestNumber"),
-        ("merge", "credentials", "autoMergeAllowed"),
+        ("required", "credentials", "isRequired(pullRequestNumber"),
+        ("required", "not_found", "isRequired(pullRequestNumber"),
+        ("required", "unprocessable", "isRequired(pullRequestNumber"),
         ("required", "malformed", "isRequired(pullRequestNumber"),
+        ("merge", "forbidden", "autoMergeAllowed"),
+        ("merge", "credentials", "autoMergeAllowed"),
+        ("merge", "not_found", "autoMergeAllowed"),
+        ("merge", "unprocessable", "autoMergeAllowed"),
+        ("merge", "malformed", "autoMergeAllowed"),
     ] {
         let (mut f, checkout) = fixture();
         configure_review(&mut f, &checkout);
