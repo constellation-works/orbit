@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-19
+last_updated: 2026-10-23
+last_validated: 2026-10-23
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -18,7 +18,7 @@ related_artifacts: []
 
 This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents).
+The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6), the CLI and MCP (§7) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents).
 
 ## 1. Destination and Layout
 
@@ -180,6 +180,8 @@ The role panel shows each orchestrator's rework split into spec (counted), crew 
 
 ### 5.2 Implementers
 
+**Current.**
+
 Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window.
 
 | Term | Weight | Definition |
@@ -338,6 +340,8 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 ## 7. CLI and MCP
 
+**Current.**
+
 `orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
@@ -425,7 +429,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16954 — track D: the Implementers role and cost/tier panel (current).
 - ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
 - ORB-16956 — track F: the Pilots role, its lock-wait holders and calibration panel; removed the Task pilot ranking from Analytics › Codebase (current).
-- ORB-16957 — track G: CLI and MCP (planned).
+- ORB-16957 — track G: CLI and MCP (current).
 - ORB-17118 — Orchestrators credit one point per landed task instead of weighting by self-assessed complexity, drop landed initiative and show unclassified rework and regressions beside the score; smoothing only lowers a score, with K raised from 10 to 30.
 - ORB-17291 — orchestrator rows keyed by the task's `orchestrator_model`, recorded at creation from an explicit input or the orchestrator crew's configured model.
 
