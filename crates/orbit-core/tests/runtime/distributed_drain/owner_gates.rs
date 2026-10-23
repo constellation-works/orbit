@@ -185,10 +185,58 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
     );
 }
 
-/// An implementer may leave the required commands to final validation only
-/// in a pipeline that runs it: every shipped job whose `agent_implement` step
-/// sets `final_validation` validates the candidate in a later step. Managed
-/// synchronization uses the same continuation with the same skip condition.
+/// Check every handover, searching later siblings and the continuations of
+/// enclosing loops. A validator in a different loop is not a continuation:
+/// that loop could run zero iterations or be skipped by its own condition.
+fn gate_handovers(steps: &[Value], continuation: &[&Value]) -> Result<usize, String> {
+    let mut count = 0;
+    for (index, step) in steps.iter().enumerate() {
+        let later: Vec<_> = steps[index + 1..]
+            .iter()
+            .chain(continuation.iter().copied())
+            .collect();
+        if matches!(
+            step["target"].as_str(),
+            Some("activity:agent_implement" | "activity:git_rebase")
+        ) && step["default_input"]["final_validation"] == true
+        {
+            if step["target"] == "activity:git_rebase" && step["id"] != "sync_base" {
+                return Err("only pre-publication recovery hands over gates".into());
+            }
+            let validates = later.iter().any(|validation| {
+                if !matches!(
+                    validation["target"].as_str(),
+                    Some("activity:candidate_validate" | "activity:claim_validate")
+                ) {
+                    return false;
+                }
+                // No-diff-expected tasks receive no commands in their
+                // implementer envelope (covered above), so this shipped
+                // skip condition cannot drop handed-over commands. Recovery
+                // still requires its exact condition, as before.
+                let skips_only_no_diff = step["target"] == "activity:agent_implement"
+                    && step["when"].is_null()
+                    && validation["when"]
+                        == "{{ steps.commit.output.skipped_no_diff_expected }} != true";
+                validation["when"] == step["when"] || skips_only_no_diff
+            });
+            if !validates {
+                return Err(format!(
+                    "{} hands over required commands without a later validation continuation under the same condition",
+                    step["id"]
+                ));
+            }
+            count += 1;
+        }
+        if let Some(nested) = step["loop"]["steps"].as_array() {
+            count += gate_handovers(nested, &later)?;
+        }
+    }
+    Ok(count)
+}
+
+/// Required commands handed over by an implementer or recovery must have a
+/// later validation continuation, including within a loop.
 #[test]
 fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
     let jobs = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs");
@@ -199,56 +247,91 @@ fn every_pipeline_that_hands_over_its_gates_validates_after_implementing() {
             continue;
         }
         let job: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let steps = job["spec"]["steps"].as_array().cloned().unwrap_or_default();
-        let hands_over = |step: &Value| {
-            matches!(
-                step["target"].as_str(),
-                Some("activity:agent_implement" | "activity:git_rebase")
-            ) && step["default_input"]["final_validation"] == true
-        };
-        let Some(implement) = steps.iter().position(|step| {
-            hands_over(step)
-                || step["loop"]["steps"]
-                    .as_array()
-                    .is_some_and(|nested| nested.iter().any(hands_over))
-        }) else {
-            continue;
-        };
-        handing_over.push(path.file_name().unwrap().to_string_lossy().into_owned());
-        assert!(
-            steps[implement + 1..].iter().any(|step| matches!(
-                step["target"].as_str(),
-                Some("activity:candidate_validate" | "activity:claim_validate")
-            )),
-            "{} lets its implementer skip the required commands but never runs them; \
-             a delivery would drop its checks",
-            path.display()
-        );
-        for (index, step) in steps
-            .iter()
-            .enumerate()
-            .filter(|(_, step)| step["target"] == "activity:git_rebase" && hands_over(step))
-        {
-            assert_eq!(
-                step["id"], "sync_base",
-                "only pre-publication recovery hands over gates"
-            );
-            assert!(
-                steps[index + 1..].iter().any(|validation| {
-                    matches!(
-                        validation["target"].as_str(),
-                        Some("activity:candidate_validate" | "activity:claim_validate")
-                    ) && validation["when"] == step["when"]
-                }),
-                "{} hands over recovery gates without a validation continuation under the same condition",
-                path.display()
-            );
+        let steps = job["spec"]["steps"].as_array().unwrap();
+        let count = gate_handovers(steps, &[])
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        if count != 0 {
+            handing_over.push(path);
         }
     }
     assert!(
         !handing_over.is_empty(),
         "no delivery pipeline hands over its gates"
     );
+
+    // Exercise the scan's decisions on job values, rather than matching YAML
+    // text. These cases protect its condition, ordering and loop guarantees.
+    let mut failures = Vec::new();
+    for validation in ["activity:candidate_validate", "activity:claim_validate"] {
+        let implement = json!({
+            "id": "implement", "target": "activity:agent_implement",
+            "when": "{{ input.repair }} == true",
+            "default_input": {"final_validation": true},
+        });
+        let validate = json!({
+            "id": "validate", "target": validation,
+            "when": "{{ input.repair }} == true",
+        });
+        let mut different = validate.clone();
+        different["when"] = json!("{{ input.repair }} == false");
+        let cases = [
+            ("matching condition", json!([implement, validate]), true),
+            (
+                "mutually exclusive condition",
+                json!([implement, different]),
+                false,
+            ),
+            (
+                "same loop",
+                json!([{"id": "bundle", "loop": {"steps": [implement, validate]}}]),
+                true,
+            ),
+            (
+                "different condition inside loop",
+                json!([{"loop": {"steps": [implement, different]}}]),
+                false,
+            ),
+            (
+                "enclosing continuation",
+                json!([{"loop": {"steps": [implement]}}, validate]),
+                true,
+            ),
+            (
+                "different condition outside loop",
+                json!([{"loop": {"steps": [implement]}}, different]),
+                false,
+            ),
+            (
+                "nested loops",
+                json!([{"loop": {"steps": [{"loop": {"steps": [implement, validate]}}]}}]),
+                true,
+            ),
+            (
+                "validation before implement",
+                json!([validate, implement]),
+                false,
+            ),
+            (
+                "every implement needs validation",
+                json!([implement, validate, implement]),
+                false,
+            ),
+            (
+                "unrelated loop cannot supply validation",
+                json!([implement, {"loop": {"steps": [validate]}}]),
+                false,
+            ),
+        ];
+        for (name, steps, expected) in cases {
+            let result = gate_handovers(steps.as_array().unwrap(), &[]);
+            if result.is_ok() != expected {
+                failures.push(format!(
+                    "{validation}: {name}: expected {expected}, got {result:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A drain records the owner's probe report at submission, so `orbit run
