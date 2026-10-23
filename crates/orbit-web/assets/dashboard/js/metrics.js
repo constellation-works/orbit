@@ -35,7 +35,7 @@ const ACTORS_SHOWN = 7;
 
 const SERIES = [
   { key: "all", label: "All runs", doneLabel: "Done (total)", tag: "" },
-  { key: "low", label: "Easy", doneLabel: "Easy", tag: "low" },
+  { key: "low", label: "Low", doneLabel: "Low", tag: "low" },
   { key: "medium", label: "Medium", doneLabel: "Medium", tag: "medium" },
   { key: "hard", label: "Hard", doneLabel: "Hard", tag: "hard" },
 ];
@@ -400,7 +400,7 @@ function seriesCards(cards) {
       el("span", { class: "mx-sc-label" }, [
         el("span", { class: `mx-swatch${card.bar ? " bar" : ""}`, "aria-hidden": "true" }),
         card.label,
-        card.tag ? el("span", { class: "mx-sc-tag", text: card.tag }) : null,
+        card.tag && card.tag !== card.label.toLowerCase() ? el("span", { class: "mx-sc-tag", text: card.tag }) : null,
       ]),
       el("span", { class: "mx-sc-value", text: card.value }),
       el("span", { class: "mx-sc-delta" }, [
@@ -504,7 +504,7 @@ function durationModel() {
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
     "gap = no runs finished",
-    "runs bars stack easy · medium · hard · other",
+    "runs bars stack low · medium · hard · other",
   ];
   if (otherRuns) notes.push(`xhard + unset (${otherRuns} runs) count toward All only`);
   if (payload.truncated) notes.push("read hit its row cap: oldest runs missing");
@@ -545,7 +545,7 @@ function durationModel() {
     },
     table: {
       caption: `${statLabel} per bucket, runs in parentheses · ${bucketWidthLabel(seconds)} · newest first`,
-      heads: ["Runs", "All", "Easy", "Medium", "Hard"],
+      heads: ["Runs", "All", "Low", "Medium", "Hard"],
       rows: buckets.map((bucket, i) => ({
         title: bucketTitle(bucket.start, seconds, i === buckets.length - 1),
         cells: [String(bucket.all ? bucket.all.n : 0), ...SERIES.map((series) => (bucket[series.key] ? `${fmtMs(bucket[series.key][stat])} (${bucket[series.key].n})` : null))],
@@ -619,10 +619,10 @@ function completedModel() {
       prev: showPrev ? { top: y(prevPer), label: `${prevText} · ${prevPer.toFixed(1)} per ${unit}` } : null,
       notes: [
         `${bucketWidthLabel(seconds)}, aligned to the clock`,
-        "bars stack easy · medium · hard · other; line = total",
+        "bars stack low · medium · hard · other; line = total",
         "time = the task's last write after it closed",
       ],
-      aria: `Tasks completed per ${unit}, window ${windowKeyValue}: ${current.done.total} done (easy ${current.done.low}, medium ${current.done.medium}, hard ${current.done.hard})${previous ? `, versus ${previous.done.total} in the ${prevText}` : ""}. Use the Table view for per-bucket values.`,
+      aria: `Tasks completed per ${unit}, window ${windowKeyValue}: ${current.done.total} done (low ${current.done.low}, medium ${current.done.medium}, hard ${current.done.hard})${previous ? `, versus ${previous.done.total} in the ${prevText}` : ""}. Use the Table view for per-bucket values.`,
       tip: (index) => {
         const bucket = buckets[index];
         const tip = { title: bucketTitle(bucket.start, seconds, index === buckets.length - 1), rows: [], foot: `Tasks that moved to done in this ${unit}`, extra: `rejected ${bucket.rejected} · archived ${bucket.archived}` };
@@ -639,7 +639,7 @@ function completedModel() {
     },
     table: {
       caption: `Tasks moved to done per bucket · ${bucketWidthLabel(seconds)} · newest first`,
-      heads: ["Done", "Easy", "Medium", "Hard", "Rejected", "Archived"],
+      heads: ["Done", "Low", "Medium", "Hard", "Rejected", "Archived"],
       rows: buckets.map((bucket, i) => ({
         title: bucketTitle(bucket.start, seconds, i === buckets.length - 1),
         cells: [bucket.done.total, bucket.done.low, bucket.done.medium, bucket.done.hard, bucket.rejected, bucket.archived].map(String),
