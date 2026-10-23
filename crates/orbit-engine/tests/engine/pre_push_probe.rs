@@ -249,7 +249,7 @@ case "$1" in
   remote) printf '%s\n' 'https://fixture.invalid/orbit.git' ;;
   rev-parse) printf '%s\n' '__HEAD__' ;;
   ls-remote)
-    [ "$2" = --heads ] && [ "$3" = origin ] && [ "$4" = refs/heads/candidate ] || exit 2
+    [ "$2" = --heads ] && { [ "$3" = origin ] || [ "$3" = 'https://fixture.invalid/orbit.git' ]; } && [ "$4" = refs/heads/candidate ] || exit 2
     printf '%s\n' probe >> calls
     count=$(($(cat count) + 1))
     printf '%s\n' "$count" > count

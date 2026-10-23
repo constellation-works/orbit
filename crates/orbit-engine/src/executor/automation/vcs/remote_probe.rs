@@ -96,12 +96,19 @@ pub(super) struct RemoteBranchProbe {
     pub(super) waited_ms: u64,
 }
 
+/// Probe `branch` at `remote`, the effective publication destination.
+///
+/// `remote` must be the destination `git push -- origin <branch>` would
+/// write (the single effective push URL), not the name `origin`: a plain
+/// `ls-remote origin` reads the fetch URL, which can name a different
+/// repository than the push URL [ORB-17671].
 pub(super) fn pre_push_remote_branch(
     repo_root: &Path,
     branch: &str,
+    remote: &str,
 ) -> Result<RemoteBranchProbe, OrbitError> {
     let reference = format!("refs/heads/{branch}");
-    let args = ["ls-remote", "--heads", "origin", &reference];
+    let args = ["ls-remote", "--heads", remote, &reference];
     let probe = remote_ref_output(repo_root, &args, "git_push pre-push")?;
     Ok(RemoteBranchProbe {
         sha: probe.stdout.split_whitespace().next().map(str::to_owned),

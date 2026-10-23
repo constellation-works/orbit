@@ -242,7 +242,7 @@ pub(in crate::executor::automation::vcs) fn push_candidate_ref<H: RuntimeHost + 
     target_ref: &str,
 ) -> Result<(), String> {
     ensure_origin_publishes_elsewhere(workspace_path, branch)
-        .and_then(|()| {
+        .and_then(|_| {
             host.run_private_vcs_operation(
                 CANDIDATE_REF_PUSH,
                 json!({
