@@ -167,6 +167,72 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
 }
 
 #[test]
+fn task_search_summaries_are_bounded_while_task_show_preserves_descriptions() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let long_details = "界🙂 detailed context ".repeat(40);
+    let long_description = format!("summaryprobe {}", long_details.trim_end());
+    let mut tasks = Vec::new();
+    for (title, description) in [
+        ("summaryprobe title match", "Short description".to_string()),
+        ("Long description match", long_description.clone()),
+    ] {
+        let task = client.call_tool_ok(
+            "orbit_task_add",
+            json!({
+                "title": title,
+                "description": description,
+                "complexity": "low",
+                "model": "codex"
+            }),
+        );
+        tasks.push(task);
+    }
+
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "search",
+            "summaryprobe",
+            "--kind",
+            "task",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    let results = cli["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["id"], tasks[0]["id"]);
+    assert_eq!(results[0]["title"], "summaryprobe title match");
+    assert_eq!(results[0]["status"], tasks[0]["status"]);
+    assert_eq!(results[0]["summary"], "Short description");
+    assert_eq!(results[1]["id"], tasks[1]["id"]);
+    assert_eq!(results[1]["title"], "Long description match");
+    assert_eq!(results[1]["kind"], "task");
+    assert_eq!(results[1]["status"], tasks[1]["status"]);
+
+    let summary = results[1]["summary"].as_str().unwrap();
+    assert!(summary.chars().count() <= 240);
+    assert!(summary.ends_with('…'));
+    assert_ne!(summary, long_description);
+    assert!(summary.starts_with("summaryprobe "));
+
+    let input = json!({"query":"summaryprobe", "kind":"task", "model":"codex"});
+    let mcp = client.call_tool_ok("orbit_search", input);
+    assert_eq!(mcp, cli);
+
+    let shown = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "task",
+            "show",
+            tasks[1]["id"].as_str().unwrap(),
+            "--json",
+        ]),
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["description"], long_description);
+}
+
+#[test]
 fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternatives() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
