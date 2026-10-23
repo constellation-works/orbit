@@ -14,10 +14,10 @@ Options:
           - backlog:     Approved and queued for work; not yet started
           - in-progress: Actively being worked on
           - review:      Implementation complete; awaiting review/merge
-          - done:        Accepted and closed. May be reopened by an explicit status edit
+          - done:        Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`
           - blocked:     Temporarily paused (waiting on a dependency or decision)
-          - archived:    Soft-deleted. Can be restored to any other status
-          - rejected:    Declined. Can be reclassified to any other status
+          - archived:    Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`
+          - rejected:    Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`
           - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
 
       --all

@@ -181,7 +181,7 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
     EnumValue::helped(
         "done",
-        "Accepted and closed. May be reopened by an explicit status edit",
+        "Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "blocked",
@@ -189,11 +189,11 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
     ),
     EnumValue::helped(
         "archived",
-        "Soft-deleted. Can be restored to any other status",
+        "Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "rejected",
-        "Declined. Can be reclassified to any other status",
+        "Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "someday",
