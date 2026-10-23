@@ -55,7 +55,18 @@ pub(super) fn collect<Q: DependabotQueries + ?Sized>(
         return unavailable_snapshot(&auth, &auth.detail);
     }
 
-    let repository = queries.repo_view(repo.as_deref())?;
+    let mut dependabot_errors = Vec::new();
+    let repository = match queries.repo_view(repo.as_deref()) {
+        Ok(repository) => repository,
+        Err(error) => {
+            dependabot_errors.push(json!({
+                "query": "repo_view",
+                "error": redact_all(&error.to_string()),
+                "retryable": true,
+            }));
+            json!({})
+        }
+    };
     let dependabot = family_data(
         queries.open_alerts(repo.as_deref(), dependabot_limit),
         &auth,
@@ -69,7 +80,6 @@ pub(super) fn collect<Q: DependabotQueries + ?Sized>(
         &auth,
     );
 
-    let mut dependabot_errors = Vec::new();
     let pull_requests = if dependabot.collected {
         match queries.open_dependabot_pull_requests(repo.as_deref(), pr_limit) {
             Ok(pull_requests) => pull_requests,
