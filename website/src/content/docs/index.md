@@ -37,8 +37,9 @@ next: false
         <li>Cursor</li>
         <li>OpenCode</li>
         <li>Pi</li>
+        <li>Muse Code</li>
       </ul>
-      <p class="orbit-hero-providers-note"><a href="/concepts/agents/">How agents are invoked →</a></p>
+      <p class="orbit-hero-providers-note">Legacy Gemini CLI is also available. <a href="/concepts/agents/">How agents are invoked →</a></p>
     </div>
   </div>
 
@@ -95,11 +96,11 @@ next: false
 <section class="orbit-guarantees" aria-label="What Orbit guarantees">
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file as many as it likes; each one waits for an explicit approval, from you or from your agent when you tell it to.</p></div>
+    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file as many as it likes; each one waits for an explicit approval, from you or from your agent when you tell it to. You can also authorize a drain with <code>--approve-proposed</code> to promote tasks that pass task-pilot verification.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Code lands fast, with optional review</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks; it is off by default. Review before landing is optional: set <code>review.timing</code> to <code>before_pr</code> or <code>before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
+    <div><h2>Code lands fast, with optional review</h2><p>Changes land on your configured base branch after the required validation commands pass. Review is off by default. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks. Review before landing is optional: set <code>review.timing</code> to <code>before_pr</code> or <code>before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
@@ -121,7 +122,7 @@ next: false
     <li><span class="orbit-rail-state">backlog</span><span class="orbit-rail-note">on your say-so</span></li>
     <li><span class="orbit-rail-state">in-progress</span></li>
     <li><span class="orbit-rail-state">review</span></li>
-    <li class="is-stop"><span class="orbit-rail-state">done</span><span class="orbit-rail-note">merged · you review the outcome</span></li>
+    <li class="is-stop"><span class="orbit-rail-state">done</span><span class="orbit-rail-note">completion authorized</span></li>
   </ol>
 
   <div class="orbit-card-grid orbit-card-grid-4">
@@ -147,7 +148,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.timing = "before_pr"</code>, before landing with <code>review.timing = "before_landing"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.timing = "before_pr"</code>, before landing with <code>review.timing = "before_landing"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. With PR delivery, leave off <code>--complete</code> to stop at <code>review</code> with the pull request open; local delivery merges before stopping at <code>review</code>. Or <a href="getting-started/first-task/">ship your first task by hand</a>. Optional <a href="concepts/agents/#crews">read-only exploration and operator steering</a> support work already in progress.</p>
 </section>
 
 <section class="orbit-section">
@@ -200,7 +201,7 @@ next: false
       <p class="orbit-section-eyebrow">When you step away</p>
       <h2 class="orbit-section-heading">The same pipeline, unattended. You choose where it stops.</h2>
     </div>
-    <p class="orbit-section-lede">Every <code>orbit run</code> prints a durable run ID and returns at once; the run carries on without you. Authorize completion per run with <code>--complete</code>, or configure the owner to finish <a href="/how-to/distributed-drain/">distributed handoffs</a> with <code>workflow.distributed_completion = "done"</code>.</p>
+    <p class="orbit-section-lede"><code>orbit run ship</code> and <code>orbit run auto</code> submit work, print a durable run ID, and return; the run carries on without you. Authorize completion per run with <code>--complete</code>, or configure the owner to finish <a href="/how-to/distributed-drain/">distributed handoffs</a> with <code>workflow.distributed_completion = "done"</code>.</p>
   </div>
 
   <div class="orbit-card-grid orbit-card-grid-4 orbit-mode-grid">
@@ -250,14 +251,14 @@ next: false
     <li><a href="/how-to/recurring-work/"><span class="orbit-further-title">Recurring work</span><span class="orbit-further-desc">Run jobs on a schedule, and let auto-tasks file routine chores.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
     <li><a href="/how-to/distributed-drain/"><span class="orbit-further-title">Multi-machine drains</span><span class="orbit-further-desc">Let other machines pull work from the one that owns your backlog.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
     <li><a href="/how-to/task-publication/"><span class="orbit-further-title">Back up and restore</span><span class="orbit-further-desc">Publish a validated snapshot of your tasks to a Git repository you control, and restore it.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
-    <li><a href="/how-to/dashboard/"><span class="orbit-further-title">The dashboard</span><span class="orbit-further-desc">See tasks, runs, and errors in a browser, locally or over SSH.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
+    <li><a href="/how-to/dashboard/"><span class="orbit-further-title">The dashboard</span><span class="orbit-further-desc">See tasks, runs, errors, agent scorecards, and host resource analytics in a browser, locally or over SSH.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
   </ul>
 </section>
 
 <section class="orbit-quickstart" aria-labelledby="orbit-quickstart-title">
   <div class="orbit-quickstart-copy">
     <h2 id="orbit-quickstart-title">Ship your first task.</h2>
-    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository; your agent's <code>orbit-setup</code> skill can run the third for you. The fourth opens the dashboard, where you approve, ship, and review what your agent files.</p>
+    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository; your agent's <code>orbit-setup</code> skill can run the third for you. Choose an enabled default crew as described in the <a href="/getting-started/install/">installation guide</a>. The fourth opens the dashboard, where you approve, ship, and review what your agent files.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Read the guide</a>
       <a class="orbit-button" href="https://github.com/constellation-works/orbit">View on GitHub</a>
