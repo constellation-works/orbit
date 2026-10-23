@@ -274,6 +274,61 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
     assert!(landings[0].covered, "{landings:?}");
 }
 
+fn reserved_review_prefix_is_refused_before_attachment_and_nonreserved_evidence_succeeds() {
+    let fixture = Fixture::new();
+    let source = fixture.repo.join(".orbit/tmp/checks.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, br#"{"checks":[]}"#).unwrap();
+
+    for path in [
+        "Review-Checks.json",
+        "REVIEW-EVIDENCE.json",
+        "review-future.json",
+    ] {
+        let error = fixture
+            .runtime
+            .run_tool(
+                "orbit.task.artifact.put",
+                json!({"id": fixture.task_id, "model": "codex", "path": path, "source_path": source}),
+            )
+            .expect_err("ordinary evidence in the reserved review namespace must be refused");
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "the refusal must protect the review gate's system-writer boundary: {path}: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("review-"),
+            "the refusal must name the reserved `review-` prefix that protects the review gate's system writer: {path}: {error}"
+        );
+        assert!(
+            error.to_string().contains("examination-checks.json"),
+            "the refusal must name a nonreserved rename recovery that protects the review gate's system writer: {path}: {error}"
+        );
+    }
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact_manifest(&fixture.task_id)
+            .unwrap()
+            .is_empty(),
+        "a refused reserved upload must not attach any artifact"
+    );
+
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({"id": fixture.task_id, "model": "codex", "path": "examination-checks.json", "source_path": source}),
+        )
+        .expect("ordinary evidence under a nonreserved name must be accepted");
+    let stored = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, "examination-checks.json")
+        .unwrap()
+        .expect("the renamed ordinary evidence must be stored");
+    assert_eq!(stored.content, br#"{"checks":[]}"#);
+}
+
 fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
     let fixture = Fixture::new();
     let source = fixture.repo.join(".orbit/tmp/full-review-areas.json");
@@ -657,6 +712,7 @@ crate::scenario_table!(
     task_starts_admit_artifacts_before_any_persistence_scenarios,
     task_starts_admit_artifacts_before_any_persistence,
     local_artifact_writers_cannot_forge_or_pin_review_certificates,
+    reserved_review_prefix_is_refused_before_attachment_and_nonreserved_evidence_succeeds,
     full_review_inventory_is_accepted_through_the_agent_artifact_tool,
     normalized_reviewer_reports_are_validated_on_put_and_update,
     artifact_errors_explain_the_source_file_listing_and_size_remedies,

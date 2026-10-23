@@ -59,7 +59,7 @@ pub(crate) fn admit_agent_artifact(artifact: &mut TaskArtifact) -> Result<(), Or
     }
     if artifact.path != REVIEW_REPORT_ARTIFACT {
         return Err(OrbitError::InvalidInput(format!(
-            "{} is reserved for the review gate's system writer",
+            "{} is reserved for the review gate's system writer: the entire `review-` prefix (any ASCII case) is reserved; rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`)",
             artifact.path
         )));
     }
