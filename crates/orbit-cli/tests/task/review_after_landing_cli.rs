@@ -1147,3 +1147,127 @@ fn before_landing_is_shown_refused_beside_before_pr_and_held_on_a_local_route() 
         "{text}"
     );
 }
+
+#[test]
+fn historical_timing_spellings_keep_task_commands_and_config_writes_usable() {
+    const TEST: &str = "review_after_landing_cli::historical_timing_spellings_keep_task_commands_and_config_writes_usable";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let path = fixture.root.join("config.toml");
+    set_policy(&fixture, "review.timing", "off");
+    for (spelling, canonical) in [
+        ("off", "off"),
+        ("none", "off"),
+        ("after_landing", "off"),
+        ("after-landing", "off"),
+        ("before_pr", "before_pr"),
+        ("before-pr", "before_pr"),
+        ("before_landing", "before_landing"),
+        ("before-landing", "before_landing"),
+    ] {
+        let mut document: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+        document["review"]["timing"] = toml::Value::String(spelling.into());
+        fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+        let added = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            spelling,
+            "--complexity",
+            "low",
+            "--acceptance-criteria",
+            "Configuration remains usable",
+            "--json",
+        ]);
+        let id = added["id"].as_str().unwrap();
+        assert_eq!(fixture.json(&["task", "show", id, "--json"])["id"], id);
+        let listed = fixture.json(&["task", "list", "--json"]);
+        assert!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task["id"] == id)
+        );
+        set_policy(&fixture, "review.timing", spelling);
+        let saved: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(saved["review"]["timing"].as_str(), Some(canonical));
+    }
+    let mut document: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+    document["review"]["timing"] = toml::Value::String("invalid-timing".into());
+    fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+    let output = fixture
+        .command(&["task", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    for required in [
+        path.display().to_string(),
+        "review.timing".into(),
+        "invalid-timing".into(),
+        "none".into(),
+        "before-pr".into(),
+        "after_landing".into(),
+    ] {
+        assert!(error.contains(&required), "{error}");
+    }
+}
+
+/// Doctor's exported command must preserve policy for every persisted timing
+/// spelling and write a file the previous release can still read.
+#[test]
+fn doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability() {
+    use orbit_cmd::DoctorCommands;
+    use orbit_core::OrbitRuntime;
+    const TEST: &str = "review_after_landing_cli::doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let path = workspace.join("config.toml");
+    for (alias, canonical) in [
+        ("off", "off"),
+        ("none", "off"),
+        ("after_landing", "off"),
+        ("after-landing", "off"),
+        ("before_pr", "before_pr"),
+        ("before-pr", "before_pr"),
+        ("before_landing", "before_landing"),
+        ("before-landing", "before_landing"),
+    ] {
+        std::fs::write(
+            &path,
+            format!("[review]\ntiming = {alias:?}\n[operation]\nreview_minutes = 30\n"),
+        )
+        .unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+        let before = runtime.operation_policy().clone();
+        let repaired = runtime.remove_retired_config_keys().unwrap();
+        assert!(
+            repaired
+                .removed
+                .iter()
+                .any(|key| key.key == "operation.review_minutes")
+        );
+        let document: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(document["review"]["timing"].as_str(), Some(canonical));
+        let reloaded = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+        assert_eq!(reloaded.operation_policy(), &before, "{alias}");
+        let saved = std::fs::read(&path).unwrap();
+        assert!(
+            reloaded
+                .remove_retired_config_keys()
+                .unwrap()
+                .removed
+                .is_empty()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+    }
+}

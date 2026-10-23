@@ -16,6 +16,21 @@ use super::super::{
 };
 use crate::memory_limit::MemoryLimit;
 
+/// Add the physical layer to value-admission errors while preserving other
+/// error kinds for callers that distinguish I/O and store failures.
+pub(super) fn resolve_at<T>(
+    result: Result<T, OrbitError>,
+    config_path: &Path,
+) -> Result<T, OrbitError> {
+    result.map_err(|error| match error {
+        OrbitError::InvalidInput(message) => OrbitError::InvalidInput(format!(
+            "{}: {message}",
+            redact_home_dir(&config_path.display().to_string())
+        )),
+        other => other,
+    })
+}
+
 pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     // Cargo output, and the build directories and base checkouts agents leave
     // under run scratch [ORB-15613].

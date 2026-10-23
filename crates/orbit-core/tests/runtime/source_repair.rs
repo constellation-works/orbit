@@ -56,6 +56,7 @@ use completion::{
     moved_base_and_empty_requirements_retry_unchanged_completion,
     refused_receipts_stop_before_agent_or_republication,
     repeated_observation_failure_escalates_after_one_retry,
+    timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
 };
@@ -865,6 +866,7 @@ crate::scenario_table!(
 
 crate::scenario_table!(
     published_completion_scenarios,
+    timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     equivalent_policy_drift_retries_observation,
     relevant_policy_drift_preserves_publication,

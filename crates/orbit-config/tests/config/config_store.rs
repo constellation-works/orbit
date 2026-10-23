@@ -286,3 +286,58 @@ mod admission {
         );
     }
 }
+
+#[test]
+fn review_timing_writes_remain_readable_by_previous_readers() {
+    let roots = Roots::new();
+    let path = roots.workspace_config();
+    for (alias, canonical) in [
+        ("off", "off"),
+        ("none", "off"),
+        ("after_landing", "off"),
+        ("after-landing", "off"),
+        ("before_pr", "before_pr"),
+        ("before-pr", "before_pr"),
+        ("before_landing", "before_landing"),
+        ("before-landing", "before_landing"),
+    ] {
+        // Cover deliberate CLI/subsystem writes and an unrelated doctor's
+        // edit to a file already carrying an alias.
+        for existing in [false, true] {
+            let original = format!("[review]\n# operator note\ntiming = {alias:?} # keep this\n");
+            std::fs::write(&path, if existing { &original } else { "" })
+                .expect("review timing write round trip");
+            let mut store = open(&path);
+            if !existing {
+                store
+                    .set_value("review.timing", &format!("{alias:?}"))
+                    .expect("review timing write round trip");
+            }
+            store
+                .set_document_value("review.minutes", "45")
+                .expect("review timing write round trip");
+            store
+                .validate_workspace_with_global(roots.global.path())
+                .expect("review timing write round trip");
+            store.save().expect("review timing write round trip");
+            let text = std::fs::read_to_string(&path).expect("review timing write round trip");
+            let document: toml::Value = text.parse().expect("review timing write round trip");
+            assert_eq!(
+                document["review"]["timing"].as_str(),
+                Some(canonical),
+                "{alias}"
+            );
+            if existing {
+                assert!(text.contains("# operator note") && text.contains("# keep this"));
+            }
+            assert_eq!(roots.load().snapshot.review_timing, canonical);
+            let saved = std::fs::read(&path).expect("review timing write round trip");
+            store.save().expect("review timing write round trip");
+            assert_eq!(
+                std::fs::read(&path).expect("review timing write round trip"),
+                saved,
+                "idempotent save"
+            );
+        }
+    }
+}

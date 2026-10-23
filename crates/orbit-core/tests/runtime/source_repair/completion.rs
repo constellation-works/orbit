@@ -26,6 +26,15 @@ fn fixture_with(
     required_commands: bool,
     failure_handoff: bool,
 ) -> (Fixture, PathBuf) {
+    fixture_with_timing(auto_fix, required_commands, failure_handoff, None)
+}
+
+fn fixture_with_timing(
+    auto_fix: bool,
+    required_commands: bool,
+    failure_handoff: bool,
+    timing: Option<&str>,
+) -> (Fixture, PathBuf) {
     let mut f = Fixture::new();
     let config = f.repo.join(".orbit/config.toml");
     let mut text = std::fs::read_to_string(&config).unwrap().replace(
@@ -36,6 +45,12 @@ fn fixture_with(
         text = text.replace(
             "required_validation_commands = [\"true\"]",
             "required_validation_commands = []",
+        );
+    }
+    if let Some(timing) = timing {
+        text = text.replace(
+            "before_pr = false\nbefore_landing = false",
+            &format!("timing = {timing:?}"),
         );
     }
     std::fs::write(&config, text).unwrap();
@@ -1033,4 +1048,50 @@ fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
     assert_eq!(settled["reviewer_fixed"], false);
     published_owner::checkpoint(f, &f.source.run_id, 5, "review_gate_settle", settled);
     source
+}
+
+/// Published completion receipts bind the effective policy, including its
+/// source, rather than an enum spelling or a doctor's equivalent rewrite.
+pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication() {
+    let (mut f, _) = fixture_with_timing(true, true, false, Some("none"));
+    admit(&f);
+    let original = f.runtime.operation_policy().clone();
+    let config = f.repo.join(".orbit/config.toml");
+    for spelling in ["after_landing", "after-landing", "none", "off"] {
+        let mut document: toml::Value = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        document["review"]["timing"] = toml::Value::String(spelling.into());
+        std::fs::write(&config, toml::to_string(&document).unwrap()).unwrap();
+        // Authenticate both the historical spelling and its canonical save.
+        for save in [false, true] {
+            if save {
+                let mut store =
+                    orbit_config::ConfigStore::open(orbit_config::ConfigScope::Workspace, &config)
+                        .unwrap();
+                store.validate().unwrap();
+                store.save().unwrap();
+            }
+            f.runtime = orbit_core::OrbitRuntime::from_roots(
+                &f._root.path().join("global"),
+                &f.repo.join(".orbit"),
+            )
+            .unwrap()
+            .with_automation_execution_location(Some(
+                orbit_types::task::ExecutionLocation {
+                    machine_id: "hm_fixture".into(),
+                    machine_name: None,
+                },
+            ));
+            assert_eq!(
+                f.runtime.operation_policy(),
+                &original,
+                "{spelling}, saved={save}"
+            );
+            assert!(
+                f.runtime
+                    .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+                    .unwrap(),
+                "published receipt survives {spelling}, saved={save}"
+            );
+        }
+    }
 }
